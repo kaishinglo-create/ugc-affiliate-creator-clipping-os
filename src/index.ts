@@ -1,22 +1,45 @@
 import 'dotenv/config';
 import Fastify from 'fastify';
+import cors from '@fastify/cors';
+import rateLimit from '@fastify/rate-limit';
 import { z } from 'zod';
 import { prisma, withWorkspaceTransaction } from '../lib/db.js';
-import { hashPassword, verifyPassword, createSession, verifySession, sessionCookieHeader, readSessionCookie } from '../lib/auth.js';
+import { hashPassword, verifyPassword, createSession, verifySession, sessionCookieHeader, readSessionCookie, revokeSession } from '../lib/auth.js';
 
 const app = Fastify({ logger: true });
 
+const allowedOrigin = process.env.CORS_ORIGIN?.trim() || 'http://localhost:5173';
+app.register(cors, { origin: allowedOrigin, credentials: true });
+app.register(rateLimit, { max: 100, timeWindow: '1 minute' });
+
+app.setErrorHandler((err, req, reply) => {
+  const status = (err as any).statusCode ?? 500;
+  const message = status >= 500 ? 'INTERNAL_ERROR' : (err as Error).message;
+  req.log.error(err);
+  reply.code(status).send({ error: message });
+});
+
 app.get('/health', async () => ({ status: 'ok' }));
 
+app.get('/ready', async (req, reply) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    return { status: 'ready' };
+  } catch (e) {
+    req.log.error(e);
+    return reply.code(503).send({ status: 'not_ready' });
+  }
+});
+
 const SignupSchema = z.object({
-  email: z.string().trim().email().max(254),
+  email: z.string().trim().toLowerCase().email().max(254),
   password: z.string().min(10).max(200),
   name: z.string().trim().min(1).max(120).optional(),
   workspaceName: z.string().trim().min(1).max(120),
   workspaceSlug: z.string().trim().min(2).max(60).regex(/^[a-z0-9-]+$/),
 });
 
-app.post('/api/auth/signup', async (req, reply) => {
+app.post('/api/auth/signup', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (req, reply) => {
   const parsed = SignupSchema.safeParse(req.body);
   if (!parsed.success) return reply.code(400).send({ error: 'INVALID_INPUT' });
   const input = parsed.data;
@@ -38,9 +61,9 @@ app.post('/api/auth/signup', async (req, reply) => {
   return;
 });
 
-const LoginSchema = z.object({ email: z.string().trim().email(), password: z.string().min(1) });
+const LoginSchema = z.object({ email: z.string().trim().toLowerCase().email(), password: z.string().min(1) });
 
-app.post('/api/auth/login', async (req, reply) => {
+app.post('/api/auth/login', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (req, reply) => {
   const parsed = LoginSchema.safeParse(req.body);
   if (!parsed.success) return reply.code(400).send({ error: 'INVALID_INPUT' });
   const input = parsed.data;
@@ -50,6 +73,14 @@ app.post('/api/auth/login', async (req, reply) => {
   const { jwt, expiresAt } = await createSession(user.id);
   reply.header('set-cookie', sessionCookieHeader(jwt, expiresAt));
   return { user: { id: user.id, email: user.email, name: user.name } };
+});
+
+app.post('/api/auth/logout', async (req, reply) => {
+  const cookie = readSessionCookie(req);
+  const session = await verifySession(cookie);
+  if (session) await revokeSession(session.sessionId);
+  reply.header('set-cookie', 'ugc_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+  return { ok: true };
 });
 
 app.get('/api/auth/me', async (req, reply) => {
@@ -64,43 +95,41 @@ app.get('/api/auth/me', async (req, reply) => {
   return { user: { id: user.id, email: user.email, name: user.name }, workspaces: user.memberships.map((m) => ({ ...m.workspace, role: m.role })) };
 });
 
-const WorkspaceIdSchema = z.string().trim().regex(/^[A-Za-z0-9_-]{1,64}$/);
-const ItemCreateSchema = z.object({ title: z.string().trim().min(1).max(200) });
-
-app.post('/api/items', async (req, reply) => {
+async function requireAuthWorkspace(req: any, reply: any) {
   const cookie = readSessionCookie(req);
   const session = await verifySession(cookie);
-  if (!session) return reply.code(401).send({ error: 'NOT_AUTHENTICATED' });
-  const workspaceParsed = WorkspaceIdSchema.safeParse((req.headers['x-workspace-id'] as string) || (req.query as any)?.workspaceId);
-  if (!workspaceParsed.success) return reply.code(400).send({ error: 'INVALID_WORKSPACE_ID' });
-  const workspaceId = workspaceParsed.data;
+  if (!session) { reply.code(401).send({ error: 'NOT_AUTHENTICATED' }); return null; }
+  const workspaceId = (req.headers['x-workspace-id'] as string) || (req.query as any)?.workspaceId;
+  if (!workspaceId) { reply.code(400).send({ error: 'WORKSPACE_ID_REQUIRED' }); return null; }
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(workspaceId)) { reply.code(400).send({ error: 'INVALID_WORKSPACE_ID' }); return null; }
   const membership = await prisma.membership.findUnique({ where: { userId_workspaceId: { userId: session.userId, workspaceId } } });
-  if (!membership) return reply.code(403).send({ error: 'NOT_A_WORKSPACE_MEMBER' });
-  const bodyParsed = ItemCreateSchema.safeParse(req.body ?? {});
-  if (!bodyParsed.success) return reply.code(400).send({ error: 'INVALID_INPUT' });
-  const item = await withWorkspaceTransaction(workspaceId, async (tx) => {
-    return tx.item.create({ data: { workspaceId, title: bodyParsed.data.title } });
-  });
+  if (!membership) { reply.code(403).send({ error: 'NOT_A_WORKSPACE_MEMBER' }); return null; }
+  return { userId: session.userId, workspaceId, role: membership.role };
+}
+
+app.post('/api/items', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const title = String(body.title ?? '').trim();
+  if (!title || title.length > 200) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const item = await withWorkspaceTransaction(ctx.workspaceId, (tx) => tx.item.create({ data: { workspaceId: ctx.workspaceId, title } }));
   reply.code(201).send({ item });
   return;
 });
 
 app.get('/api/items', async (req, reply) => {
-  const cookie = readSessionCookie(req);
-  const session = await verifySession(cookie);
-  if (!session) return reply.code(401).send({ error: 'NOT_AUTHENTICATED' });
-  const workspaceParsed = WorkspaceIdSchema.safeParse((req.headers['x-workspace-id'] as string) || (req.query as any)?.workspaceId);
-  if (!workspaceParsed.success) return reply.code(400).send({ error: 'INVALID_WORKSPACE_ID' });
-  const workspaceId = workspaceParsed.data;
-  const membership = await prisma.membership.findUnique({ where: { userId_workspaceId: { userId: session.userId, workspaceId } } });
-  if (!membership) return reply.code(403).send({ error: 'NOT_A_WORKSPACE_MEMBER' });
-  const items = await withWorkspaceTransaction(workspaceId, async (tx) => {
-    return tx.item.findMany({ where: { workspaceId } });
-  });
-  return { items };
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const q = (req.query ?? {}) as any;
+  const take = Math.min(Number(q.limit ?? 50), 100);
+  const skip = Number(q.offset ?? 0);
+  const items = await withWorkspaceTransaction(ctx.workspaceId, (tx) => tx.item.findMany({ where: { workspaceId: ctx.workspaceId }, take, skip, orderBy: { createdAt: 'desc' } }));
+  return { items, limit: take, offset: skip };
 });
 
 export async function buildServer() {
+  await app.ready();
   return app;
 }
 

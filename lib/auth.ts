@@ -57,6 +57,11 @@ export async function verifySession(jwt: string | null) {
   return { userId, sessionId };
 }
 
+
+export async function revokeSession(sessionId: string) {
+  await prisma.session.update({ where: { id: sessionId }, data: { revokedAt: new Date() } });
+}
+
 export function sessionCookieHeader(jwt: string, expiresAt: Date) {
   const secure = process.env.APP_ENV === 'production' ? '; Secure' : '';
   return `${SESSION_COOKIE}=${jwt}; Path=/; HttpOnly; SameSite=Lax; Expires=${expiresAt.toUTCString()}${secure}`;

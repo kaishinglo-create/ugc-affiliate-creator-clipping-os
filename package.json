@@ -19,6 +19,8 @@
     "node": ">=22.23.4"
   },
   "dependencies": {
+    "@fastify/cors": "^11.3.1",
+    "@fastify/rate-limit": "^11.2.1",
     "@prisma/client": "^6.19.3",
     "bcryptjs": "^3.0.3",
     "dotenv": "^16.4.5",
