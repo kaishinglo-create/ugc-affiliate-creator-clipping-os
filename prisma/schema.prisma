@@ -41,6 +41,8 @@ model Workspace {
   products  Product[]
   ideas     ContentIdea[]
   integrations Integration[]
+  workflows   WorkflowDefinition[]
+  workflowRuns WorkflowRun[]
 }
 
 enum MembershipRole {
@@ -190,4 +192,65 @@ model Integration {
   workspace   Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   @@unique([workspaceId, provider])
   @@index([workspaceId])
+}
+
+
+enum WorkflowStatus {
+  pending
+  queued
+  running
+  waiting_for_approval
+  succeeded
+  failed
+  cancelled
+}
+
+model WorkflowDefinition {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  description String?
+  steps       Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  runs        WorkflowRun[]
+  @@index([workspaceId])
+}
+
+model WorkflowRun {
+  id          String         @id @default(cuid())
+  workspaceId String
+  definitionId String
+  status      WorkflowStatus @default(pending)
+  currentStep Int            @default(0)
+  input       Json?
+  result      Json?
+  error       String?
+  idempotencyKey String?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  definition  WorkflowDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  steps       WorkflowStepRun[]
+  @@index([workspaceId])
+  @@unique([workspaceId, idempotencyKey])
+}
+
+model WorkflowStepRun {
+  id          String         @id @default(cuid())
+  runId       String
+  stepIndex   Int
+  name        String
+  status      WorkflowStatus @default(pending)
+  input       Json?
+  output      Json?
+  error       String?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime       @default(now())
+  run         WorkflowRun    @relation(fields: [runId], references: [id], onDelete: Cascade)
+  @@index([runId])
 }
