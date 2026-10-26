@@ -310,6 +310,79 @@ app.post('/api/analytics/clicks', async (req, reply) => {
   return;
 });
 
+
+// Business Hub
+app.get('/api/creators', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const rows = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.creator.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' } })) as any;
+  return { creators: rows };
+});
+app.post('/api/creators', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const name = String(body.name ?? '').trim();
+  if (!name) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const c = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.creator.create({ data: { workspaceId: ctx.workspaceId, name, email: body.email ?? null, niches: body.niches ?? null, platforms: body.platforms ?? null } }));
+  reply.code(201).send({ creator: c }); return;
+});
+
+app.get('/api/brands', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const rows = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.brand.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' } })) as any;
+  return { brands: rows };
+});
+app.post('/api/brands', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const name = String(body.name ?? '').trim();
+  if (!name) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const b = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.brand.create({ data: { workspaceId: ctx.workspaceId, name, guidelines: body.guidelines ?? null, tone: body.tone ?? null } }));
+  reply.code(201).send({ brand: b }); return;
+});
+
+app.get('/api/campaigns', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const rows = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.campaign.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' } })) as any;
+  return { campaigns: rows };
+});
+app.post('/api/campaigns', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const name = String(body.name ?? '').trim();
+  if (!name) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const c = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.campaign.create({ data: { workspaceId: ctx.workspaceId, brandId: body.brandId ?? null, name, goal: body.goal ?? null, budgetCents: body.budgetCents ?? null, status: body.status ?? 'draft' } }));
+  reply.code(201).send({ campaign: c }); return;
+});
+
+app.get('/api/tasks', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const rows = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.task.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' } })) as any;
+  return { tasks: rows };
+});
+app.post('/api/tasks', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const title = String(body.title ?? '').trim();
+  if (!title) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const t = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.task.create({ data: { workspaceId: ctx.workspaceId, campaignId: body.campaignId ?? null, title, description: body.description ?? null, assignee: body.assignee ?? null, priority: body.priority ?? 'medium', status: body.status ?? 'open', dueDate: body.dueDate ? new Date(body.dueDate) : null } }));
+  reply.code(201).send({ task: t }); return;
+});
+
+app.get('/api/assets', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const rows = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.assetVersion.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' } })) as any;
+  return { assets: rows };
+});
+
 export async function buildServer() {
   await app.ready();
   return app;

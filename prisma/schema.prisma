@@ -46,6 +46,11 @@ model Workspace {
   analyticsSnapshots AnalyticsSnapshot[]
   affiliateClicks AffiliateClick[]
   affiliateConversions AffiliateConversion[]
+  creators Creator[]
+  brands Brand[]
+  campaigns Campaign[]
+  tasks Task[]
+  assets AssetVersion[]
 }
 
 enum MembershipRole {
@@ -294,5 +299,98 @@ model AffiliateConversion {
   idempotencyKey String?
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId])
+}
+
+
+model Creator {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  email       String?
+  niches      String?
+  platforms   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaigns   Campaign[]
+  @@index([workspaceId])
+}
+
+model Brand {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  guidelines  String?
+  tone        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaigns   Campaign[]
+  @@index([workspaceId])
+}
+
+enum CampaignStatus {
+  draft
+  planned
+  active
+  paused
+  completed
+  cancelled
+}
+
+model Campaign {
+  id          String         @id @default(cuid())
+  workspaceId String
+  brandId     String?
+  name        String
+  goal        String?
+  budgetCents Int?
+  status      CampaignStatus @default(draft)
+  startDate   DateTime?
+  endDate     DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  brand       Brand?         @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  creators    Creator[]
+  tasks       Task[]
+  @@index([workspaceId])
+}
+
+enum TaskStatus {
+  open
+  in_progress
+  done
+  cancelled
+}
+
+model Task {
+  id          String     @id @default(cuid())
+  workspaceId String
+  campaignId  String?
+  title       String
+  description String?
+  assignee    String?
+  priority    String     @default("medium")
+  status      TaskStatus @default(open)
+  dueDate     DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign    Campaign?  @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  @@index([workspaceId])
+}
+
+model AssetVersion {
+  id          String   @id @default(cuid())
+  workspaceId String
+  title       String
+  version     Int      @default(1)
+  type        String?
+  url         String?
+  status      String   @default("draft")
+  createdAt   DateTime @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   @@index([workspaceId])
 }
