@@ -13,13 +13,13 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_DB: ugc_os_ci
-          POSTGRES_USER: ugc_os_app
-          POSTGRES_PASSWORD: ugc_os_app
+          POSTGRES_DB: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: pgpass
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U ugc_os_app -d ugc_os_ci"
+          --health-cmd "pg_isready -U postgres -d postgres"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -33,10 +33,12 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - name: Provision non-superuser runtime role
+      - name: Provision non-superuser app role
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
-          PGPASSWORD=ugc_os_app psql -h 127.0.0.1 -U postgres -d ugc_os_ci -v ON_ERROR_STOP=1 -c "ALTER USER ugc_os_app NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;"
+          export PGPASSWORD=pgpass
+          psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE USER ugc_os_app WITH PASSWORD 'ugc_os_app' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;"
+          psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE ugc_os_ci OWNER ugc_os_app;"
       - run: npm ci
       - run: npm run db:migrate:deploy
       - run: npm run check
