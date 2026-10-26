@@ -226,6 +226,50 @@ app.post('/api/integrations/:provider', async (req, reply) => {
   return;
 });
 
+
+// Workflows
+app.get('/api/workflows', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { } = await import('./workflows.js');
+  const defs = await (await import('../lib/db.js')).withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.workflowDefinition.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' } }));
+  return { workflows: defs };
+});
+
+app.post('/api/workflows', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const name = String(body.name ?? '').trim();
+  if (!name) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const steps = Array.isArray(body.steps) ? body.steps : [];
+  const { createDefinition } = await import('./workflows.js');
+  const def = await createDefinition(ctx.workspaceId, name, steps);
+  reply.code(201).send({ workflow: def });
+  return;
+});
+
+app.post('/api/workflows/:id/run', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const id = (req.params as any).id;
+  const body = (req.body ?? {}) as any;
+  const { startRun, executeRun } = await import('./workflows.js');
+  const run = await startRun(ctx.workspaceId, id, body.input ?? null, body.idempotencyKey);
+  const executed = await executeRun(ctx.workspaceId, run.id);
+  return { run: executed };
+});
+
+app.get('/api/workflow-runs/:id', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const id = (req.params as any).id;
+  const { withWorkspaceTransaction } = await import('../lib/db.js');
+  const run = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.workflowRun.findUnique({ where: { id }, include: { steps: true } }));
+  if (!run) return reply.code(404).send({ error: 'NOT_FOUND' });
+  return { run };
+});
+
 export async function buildServer() {
   await app.ready();
   return app;
