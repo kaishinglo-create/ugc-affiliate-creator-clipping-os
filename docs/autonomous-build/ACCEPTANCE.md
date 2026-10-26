@@ -4,7 +4,7 @@
 - [x] Repository has clear standalone scope and run instructions.
 - [x] Responsive dashboard has navigation for product areas.
 - [x] Demo data and disconnected integrations are labeled honestly.
-- [ ] npm run check passes on Node.js 18+.
+- [x] npm run check passes on Node.js 18+.
 - [ ] Automated smoke tests and CI exist.
 
 ## Phase 2 — App foundation
@@ -12,7 +12,7 @@
 - [ ] Add accessible loading, empty, error and success states.
 - [ ] Validate all inputs server-side.
 - [ ] Add persistent storage, migrations and backups.
-- [ ] Add authentication, authorization and secure sessions.
+- [x] Add authentication, authorization and secure sessions (workspace membership + RLS).
 
 ## Phase 3 — Automation
 - [ ] Durable workflow queue supports retries, cancellation and idempotency.

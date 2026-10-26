@@ -64,3 +64,52 @@ model Item {
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   @@index([workspaceId])
 }
+
+model Agent {
+  id               String   @id @default(cuid())
+  key              String   @unique
+  name             String
+  description      String?
+  status           String   @default("ACTIVE")
+  toolPermissions  String[]
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  runs             AgentRun[]
+
+  @@index([status])
+}
+
+model AgentRun {
+  id          String    @id @default(cuid())
+  agentKey    String
+  agent       Agent?    @relation(fields: [agentKey], references: [key])
+  workspaceId String?
+  userId      String?
+  status      String
+  input       Json
+  output      Json?
+  error       String?
+  startedAt   DateTime  @default(now())
+  finishedAt  DateTime?
+  auditEvents AuditEvent[]
+
+  @@index([agentKey])
+  @@index([workspaceId])
+  @@index([status])
+}
+
+model AuditEvent {
+  id          String    @id @default(cuid())
+  workspaceId String?
+  userId      String?
+  runId       String?
+  run         AgentRun? @relation(fields: [runId], references: [id], onDelete: Cascade)
+  type        String
+  actor       String?
+  data        Json?
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId])
+  @@index([type])
+  @@index([runId])
+}
