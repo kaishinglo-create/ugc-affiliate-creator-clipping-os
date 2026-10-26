@@ -191,6 +191,41 @@ app.post('/api/ideas', async (req, reply) => {
   return;
 });
 
+
+// Integrations
+app.get('/api/integrations', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { PROVIDERS, providerStatus } = await import('./integrations.js');
+  const rows = await withWorkspaceTransaction(ctx.workspaceId, (tx) => tx.integration.findMany({ where: { workspaceId: ctx.workspaceId } })) as any;
+  const byProvider = Object.fromEntries(rows.map((r: any) => [r.provider, r]));
+  const list = PROVIDERS.map((p) => ({
+    ...p,
+    status: byProvider[p.provider]?.status ?? providerStatus(p.provider),
+    lastError: byProvider[p.provider]?.lastError ?? null,
+  }));
+  return { integrations: list };
+});
+
+app.post('/api/integrations/:provider', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const provider = (req.params as any).provider;
+  const valid = ['yaps','clippingmini','klap','opusclip'];
+  if (!valid.includes(provider)) return reply.code(400).send({ error: 'UNKNOWN_PROVIDER' });
+  const body = (req.body ?? {}) as any;
+  const configured = Boolean(body.apiKey);
+  // Never store raw keys in DB; store only status + masked hint
+  const status = configured ? 'CONFIGURED' : 'NOT_CONFIGURED';
+  const row = await withWorkspaceTransaction(ctx.workspaceId, (tx) => tx.integration.upsert({
+    where: { workspaceId_provider: { workspaceId: ctx.workspaceId, provider } },
+    create: { workspaceId: ctx.workspaceId, provider, status: status as any, config: configured ? { hint: '***' } : null },
+    update: { status: status as any, config: configured ? { hint: '***' } : null, lastError: null },
+  }));
+  reply.code(200).send({ integration: row });
+  return;
+});
+
 export async function buildServer() {
   await app.ready();
   return app;
