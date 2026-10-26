@@ -54,6 +54,8 @@ model Workspace {
   experiments Experiment[]
   insights Insight[]
   approvals Approval[]
+  killSwitches KillSwitch[]
+  securityEvents SecurityEvent[]
 }
 
 enum MembershipRole {
@@ -461,4 +463,33 @@ model Approval {
   updatedAt   DateTime @updatedAt
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   @@index([workspaceId, status])
+}
+
+
+model KillSwitch {
+  id          String   @id @default(cuid())
+  workspaceId String
+  active      Boolean  @default(false)
+  reason      String?
+  activatedBy String?
+  activatedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  @@unique([workspaceId])
+}
+
+model SecurityEvent {
+  id          String   @id @default(cuid())
+  workspaceId String
+  type        String
+  actor       String?
+  agent       String?
+  action      String?
+  result      String
+  details     String?
+  correlationId String?
+  createdAt   DateTime @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  @@index([workspaceId, createdAt])
 }

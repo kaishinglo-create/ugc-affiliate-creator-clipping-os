@@ -472,6 +472,43 @@ app.get('/api/orchestrator/summary', async (req, reply) => {
   return { summary: { workflows, runs, pendingApprovals, ideas, insights } };
 });
 
+
+// Security
+app.get('/api/security/kill-switch', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { isKillSwitchActive } = await import('../lib/security.js');
+  const active = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => isKillSwitchActive(ctx.workspaceId, tx));
+  return { active };
+});
+
+app.post('/api/security/kill-switch/activate', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const reason = String(body.reason ?? 'manual').slice(0, 500);
+  const { activateKillSwitch, logSecurityEvent } = await import('../lib/security.js');
+  await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => activateKillSwitch(ctx.workspaceId, reason, ctx.userId, tx));
+  await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => logSecurityEvent(ctx.workspaceId, 'kill_switch_activated', 'success', tx, reason, ctx.userId));
+  return { active: true };
+});
+
+app.post('/api/security/kill-switch/deactivate', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { deactivateKillSwitch, logSecurityEvent } = await import('../lib/security.js');
+  await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => deactivateKillSwitch(ctx.workspaceId, tx));
+  await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => logSecurityEvent(ctx.workspaceId, 'kill_switch_deactivated', 'success', tx, undefined, ctx.userId));
+  return { active: false };
+});
+
+app.get('/api/security/events', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const rows = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.securityEvent.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' }, take: 50 })) as any;
+  return { events: rows };
+});
+
 export async function buildServer() {
   await app.ready();
   return app;
