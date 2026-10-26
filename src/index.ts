@@ -130,6 +130,67 @@ app.get('/api/items', async (req, reply) => {
   return { items, limit: take, offset: skip };
 });
 
+
+// Niches
+app.get('/api/niches', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const niches = await withWorkspaceTransaction(ctx.workspaceId, (tx) => tx.niche.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' } }));
+  return { niches };
+});
+
+app.post('/api/niches', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const name = String(body.name ?? '').trim();
+  if (!name) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const niche = await withWorkspaceTransaction(ctx.workspaceId, (tx) => tx.niche.create({ data: { workspaceId: ctx.workspaceId, name, description: body.description ?? null, demandScore: Number(body.demandScore ?? 0), competition: Number(body.competition ?? 0) } }));
+  reply.code(201).send({ niche });
+  return;
+});
+
+// Products
+app.get('/api/products', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const products = await withWorkspaceTransaction(ctx.workspaceId, (tx) => tx.product.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' } }));
+  return { products };
+});
+
+app.post('/api/products', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const name = String(body.name ?? '').trim();
+  if (!name) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const product = await withWorkspaceTransaction(ctx.workspaceId, (tx) => tx.product.create({ data: { workspaceId: ctx.workspaceId, nicheId: body.nicheId ?? null, name, category: body.category ?? null, priceCents: body.priceCents ?? null, source: body.source ?? null, sourceUrl: body.sourceUrl ?? null } }));
+  reply.code(201).send({ product });
+  return;
+});
+
+// Content ideas
+app.get('/api/ideas', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const ideas = await withWorkspaceTransaction(ctx.workspaceId, (tx) => tx.contentIdea.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' } }));
+  return { ideas };
+});
+
+app.post('/api/ideas', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const title = String(body.title ?? '').trim();
+  if (!title) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const { contentOpportunityScore } = await import('./scoring.js');
+  const input = { demand: Number(body.demand ?? 50), competition: Number(body.competition ?? 50), relevance: Number(body.relevance ?? 50), effort: Number(body.effort ?? 50), dataQuality: Number(body.dataQuality ?? 50) };
+  const { score, explanation } = contentOpportunityScore(input);
+  const idea = await withWorkspaceTransaction(ctx.workspaceId, (tx) => tx.contentIdea.create({ data: { workspaceId: ctx.workspaceId, nicheId: body.nicheId ?? null, productId: body.productId ?? null, title, hook: body.hook ?? null, format: body.format ?? null, targetAudience: body.targetAudience ?? null, cta: body.cta ?? null, keywords: body.keywords ?? null, score } }));
+  reply.code(201).send({ idea, scoreExplanation: explanation });
+  return;
+});
+
 export async function buildServer() {
   await app.ready();
   return app;
