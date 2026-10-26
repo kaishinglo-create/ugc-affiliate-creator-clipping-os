@@ -4,12 +4,14 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { z } from 'zod';
+import { loadConfig } from './config.js';
 import { prisma, withWorkspaceTransaction } from '../lib/db.js';
 import { hashPassword, verifyPassword, createSession, verifySession, sessionCookieHeader, readSessionCookie, revokeSession } from '../lib/auth.js';
 
 const app = Fastify({ logger: true });
 
-const allowedOrigin = process.env.CORS_ORIGIN?.trim() || 'http://localhost:5173';
+const config = loadConfig();
+const allowedOrigin = config.corsOrigin;
 app.register(helmet, { contentSecurityPolicy: false });
 app.register(cors, { origin: allowedOrigin, credentials: true });
 app.register(rateLimit, { max: 100, timeWindow: '1 minute' });
@@ -418,6 +420,16 @@ app.post('/api/insights', async (req, reply) => {
   reply.code(201).send({ insight: i }); return;
 });
 
+
+app.get('/api/system/status', async (req, reply) => {
+  const cookie = readSessionCookie(req);
+  const session = await verifySession(cookie);
+  if (!session) return reply.code(401).send({ error: 'NOT_AUTHENTICATED' });
+  let dbOk = false;
+  try { await prisma.$queryRaw`SELECT 1`; dbOk = true; } catch {}
+  return { status: dbOk ? 'ok' : 'degraded', db: dbOk, version: '0.1.0', time: new Date().toISOString() };
+});
+
 export async function buildServer() {
   await app.ready();
   return app;
@@ -427,7 +439,7 @@ process.on('SIGTERM', async () => { await app.close(); process.exit(0); });
 process.on('SIGINT', async () => { await app.close(); process.exit(0); });
 
 async function main() {
-  const port = Number(process.env.PORT ?? 3000);
+  const port = config.port;
   await app.listen({ port, host: '0.0.0.0' });
 }
 
