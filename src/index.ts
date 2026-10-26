@@ -535,6 +535,54 @@ app.post('/api/incidents/:id/resolve', async (req, reply) => {
   return { incident: inc };
 });
 
+
+// Multi-agent
+app.get('/api/agents', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const rows = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.agentDefinition.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' } })) as any;
+  return { agents: rows };
+});
+app.post('/api/agents', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const name = String(body.name ?? '').trim();
+  const role = String(body.role ?? '').trim();
+  if (!name || !role) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const a = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.agentDefinition.create({ data: { workspaceId: ctx.workspaceId, name, role, capabilities: body.capabilities ?? {}, enabled: body.enabled !== false } }));
+  reply.code(201).send({ agent: a }); return;
+});
+
+app.get('/api/agent-tasks', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const rows = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.agentTask.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' } })) as any;
+  return { tasks: rows };
+});
+app.post('/api/agent-tasks', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const name = String(body.name ?? '').trim();
+  if (!name) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const t = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.agentTask.create({ data: { workspaceId: ctx.workspaceId, agentId: body.agentId ?? null, name, status: 'queued', input: body.input ?? null } }));
+  reply.code(201).send({ task: t }); return;
+});
+app.post('/api/agent-tasks/:id/run', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const id = (req.params as any).id;
+  const task = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.agentTask.findUnique({ where: { id } })) as any;
+  if (!task) return reply.code(404).send({ error: 'NOT_FOUND' });
+  await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.agentTask.update({ where: { id }, data: { status: 'running', startedAt: new Date() } }));
+  // simple execution: echo input
+  const output = { echoed: task.input, agent: task.agentId };
+  await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.agentTask.update({ where: { id }, data: { status: 'completed', output, finishedAt: new Date() } }));
+  const updated = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.agentTask.findUnique({ where: { id } }));
+  return { task: updated };
+});
+
 export async function buildServer() {
   await app.ready();
   return app;
