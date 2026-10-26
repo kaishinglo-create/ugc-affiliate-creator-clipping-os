@@ -430,6 +430,48 @@ app.get('/api/system/status', async (req, reply) => {
   return { status: dbOk ? 'ok' : 'degraded', db: dbOk, version: '0.1.0', time: new Date().toISOString() };
 });
 
+
+// Autonomous orchestrator
+app.get('/api/approvals', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const rows = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.approval.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' } })) as any;
+  return { approvals: rows };
+});
+app.post('/api/approvals', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const entityType = String(body.entityType ?? '').trim();
+  const entityId = String(body.entityId ?? '').trim();
+  if (!entityType || !entityId) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const a = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.approval.create({ data: { workspaceId: ctx.workspaceId, entityType, entityId, requestedBy: ctx.userId } }));
+  reply.code(201).send({ approval: a }); return;
+});
+app.post('/api/approvals/:id/decide', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const id = (req.params as any).id;
+  const body = (req.body ?? {}) as any;
+  const status = body.status === 'approved' ? 'approved' : body.status === 'rejected' ? 'rejected' : null;
+  if (!status) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const a = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.approval.update({ where: { id }, data: { status, decidedBy: ctx.userId, decidedAt: new Date(), reason: body.reason ?? null } }));
+  return { approval: a };
+});
+
+app.get('/api/orchestrator/summary', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const [workflows, runs, pendingApprovals, ideas, insights] = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => Promise.all([
+    tx.workflowDefinition.count({ where: { workspaceId: ctx.workspaceId } }),
+    tx.workflowRun.count({ where: { workspaceId: ctx.workspaceId } }),
+    tx.approval.count({ where: { workspaceId: ctx.workspaceId, status: 'pending' } }),
+    tx.contentIdea.count({ where: { workspaceId: ctx.workspaceId } }),
+    tx.insight.count({ where: { workspaceId: ctx.workspaceId, active: true } }),
+  ]));
+  return { summary: { workflows, runs, pendingApprovals, ideas, insights } };
+});
+
 export async function buildServer() {
   await app.ready();
   return app;

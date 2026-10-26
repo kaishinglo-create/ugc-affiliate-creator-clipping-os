@@ -53,6 +53,7 @@ model Workspace {
   assets AssetVersion[]
   experiments Experiment[]
   insights Insight[]
+  approvals Approval[]
 }
 
 enum MembershipRole {
@@ -443,4 +444,21 @@ model Insight {
   updatedAt   DateTime @updatedAt
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   @@index([workspaceId])
+}
+
+
+model Approval {
+  id          String   @id @default(cuid())
+  workspaceId String
+  entityType  String
+  entityId    String
+  status      String   @default("pending")
+  requestedBy String?
+  decidedBy   String?
+  decidedAt   DateTime?
+  reason      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  @@index([workspaceId, status])
 }
