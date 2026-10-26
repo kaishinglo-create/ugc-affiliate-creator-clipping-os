@@ -61,6 +61,8 @@ model Workspace {
   agentTasks AgentTask[]
   contentPosts ContentPost[]
   performanceSnapshots PerformanceSnapshot[]
+  policies OperationalPolicy[]
+  lifecycleEvents ContentLifecycleEvent[]
 }
 
 enum MembershipRole {
@@ -580,4 +582,29 @@ model PerformanceSnapshot {
   post        ContentPost @relation(fields: [postId], references: [id], onDelete: Cascade)
   workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   @@index([workspaceId, postId])
+}
+
+
+model OperationalPolicy {
+  id          String   @id @default(cuid())
+  workspaceId String
+  key         String
+  value       Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  @@unique([workspaceId, key])
+}
+
+model ContentLifecycleEvent {
+  id          String   @id @default(cuid())
+  workspaceId String
+  entityType  String
+  entityId    String
+  fromStatus  String?
+  toStatus    String
+  actor       String?
+  createdAt   DateTime @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  @@index([workspaceId, entityType, entityId])
 }

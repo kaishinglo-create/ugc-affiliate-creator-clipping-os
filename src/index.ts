@@ -612,6 +612,47 @@ app.post('/api/content-posts/:id/snapshots', async (req, reply) => {
   reply.code(201).send({ snapshot: snap }); return;
 });
 
+
+// Operations control
+app.get('/api/operations/summary', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const [workflows, runs, pendingApprovals, incidents, ideas] = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => Promise.all([
+    tx.workflowDefinition.count({ where: { workspaceId: ctx.workspaceId } }),
+    tx.workflowRun.count({ where: { workspaceId: ctx.workspaceId } }),
+    tx.approval.count({ where: { workspaceId: ctx.workspaceId, status: 'pending' } }),
+    tx.incident.count({ where: { workspaceId: ctx.workspaceId, status: 'open' } }),
+    tx.contentIdea.count({ where: { workspaceId: ctx.workspaceId } }),
+  ]));
+  return { summary: { workflows, runs, pendingApprovals, incidents, ideas } };
+});
+
+app.post('/api/policies', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const key = String(body.key ?? '').trim();
+  if (!key) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const p = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.operationalPolicy.upsert({
+    where: { workspaceId_key: { workspaceId: ctx.workspaceId, key } },
+    create: { workspaceId: ctx.workspaceId, key, value: body.value ?? {} },
+    update: { value: body.value ?? {} },
+  }));
+  reply.code(201).send({ policy: p }); return;
+});
+
+app.post('/api/lifecycle-events', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const entityType = String(body.entityType ?? '').trim();
+  const entityId = String(body.entityId ?? '').trim();
+  const toStatus = String(body.toStatus ?? '').trim();
+  if (!entityType || !entityId || !toStatus) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const e = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.contentLifecycleEvent.create({ data: { workspaceId: ctx.workspaceId, entityType, entityId, fromStatus: body.fromStatus ?? null, toStatus, actor: ctx.userId } }));
+  reply.code(201).send({ event: e }); return;
+});
+
 export async function buildServer() {
   await app.ready();
   return app;
