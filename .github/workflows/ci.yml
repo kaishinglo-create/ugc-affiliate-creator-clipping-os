@@ -7,11 +7,32 @@ on:
     branches: [main]
 
 jobs:
-  syntax:
+  check:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: ugc_os_ci
+          POSTGRES_USER: ugc_os_app
+          POSTGRES_PASSWORD: ugc_os_app
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ugc_os_app -d ugc_os_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://ugc_os_app:ugc_os_app@127.0.0.1:5432/ugc_os_ci
+      SESSION_JWT_SECRET: ci-only-secret-that-is-at-least-thirty-two-characters-long
+      NODE_ENV: test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run db:migrate:deploy
       - run: npm run check
