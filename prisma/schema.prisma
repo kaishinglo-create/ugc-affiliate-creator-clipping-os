@@ -43,6 +43,9 @@ model Workspace {
   integrations Integration[]
   workflows   WorkflowDefinition[]
   workflowRuns WorkflowRun[]
+  analyticsSnapshots AnalyticsSnapshot[]
+  affiliateClicks AffiliateClick[]
+  affiliateConversions AffiliateConversion[]
 }
 
 enum MembershipRole {
@@ -253,4 +256,43 @@ model WorkflowStepRun {
   createdAt   DateTime       @default(now())
   run         WorkflowRun    @relation(fields: [runId], references: [id], onDelete: Cascade)
   @@index([runId])
+}
+
+
+model AnalyticsSnapshot {
+  id          String   @id @default(cuid())
+  workspaceId String
+  source      String
+  metric      String
+  value       Float
+  periodStart DateTime
+  periodEnd   DateTime
+  createdAt   DateTime @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  @@index([workspaceId, metric])
+}
+
+model AffiliateClick {
+  id          String   @id @default(cuid())
+  workspaceId String
+  contentId   String?
+  offerId     String?
+  clickedAt   DateTime @default(now())
+  idempotencyKey String?
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId])
+}
+
+model AffiliateConversion {
+  id          String   @id @default(cuid())
+  workspaceId String
+  clickId     String?
+  amountCents Int
+  status      String   @default("pending")
+  convertedAt DateTime @default(now())
+  idempotencyKey String?
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId])
 }

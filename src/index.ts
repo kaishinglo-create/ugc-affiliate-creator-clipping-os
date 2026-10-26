@@ -270,6 +270,46 @@ app.get('/api/workflow-runs/:id', async (req, reply) => {
   return { run };
 });
 
+
+// Analytics
+app.post('/api/analytics/snapshots', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const metric = String(body.metric ?? '').trim();
+  const value = Number(body.value);
+  if (!metric || !Number.isFinite(value)) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const now = new Date();
+  const snap = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.analyticsSnapshot.create({ data: { workspaceId: ctx.workspaceId, source: body.source ?? 'manual', metric, value, periodStart: body.periodStart ? new Date(body.periodStart) : now, periodEnd: body.periodEnd ? new Date(body.periodEnd) : now } }));
+  reply.code(201).send({ snapshot: snap });
+  return;
+});
+
+app.get('/api/analytics/summary', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const snaps = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.analyticsSnapshot.findMany({ where: { workspaceId: ctx.workspaceId } })) as any;
+  const byMetric: Record<string, number> = {};
+  for (const s of snaps) { byMetric[s.metric] = (byMetric[s.metric] ?? 0) + s.value; }
+  const clicks = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.affiliateClick.count({ where: { workspaceId: ctx.workspaceId } }));
+  const convs = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.affiliateConversion.count({ where: { workspaceId: ctx.workspaceId } }));
+  return { summary: { metrics: byMetric, clicks, conversions: convs, dataAvailable: snaps.length > 0 } };
+});
+
+app.post('/api/analytics/clicks', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const key = body.idempotencyKey ? String(body.idempotencyKey) : undefined;
+  if (key) {
+    const existing = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.affiliateClick.findUnique({ where: { workspaceId_idempotencyKey: { workspaceId: ctx.workspaceId, idempotencyKey: key } } }));
+    if (existing) { reply.code(200).send({ click: existing, duplicate: true }); return; }
+  }
+  const click = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.affiliateClick.create({ data: { workspaceId: ctx.workspaceId, contentId: body.contentId ?? null, offerId: body.offerId ?? null, idempotencyKey: key ?? null } }));
+  reply.code(201).send({ click });
+  return;
+});
+
 export async function buildServer() {
   await app.ready();
   return app;
