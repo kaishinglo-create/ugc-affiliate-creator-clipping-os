@@ -33,6 +33,10 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - name: Provision non-superuser runtime role
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          PGPASSWORD=ugc_os_app psql -h 127.0.0.1 -U ugc_os_app -d ugc_os_ci -v ON_ERROR_STOP=1 -c "ALTER USER ugc_os_app NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;"
       - run: npm ci
       - run: npm run db:migrate:deploy
       - run: npm run check
