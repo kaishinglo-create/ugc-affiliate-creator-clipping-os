@@ -383,6 +383,41 @@ app.get('/api/assets', async (req, reply) => {
   return { assets: rows };
 });
 
+
+// Growth Engine
+app.get('/api/experiments', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const rows = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.experiment.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' } })) as any;
+  return { experiments: rows };
+});
+app.post('/api/experiments', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const name = String(body.name ?? '').trim();
+  if (!name) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const e = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.experiment.create({ data: { workspaceId: ctx.workspaceId, name, hypothesis: body.hypothesis ?? null, metric: body.metric ?? null, status: body.status ?? 'draft' } }));
+  reply.code(201).send({ experiment: e }); return;
+});
+
+app.get('/api/insights', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const rows = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.insight.findMany({ where: { workspaceId: ctx.workspaceId, active: true }, orderBy: { createdAt: 'desc' } })) as any;
+  return { insights: rows };
+});
+app.post('/api/insights', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const title = String(body.title ?? '').trim();
+  const insightBody = String(body.body ?? '').trim();
+  if (!title || !insightBody) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const i = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.insight.create({ data: { workspaceId: ctx.workspaceId, title, body: insightBody, source: body.source ?? null, confidence: Number(body.confidence ?? 0) } }));
+  reply.code(201).send({ insight: i }); return;
+});
+
 export async function buildServer() {
   await app.ready();
   return app;

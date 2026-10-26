@@ -51,6 +51,8 @@ model Workspace {
   campaigns Campaign[]
   tasks Task[]
   assets AssetVersion[]
+  experiments Experiment[]
+  insights Insight[]
 }
 
 enum MembershipRole {
@@ -391,6 +393,54 @@ model AssetVersion {
   url         String?
   status      String   @default("draft")
   createdAt   DateTime @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  @@index([workspaceId])
+}
+
+
+model Experiment {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  hypothesis  String?
+  metric      String?
+  status      String   @default("draft")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  variants    ExperimentVariant[]
+  @@index([workspaceId])
+}
+
+model ExperimentVariant {
+  id          String   @id @default(cuid())
+  experimentId String
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  experiment  Experiment @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  measurements ExperimentMeasurement[]
+}
+
+model ExperimentMeasurement {
+  id          String   @id @default(cuid())
+  variantId   String
+  value       Float
+  sampleSize  Int      @default(0)
+  measuredAt  DateTime @default(now())
+  variant     ExperimentVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+}
+
+model Insight {
+  id          String   @id @default(cuid())
+  workspaceId String
+  title       String
+  body        String
+  source      String?
+  confidence  Float    @default(0)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   @@index([workspaceId])
 }
