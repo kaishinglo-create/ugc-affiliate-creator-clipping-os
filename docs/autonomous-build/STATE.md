@@ -1,8 +1,8 @@
 # STATE
 
-Phase: 2 (app foundation / workspace isolation)
-Last task: Workspace isolation RLS enforcement + membership tests; eslint flat config; npm run check passes.
-Files: src/index.ts, tests/workspace-isolation.test.ts, eslint.config.js, package.json, package-lock.json
-Tests: typecheck PASS, build PASS, lint PASS, tests 8/8 PASS, check PASS
+Phase: 3 (backend & API hardening) — CI GREEN
+Last task: CI provisioning of non-superuser role; RLS test passing.
+Tests: typecheck PASS, build PASS, 9/9 PASS
+CI: kaishinglo-create run 40390994009 SUCCESS
 Blockers: none
-Next: Phase 3 - agent registry + master orchestrator skeleton (typed agent definitions, execution records, audit events)
+Next: Phase 4 (agent registry + orchestrator) if continued
