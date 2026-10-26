@@ -59,6 +59,8 @@ model Workspace {
   incidents Incident[]
   agents AgentDefinition[]
   agentTasks AgentTask[]
+  contentPosts ContentPost[]
+  performanceSnapshots PerformanceSnapshot[]
 }
 
 enum MembershipRole {
@@ -545,4 +547,37 @@ model AgentTask {
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   agent       AgentDefinition? @relation(fields: [agentId], references: [id], onDelete: SetNull)
   @@index([workspaceId, status])
+}
+
+
+model ContentPost {
+  id          String   @id @default(cuid())
+  workspaceId String
+  platform    String
+  externalId  String
+  title       String?
+  url         String?
+  publishedAt DateTime?
+  format      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  snapshots   PerformanceSnapshot[]
+  @@unique([workspaceId, platform, externalId])
+  @@index([workspaceId, platform])
+}
+
+model PerformanceSnapshot {
+  id          String   @id @default(cuid())
+  workspaceId String
+  postId      String
+  views       Int      @default(0)
+  likes       Int      @default(0)
+  comments    Int      @default(0)
+  shares      Int      @default(0)
+  watchTimeSec Float?
+  capturedAt  DateTime @default(now())
+  post        ContentPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  @@index([workspaceId, postId])
 }

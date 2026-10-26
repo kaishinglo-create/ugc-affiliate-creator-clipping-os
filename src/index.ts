@@ -583,6 +583,35 @@ app.post('/api/agent-tasks/:id/run', async (req, reply) => {
   return { task: updated };
 });
 
+
+// Cross-platform content intelligence
+app.get('/api/content-posts', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const rows = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.contentPost.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' } })) as any;
+  return { posts: rows };
+});
+app.post('/api/content-posts', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const platform = String(body.platform ?? '').trim();
+  const externalId = String(body.externalId ?? '').trim();
+  if (!platform || !externalId) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const p = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.contentPost.create({ data: { workspaceId: ctx.workspaceId, platform, externalId, title: body.title ?? null, url: body.url ?? null, format: body.format ?? null, publishedAt: body.publishedAt ? new Date(body.publishedAt) : null } }));
+  reply.code(201).send({ post: p }); return;
+});
+app.post('/api/content-posts/:id/snapshots', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const id = (req.params as any).id;
+  const body = (req.body ?? {}) as any;
+  const post = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.contentPost.findUnique({ where: { id } })) as any;
+  if (!post || post.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const snap = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.performanceSnapshot.create({ data: { workspaceId: ctx.workspaceId, postId: id, views: Number(body.views ?? 0), likes: Number(body.likes ?? 0), comments: Number(body.comments ?? 0), shares: Number(body.shares ?? 0), watchTimeSec: body.watchTimeSec ?? null } }));
+  reply.code(201).send({ snapshot: snap }); return;
+});
+
 export async function buildServer() {
   await app.ready();
   return app;
