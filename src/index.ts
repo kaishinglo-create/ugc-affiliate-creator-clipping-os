@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { z } from 'zod';
 import { prisma, withWorkspaceTransaction } from '../lib/db.js';
@@ -9,6 +10,7 @@ import { hashPassword, verifyPassword, createSession, verifySession, sessionCook
 const app = Fastify({ logger: true });
 
 const allowedOrigin = process.env.CORS_ORIGIN?.trim() || 'http://localhost:5173';
+app.register(helmet, { contentSecurityPolicy: false });
 app.register(cors, { origin: allowedOrigin, credentials: true });
 app.register(rateLimit, { max: 100, timeWindow: '1 minute' });
 
@@ -132,6 +134,9 @@ export async function buildServer() {
   await app.ready();
   return app;
 }
+
+process.on('SIGTERM', async () => { await app.close(); process.exit(0); });
+process.on('SIGINT', async () => { await app.close(); process.exit(0); });
 
 async function main() {
   const port = Number(process.env.PORT ?? 3000);
