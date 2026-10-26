@@ -57,6 +57,8 @@ model Workspace {
   killSwitches KillSwitch[]
   securityEvents SecurityEvent[]
   incidents Incident[]
+  agents AgentDefinition[]
+  agentTasks AgentTask[]
 }
 
 enum MembershipRole {
@@ -508,5 +510,39 @@ model Incident {
   updatedAt   DateTime @updatedAt
   resolvedAt  DateTime?
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  @@index([workspaceId, status])
+}
+
+
+model AgentDefinition {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  role        String
+  capabilities Json
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tasks       AgentTask[]
+  @@index([workspaceId])
+}
+
+model AgentTask {
+  id          String   @id @default(cuid())
+  workspaceId String
+  agentId     String?
+  name        String
+  status      String   @default("queued")
+  input       Json?
+  output      Json?
+  error       String?
+  dependsOn   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  agent       AgentDefinition? @relation(fields: [agentId], references: [id], onDelete: SetNull)
   @@index([workspaceId, status])
 }
