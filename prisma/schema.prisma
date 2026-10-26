@@ -37,6 +37,9 @@ model Workspace {
   updatedAt DateTime @updatedAt
   memberships Membership[]
   items     Item[]
+  niches    Niche[]
+  products  Product[]
+  ideas     ContentIdea[]
 }
 
 enum MembershipRole {
@@ -112,4 +115,56 @@ model AuditEvent {
   @@index([workspaceId])
   @@index([type])
   @@index([runId])
+}
+
+
+model Niche {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  description String?
+  demandScore Int      @default(0)
+  competition Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  products    Product[]
+  ideas       ContentIdea[]
+  @@index([workspaceId])
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  workspaceId String
+  nicheId     String?
+  name        String
+  category    String?
+  priceCents  Int?
+  source      String?
+  sourceUrl   String?
+  fetchedAt   DateTime @default(now())
+  createdAt   DateTime @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  niche       Niche?    @relation(fields: [nicheId], references: [id], onDelete: SetNull)
+  @@index([workspaceId])
+}
+
+model ContentIdea {
+  id          String   @id @default(cuid())
+  workspaceId String
+  nicheId     String?
+  productId   String?
+  title       String
+  hook        String?
+  format      String?
+  targetAudience String?
+  cta         String?
+  keywords    String?
+  score       Int      @default(0)
+  status      String   @default("draft")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  niche       Niche?    @relation(fields: [nicheId], references: [id], onDelete: SetNull)
+  @@index([workspaceId])
 }
