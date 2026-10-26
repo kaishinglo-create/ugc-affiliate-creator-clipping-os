@@ -509,6 +509,32 @@ app.get('/api/security/events', async (req, reply) => {
   return { events: rows };
 });
 
+
+// Reliability
+app.get('/api/incidents', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const rows = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.incident.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' } })) as any;
+  return { incidents: rows };
+});
+app.post('/api/incidents', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const title = String(body.title ?? '').trim();
+  if (!title) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const inc = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.incident.create({ data: { workspaceId: ctx.workspaceId, title, severity: body.severity ?? 'medium', status: 'open', signature: body.signature ?? null, details: body.details ?? null } }));
+  reply.code(201).send({ incident: inc }); return;
+});
+app.post('/api/incidents/:id/resolve', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const id = (req.params as any).id;
+  const body = (req.body ?? {}) as any;
+  const inc = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.incident.update({ where: { id }, data: { status: 'resolved', resolvedAt: new Date(), details: body.details ?? undefined } }));
+  return { incident: inc };
+});
+
 export async function buildServer() {
   await app.ready();
   return app;
