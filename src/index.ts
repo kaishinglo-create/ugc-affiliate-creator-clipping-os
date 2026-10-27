@@ -683,6 +683,24 @@ app.get('/api/release-decision', async (req, reply) => {
   return { decision, total: rows.length, passed: statuses.filter((s: string) => s === 'passed').length };
 });
 
+
+// Deployment/install
+app.get('/api/install-checks', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const rows = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.installCheck.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' } })) as any;
+  return { checks: rows };
+});
+app.post('/api/install-checks', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const name = String(body.name ?? '').trim();
+  if (!name) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const c = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.installCheck.create({ data: { workspaceId: ctx.workspaceId, name, status: body.status ?? 'not_run', details: body.details ?? null } }));
+  reply.code(201).send({ check: c }); return;
+});
+
 export async function buildServer() {
   await app.ready();
   return app;
