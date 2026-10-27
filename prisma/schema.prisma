@@ -63,6 +63,7 @@ model Workspace {
   performanceSnapshots PerformanceSnapshot[]
   policies OperationalPolicy[]
   lifecycleEvents ContentLifecycleEvent[]
+  releaseChecks ReleaseCheck[]
 }
 
 enum MembershipRole {
@@ -607,4 +608,17 @@ model ContentLifecycleEvent {
   createdAt   DateTime @default(now())
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   @@index([workspaceId, entityType, entityId])
+}
+
+
+model ReleaseCheck {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  status      String   @default("not_run")
+  details     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  @@index([workspaceId, status])
 }
