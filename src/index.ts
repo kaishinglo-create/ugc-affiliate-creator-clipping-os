@@ -151,7 +151,7 @@ app.post('/api/niches', async (req, reply) => {
   const body = (req.body ?? {}) as any;
   const name = String(body.name ?? '').trim();
   if (!name) return reply.code(400).send({ error: 'INVALID_INPUT' });
-  const niche = await withWorkspaceTransaction(ctx.workspaceId, (tx) => tx.niche.create({ data: { workspaceId: ctx.workspaceId, name, description: body.description ?? null, demandScore: Number(body.demandScore ?? 0), competition: Number(body.competition ?? 0) } }));
+  const niche = await withWorkspaceTransaction(ctx.workspaceId, (tx) => tx.niche.create({ data: { workspaceId: ctx.workspaceId, name, description: body.description ?? null, demandScore: Number.isFinite(Number(body.demandScore)) ? Number(body.demandScore) : 0, competition: Number.isFinite(Number(body.competition)) ? Number(body.competition) : 0 } }));
   reply.code(201).send({ niche });
   return;
 });
@@ -170,7 +170,7 @@ app.post('/api/products', async (req, reply) => {
   const body = (req.body ?? {}) as any;
   const name = String(body.name ?? '').trim();
   if (!name) return reply.code(400).send({ error: 'INVALID_INPUT' });
-  const product = await withWorkspaceTransaction(ctx.workspaceId, (tx) => tx.product.create({ data: { workspaceId: ctx.workspaceId, nicheId: body.nicheId ?? null, name, category: body.category ?? null, priceCents: body.priceCents ?? null, source: body.source ?? null, sourceUrl: body.sourceUrl ?? null } }));
+  const product = await withWorkspaceTransaction(ctx.workspaceId, (tx) => tx.product.create({ data: { workspaceId: ctx.workspaceId, nicheId: body.nicheId ?? null, name, category: body.category ?? null, priceCents: body.priceCents == null || !Number.isFinite(Number(body.priceCents)) ? null : Number(body.priceCents), source: body.source ?? null, sourceUrl: body.sourceUrl ?? null } }));
   reply.code(201).send({ product });
   return;
 });
@@ -420,7 +420,7 @@ app.post('/api/insights', async (req, reply) => {
   const title = String(body.title ?? '').trim();
   const insightBody = String(body.body ?? '').trim();
   if (!title || !insightBody) return reply.code(400).send({ error: 'INVALID_INPUT' });
-  const i = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.insight.create({ data: { workspaceId: ctx.workspaceId, title, body: insightBody, source: body.source ?? null, confidence: Number(body.confidence ?? 0) } }));
+  const i = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.insight.create({ data: { workspaceId: ctx.workspaceId, title, body: insightBody, source: body.source ?? null, confidence: Number.isFinite(Number(body.confidence)) ? Number(body.confidence) : 0 } }));
   reply.code(201).send({ insight: i }); return;
 });
 
@@ -612,7 +612,7 @@ app.post('/api/content-posts/:id/snapshots', async (req, reply) => {
   const body = (req.body ?? {}) as any;
   const post = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.contentPost.findUnique({ where: { id } })) as any;
   if (!post || post.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
-  const snap = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.performanceSnapshot.create({ data: { workspaceId: ctx.workspaceId, postId: id, views: Number(body.views ?? 0), likes: Number(body.likes ?? 0), comments: Number(body.comments ?? 0), shares: Number(body.shares ?? 0), watchTimeSec: body.watchTimeSec ?? null } }));
+  const snap = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.performanceSnapshot.create({ data: { workspaceId: ctx.workspaceId, postId: id, views: Number.isFinite(Number(body.views)) ? Number(body.views) : 0, likes: Number.isFinite(Number(body.likes)) ? Number(body.likes) : 0, comments: Number.isFinite(Number(body.comments)) ? Number(body.comments) : 0, shares: Number.isFinite(Number(body.shares)) ? Number(body.shares) : 0, watchTimeSec: body.watchTimeSec ?? null } }));
   reply.code(201).send({ snapshot: snap }); return;
 });
 
