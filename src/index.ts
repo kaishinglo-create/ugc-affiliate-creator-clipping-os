@@ -126,8 +126,12 @@ app.get('/api/items', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;
   const q = (req.query ?? {}) as any;
-  const take = Math.min(Number(q.limit ?? 50), 100);
-  const skip = Number(q.offset ?? 0);
+  const rawLimit = Number(q.limit ?? 50);
+  const rawOffset = Number(q.offset ?? 0);
+  if (!Number.isInteger(rawLimit) || rawLimit < 1 || rawLimit > 100) return reply.code(400).send({ error: 'INVALID_LIMIT' });
+  if (!Number.isInteger(rawOffset) || rawOffset < 0) return reply.code(400).send({ error: 'INVALID_OFFSET' });
+  const take = rawLimit;
+  const skip = rawOffset;
   const items = await withWorkspaceTransaction(ctx.workspaceId, (tx) => tx.item.findMany({ where: { workspaceId: ctx.workspaceId }, take, skip, orderBy: { createdAt: 'desc' } }));
   return { items, limit: take, offset: skip };
 });
