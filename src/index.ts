@@ -5,6 +5,9 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { z } from 'zod';
 import { loadConfig } from './config.js';
+import { stat } from 'node:fs/promises';
+import { join, extname, resolve, sep } from 'node:path';
+import { createReadStream } from 'node:fs';
 import { prisma, withWorkspaceTransaction } from '../lib/db.js';
 import { hashPassword, verifyPassword, createSession, verifySession, sessionCookieHeader, readSessionCookie, revokeSession } from '../lib/auth.js';
 
@@ -704,6 +707,61 @@ app.post('/api/install-checks', async (req, reply) => {
   const c = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.installCheck.create({ data: { workspaceId: ctx.workspaceId, name, status: body.status ?? 'not_run', details: body.details ?? null } }));
   reply.code(201).send({ check: c }); return;
 });
+
+// SPA + static file serving (after all API routes so API takes precedence)
+const PUBLIC_DIR = join(process.cwd(), 'public');
+
+const MIME: Record<string,string> = {
+  '.html':'text/html; charset=utf-8',
+  '.css':'text/css; charset=utf-8',
+  '.js':'application/javascript; charset=utf-8',
+  '.json':'application/json; charset=utf-8',
+  '.png':'image/png',
+  '.jpg':'image/jpeg',
+  '.jpeg':'image/jpeg',
+  '.gif':'image/gif',
+  '.svg':'image/svg+xml',
+  '.ico':'image/x-icon',
+  '.woff':'font/woff',
+  '.woff2':'font/woff2',
+  '.ttf':'font/ttf',
+  '.otf':'font/otf',
+  '.mp4':'video/mp4',
+  '.webm':'video/webm',
+  '.mp3':'audio/mpeg',
+  '.wav':'audio/wav',
+  '.txt':'text/plain; charset=utf-8',
+};
+
+async function serveFile(req: any, reply: any, relPath: string) {
+  try {
+    const cleaned = String(relPath || 'index.html').replace(/^\/+/, '');
+    const root = resolve(PUBLIC_DIR);
+    const fullPath = resolve(root, cleaned);
+    if (!fullPath.startsWith(root + sep) && fullPath !== root) {
+      return reply.code(403).send({ error: 'FORBIDDEN' });
+    }
+    const st = await stat(fullPath);
+    if (!st.isFile()) return reply.code(404).send({ error: 'NOT_FOUND' });
+    reply.type(MIME[extname(fullPath).toLowerCase()] || 'application/octet-stream');
+    return reply.send(createReadStream(fullPath));
+  } catch (err: any) {
+    if (err.code === 'ENOENT') return reply.code(404).send({ error: 'NOT_FOUND' });
+    req.log.error(err);
+    return reply.code(500).send({ error: 'INTERNAL_ERROR' });
+  }
+}
+
+app.get('/assets/*', async (req, reply) => {
+  return serveFile(req, reply, (req.params as any)['*']);
+});
+
+// SPA fallback: serve any file from public/, or index.html for the SPA.
+app.get('/:file*', async (req, reply) => {
+  const relPath = (req.params as any)['file*'] || 'index.html';
+  return serveFile(req, reply, relPath);
+});
+
 
 export async function buildServer() {
   await app.ready();
