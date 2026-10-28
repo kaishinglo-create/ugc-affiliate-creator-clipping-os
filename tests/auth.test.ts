@@ -40,7 +40,7 @@ describe('auth + workspace isolation', () => {
     const rA = await app.inject({ method: 'POST', url: '/api/auth/signup', payload: { email: emailA, password: 'password1234', workspaceName: 'WA', workspaceSlug: slugA } });
     const rB = await app.inject({ method: 'POST', url: '/api/auth/signup', payload: { email: emailB, password: 'password1234', workspaceName: 'WB', workspaceSlug: slugB } });
     const wsA = rA.json().workspace.id;
-    const wsB = rB.json().workspace.id;
+    const _wsB = rB.json().workspace.id;
     const loginA = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: emailA, password: 'password1234' } });
     const cookieA = loginA.headers['set-cookie'];
     await app.inject({ method: 'POST', url: '/api/items', headers: { cookie: cookieA, 'x-workspace-id': wsA }, payload: { title: 'itemA' } });

@@ -1,4 +1,4 @@
-import { prisma, withWorkspaceTransaction } from '../lib/db.js';
+import { withWorkspaceTransaction } from '../lib/db.js';
 
 export interface StepDef { name: string; action: string; }
 
@@ -28,7 +28,7 @@ export async function executeRun(workspaceId: string, runId: string) {
   if (run.status === 'succeeded' || run.status === 'cancelled') return run;
   await tx.workflowRun.update({ where: { id: runId }, data: { status: 'running' } });
   const steps = run.definition.steps as StepDef[];
-  let current = run.currentStep;
+  const current = run.currentStep;
   for (let i = current; i < steps.length; i++) {
     const step = steps[i];
     const stepRun = await tx.workflowStepRun.create({ data: { runId, stepIndex: i, name: step.name, status: 'running', startedAt: new Date(), input: run.input } });
