@@ -430,7 +430,7 @@ app.get('/api/system/status', async (req, reply) => {
   const session = await verifySession(cookie);
   if (!session) return reply.code(401).send({ error: 'NOT_AUTHENTICATED' });
   let dbOk = false;
-  try { await prisma.$queryRaw`SELECT 1`; dbOk = true; } catch {}
+  try { await prisma.$queryRaw`SELECT 1`; dbOk = true; } catch (e) { req.log.error(e); }
   return { status: dbOk ? 'ok' : 'degraded', db: dbOk, version: '0.1.0', time: new Date().toISOString() };
 });
 
