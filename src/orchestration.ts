@@ -6,6 +6,8 @@ import { isKillSwitchActive } from '../lib/security.js';
 import {
   createJob,
   claimJobById,
+  getJob,
+  recoverExpiredJobs,
   completeJob,
   failJob,
   cancelJob,
@@ -418,17 +420,7 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
     return;
   }
 
-  const shouldReserve = (updatedTask?.attemptCount ?? 1) === 1;
-  let reserved = false;
-  if (shouldReserve) {
-    const goal = taskRunGoal;
-    reserved = await reserveBudget(workspaceId, runId, Number(task.estimatedUnits ?? 1), Number(run.budgetUnits ?? 100), Number(run.spentUnits ?? 0));
-    if (!reserved) {
-      await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'failed', error: 'BUDGET_EXCEEDED', finishedAt: now() } }));
-      await failJob(jobId, { error: 'BUDGET_EXCEEDED', retryable: false }, { leaseId, workerId });
-      return;
-    }
-  }
+  const reserved = false;
 
   let controller: AbortController | null = new AbortController();
   const timer = setTimeout(() => controller?.abort(), Number(task.timeoutMs ?? 30000));
@@ -487,6 +479,30 @@ export async function runOrchestration(workspaceId: string, runId: string): Prom
     }
 
     const succeededIds = new Set(tasks.filter((task) => task.status === 'succeeded').map((task) => task.id));
+    await recoverExpiredJobs(workspaceId);
+    for (const task of tasks) {
+      if (!task.jobId) continue;
+      const job: any = await getJob(String(task.jobId));
+      if (!job) continue;
+      if (job.status === 'SUCCEEDED' && task.status !== 'succeeded') {
+        await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'succeeded', finishedAt: now(), actualUnits: Number(task.estimatedUnits ?? 1) } }));
+        task.status = 'succeeded';
+      } else if ((job.status === 'FAILED' || job.status === 'DEAD_LETTER') && task.status !== 'failed' && task.status !== 'dead_letter') {
+        await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: job.status === 'DEAD_LETTER' ? 'dead_letter' : 'failed', error: job.lastError ?? null, finishedAt: now() } }));
+        task.status = job.status === 'DEAD_LETTER' ? 'dead_letter' : 'failed';
+      } else if (job.status === 'CANCELLED' && task.status !== 'cancelled') {
+        await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'cancelled', finishedAt: now(), error: 'RUN_CANCELLED' } }));
+        task.status = 'cancelled';
+      } else if (job.status === 'WAITING_FOR_APPROVAL' && task.status !== 'waiting_for_approval') {
+        await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'waiting_for_approval' } }));
+        task.status = 'waiting_for_approval';
+      } else if ((job.status === 'QUEUED' || job.status === 'RETRY_WAIT' || job.status === 'RUNNING') && (task.status === 'running' || task.status === 'waiting_for_approval')) {
+        if (job.status === 'QUEUED' || job.status === 'RETRY_WAIT') {
+          await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'queued', startedAt: null } }));
+          task.status = 'queued';
+        }
+      }
+    }
     if (tasks.length > 0 && tasks.every((task) => task.status === 'succeeded')) {
       await withWorkspaceTransaction(workspaceId, async (tx) => {
         await tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'succeeded', result: { tasks: tasks.map((task) => ({ id: task.id, output: task.output })) }, finishedAt: now(), currentStage: 'completed' } });
@@ -519,18 +535,24 @@ export async function runOrchestration(workspaceId: string, runId: string): Prom
       continue;
     }
 
-    // Respect concurrency and budget before job creation.
+    // Reserve budget atomically before any job creation.
     let batchStarted = 0;
     for (const task of readyTasks) {
-      if ((run.spentUnits + Number(task.estimatedUnits ?? 1) > Number(run.budgetUnits ?? 100)) && taskStatusCount(tasks, ['succeeded']) >= 0) {
-        await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'failed', error: 'BUDGET_EXCEEDED', finishedAt: now() } }));
-        continue;
-      }
-      try {
-        await ensureTaskJob(workspaceId, runId, task);
-      } catch (error) {
-        await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'failed', error: sanitizeError(error), finishedAt: now() } }));
-        continue;
+      const estimated = Number(task.estimatedUnits ?? 1);
+      let jobId = task.jobId;
+      if (!jobId) {
+        const reserved = await reserveBudget(workspaceId, runId, estimated, Number(run.budgetUnits ?? 100), 0);
+        if (!reserved) {
+          await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'failed', error: 'BUDGET_EXCEEDED', finishedAt: now() } }));
+          continue;
+        }
+        try {
+          jobId = await ensureTaskJob(workspaceId, runId, task);
+        } catch (error) {
+          await releaseBudget(workspaceId, runId, estimated);
+          await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'failed', error: sanitizeError(error), finishedAt: now() } }));
+          continue;
+        }
       }
       batchStarted += 1;
       if (batchStarted >= Number(run.maxConcurrency ?? 2)) break;
@@ -552,18 +574,23 @@ export async function runOrchestration(workspaceId: string, runId: string): Prom
 export async function cancelOrchestrationRun(workspaceId: string, runId: string, reason = 'MANUAL_CANCEL'): Promise<any> {
   const run = await getRun(workspaceId, runId);
   if (!run) throw new Error('RUN_NOT_FOUND');
+  if (['succeeded', 'failed', 'cancelled'].includes(String(run.status))) return run;
+
   const tasks = run.tasks ?? [];
+  const cancelErrors: any[] = [];
   for (const task of tasks) {
-    if (task.jobId) {
-      try {
-        await cancelJob(String(task.jobId), { reason: String(reason), leaseId: task.jobId ? undefined : undefined });
-      } catch {}
+    if (!task.jobId) continue;
+    try {
+      await cancelJob(String(task.jobId), { reason: String(reason) });
+    } catch (error) {
+      cancelErrors.push({ jobId: task.jobId, error: sanitizeError(error) });
     }
   }
   return withWorkspaceTransaction(workspaceId, async (tx) => {
     await tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'cancelled', error: reason, finishedAt: now(), currentStage: 'cancelled' } });
     await tx.orchestrationTask.updateMany({ where: { workspaceId, runId, status: { in: ['queued', 'running', 'waiting_for_approval'] } }, data: { status: 'cancelled', finishedAt: now(), error: reason } });
-    await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_cancelled', actor: null, data: { reason, cancelledJobs: tasks.map((t: any) => t.jobId).filter(Boolean) } });
+    await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_cancel_requested', actor: null, data: { reason, requestedJobs: tasks.map((t: any) => t.jobId).filter(Boolean) } });
+    await writeAuditEvent({ workspaceId, runId: null, type: cancelErrors.length ? 'orchestration_cancel_failed' : 'orchestration_cancel_succeeded', actor: null, data: { reason, cancelErrors } });
     return tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true } });
   });
 }
