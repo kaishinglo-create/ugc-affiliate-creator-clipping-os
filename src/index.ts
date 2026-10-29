@@ -920,6 +920,89 @@ app.post('/api/scheduler/run', async (req, reply) => {
   return { jobs };
 });
 
+// Company hierarchy and orchestration (Phase 20)
+app.get('/api/departments', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const mod = await import('./orchestration.js');
+  await mod.ensureDepartments(ctx.workspaceId);
+  const departments = await mod.listDepartments(ctx.workspaceId);
+  return { departments };
+});
+
+app.post('/api/departments/seed', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const mod = await import('./orchestration.js');
+  await mod.ensureDepartments(ctx.workspaceId);
+  await mod.ensureCompanyAgents(ctx.workspaceId);
+  const departments = await mod.listDepartments(ctx.workspaceId);
+  reply.code(201).send({ departments });
+  return;
+});
+
+app.get('/api/company/agents', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const mod = await import('./orchestration.js');
+  await mod.ensureCompanyAgents(ctx.workspaceId);
+  const rows = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.agentDefinition.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'asc' } }));
+  return { agents: rows };
+});
+
+app.get('/api/orchestrations', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const rows = await (await import('./orchestration.js')).listOrchestrationRuns(ctx.workspaceId);
+  return { orchestrations: rows };
+});
+
+app.post('/api/orchestrations', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const goal = String(body.goal ?? '').trim();
+  if (!goal) return reply.code(400).send({ error: 'INVALID_GOAL' });
+  const mod = await import('./orchestration.js');
+  const run = await mod.createOrchestrationRun(ctx.workspaceId, { goal, maxConcurrency: body.maxConcurrency, budgetUnits: body.budgetUnits, requestedBy: ctx.userId });
+  const executed = await mod.runOrchestration(ctx.workspaceId, run.id);
+  reply.code(201).send({ orchestration: executed });
+  return;
+});
+
+app.get('/api/orchestrations/:id', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const run = await (await import('./orchestration.js')).getOrchestrationRun(ctx.workspaceId, (req.params as any).id);
+  if (!run) return reply.code(404).send({ error: 'NOT_FOUND' });
+  return { orchestration: run };
+});
+
+app.post('/api/orchestrations/:id/resume', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const run = await (await import('./orchestration.js')).resumeOrchestrationRun(ctx.workspaceId, (req.params as any).id);
+  return { orchestration: run };
+});
+
+app.post('/api/orchestrations/:id/cancel', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const run = await (await import('./orchestration.js')).cancelOrchestrationRun(ctx.workspaceId, (req.params as any).id);
+  return { orchestration: run };
+});
+
+app.post('/api/orchestrations/:id/tasks/:taskId/approve', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const approved = body.status === 'rejected' ? false : true;
+  const mod = await import('./orchestration.js');
+  await mod.decideOrchestrationTaskApproval(ctx.workspaceId, (req.params as any).id, (req.params as any).taskId, approved, ctx.userId, body.reason ?? null);
+  const resumed = body.status === 'rejected' ? await mod.getOrchestrationRun(ctx.workspaceId, (req.params as any).id) : await mod.runOrchestration(ctx.workspaceId, (req.params as any).id);
+  return { orchestration: resumed };
+});
+
 // SPA + static file serving (after all API routes so API takes precedence)
 const PUBLIC_DIR = join(process.cwd(), 'public');
 
