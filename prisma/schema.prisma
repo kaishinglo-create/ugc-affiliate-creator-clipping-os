@@ -303,31 +303,32 @@ model WorkflowStepRun {
 }
 
 model Job {
-  id             String    @id @default(cuid())
-  workspaceId    String
-  type           JobType   @default(WORKFLOW_RUN)
-  category       String?
-  status         JobStatus @default(QUEUED)
-  priority       Int       @default(0)
-  payload        Json
-  idempotencyKey String?
-  attempts       Int       @default(0)
-  maxAttempts    Int       @default(3)
-  lastError      String?
-  leaseId        String?
-  leaseOwner     String?
-  leaseExpiresAt DateTime?
-  heartbeatAt    DateTime?
-  runAt          DateTime  @default(now())
-  startedAt      DateTime?
-  finishedAt     DateTime?
-  timeoutAt      DateTime?
-  parentJobId    String?
-  workflowRunId  String?
-  agentTaskId    String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  id                 String              @id @default(cuid())
+  workspaceId        String
+  type               JobType             @default(WORKFLOW_RUN)
+  category           String?
+  status             JobStatus           @default(QUEUED)
+  priority           Int                 @default(0)
+  payload            Json
+  idempotencyKey     String?
+  attempts           Int                 @default(0)
+  maxAttempts        Int                 @default(3)
+  lastError          String?
+  leaseId            String?
+  leaseOwner         String?
+  leaseExpiresAt     DateTime?
+  heartbeatAt        DateTime?
+  runAt              DateTime            @default(now())
+  startedAt          DateTime?
+  finishedAt         DateTime?
+  timeoutAt          DateTime?
+  parentJobId        String?
+  workflowRunId      String?
+  agentTaskId        String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  orchestrationTasks OrchestrationTask[]
 
   @@unique([workspaceId, idempotencyKey])
   @@index([workspaceId, status, runAt])
@@ -728,6 +729,8 @@ model OrchestrationRun {
   workspaceId    String
   goal           String
   requestedBy    String?
+  idempotencyKey String?
+  requestHash    String?
   status         String              @default("queued")
   strategy       Json?
   result         Json?
@@ -743,6 +746,7 @@ model OrchestrationRun {
   tasks          OrchestrationTask[]
   workspace      Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
+  @@unique([workspaceId, idempotencyKey])
   @@index([workspaceId, status])
   @@index([workspaceId, createdAt])
 }
@@ -752,6 +756,7 @@ model OrchestrationTask {
   workspaceId      String
   runId            String
   parentTaskId     String?
+  jobId            String?
   departmentKey    String
   agentType        String?
   action           String
@@ -773,10 +778,12 @@ model OrchestrationTask {
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
   run              OrchestrationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  job              Job?             @relation(fields: [jobId], references: [id], onDelete: SetNull)
 
   @@index([workspaceId])
   @@index([runId, status])
   @@index([parentTaskId])
+  @@index([jobId])
 }
 
 model DelegationRecord {

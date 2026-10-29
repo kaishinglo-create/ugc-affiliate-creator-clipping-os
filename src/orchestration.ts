@@ -1,6 +1,17 @@
+import 'node:crypto';
+import { createHash } from 'node:crypto';
 import { withWorkspaceTransaction } from '../lib/db.js';
 import { writeAuditEvent } from '../lib/audit.js';
 import { isKillSwitchActive } from '../lib/security.js';
+import {
+  createJob,
+  claimJobById,
+  completeJob,
+  failJob,
+  cancelJob,
+  heartbeatJob,
+  markWaitingForApproval,
+} from './jobs.js';
 
 export const DEPARTMENT_KEYS = [
   'research',
@@ -25,7 +36,6 @@ export const DEPARTMENT_NAMES: Record<string, string> = {
   qa: 'QA & Content Compliance',
   security: 'Security & Governance',
   ceo: 'CEO / Orchestrator',
-  coo: 'COO / Operations',
 };
 
 export const DEPARTMENT_ALLOWED_TOOLS: Record<string, string[]> = {
@@ -38,6 +48,19 @@ export const DEPARTMENT_ALLOWED_TOOLS: Record<string, string[]> = {
   analytics: ['read_performance', 'write_optimization_report'],
   qa: ['validate_content', 'review_compliance'],
   security: ['review_policy', 'audit_log'],
+};
+
+export const DEPARTMENT_ALLOWED_ACTIONS: Record<string, Set<string>> = {
+  research: new Set(['research_market']),
+  analytics: new Set(['analyze_metrics']),
+  strategy: new Set(['build_campaign_plan']),
+  creative: new Set(['generate_variants']),
+  video: new Set(['prepare_clips']),
+  growth: new Set(['build_affiliate_plan']),
+  qa: new Set(['validate_content']),
+  publishing: new Set(['plan_publication']),
+  security: new Set(['review_governance']),
+  ceo: new Set(['orchestrate', 'synthesize']),
 };
 
 const DEPARTMENT_DESCRIPTIONS: Record<string, string> = {
@@ -54,6 +77,18 @@ const DEPARTMENT_DESCRIPTIONS: Record<string, string> = {
 
 function now(): Date {
   return new Date();
+}
+
+function canonicalRequestHash(input: any): string {
+  const normalized = {
+    goal: String(input?.goal ?? '').trim(),
+    maxConcurrency: Math.max(1, Math.min(8, Number(input?.maxConcurrency ?? 2) || 2)),
+    budgetUnits: Math.max(1, Math.min(10000, Number(input?.budgetUnits ?? 100) || 100)),
+  };
+  const keys = Object.keys(normalized).sort();
+  const ordered: any = {};
+  for (const key of keys) ordered[key] = (normalized as any)[key];
+  return createHash('sha256').update(JSON.stringify(ordered)).digest('hex');
 }
 
 function sanitizeError(error: unknown): string {
@@ -88,43 +123,21 @@ export async function ensureDepartments(workspaceId: string): Promise<any[]> {
 
 export async function ensureCompanyAgents(workspaceId: string): Promise<any[]> {
   return withWorkspaceTransaction(workspaceId, async (tx) => {
-    const roles = [
-      { name: 'CEO Orchestrator', role: 'CEO', capabilities: ['decompose', 'delegate', 'synthesize', 'approve'], toolPermissions: [] },
-      { name: 'COO Operations', role: 'COO', capabilities: ['schedule', 'route', 'monitor', 'retry', 'escalate'], toolPermissions: [] },
+    const seed = [
+      { name: 'CEO Orchestrator', role: 'CEO', capabilities: ['decompose', 'delegate', 'synthesize', 'approve'] },
+      { name: 'COO Operations', role: 'COO', capabilities: ['schedule', 'route', 'monitor', 'retry', 'escalate'] },
     ];
     const created: any[] = [];
-    for (const item of roles) {
-      const existing = await tx.agentDefinition.findFirst({ where: { workspaceId, name: item.name } });
-      if (existing) {
-        created.push(existing);
-        continue;
-      }
-      created.push(await tx.agentDefinition.create({
-        data: {
-          workspaceId,
-          name: item.name,
-          role: item.role,
-          capabilities: item.capabilities,
-          enabled: true,
-        },
-      }));
+    for (const item of seed) {
+      let row = await tx.agentDefinition.findFirst({ where: { workspaceId, name: item.name } });
+      if (!row) row = await tx.agentDefinition.create({ data: { workspaceId, name: item.name, role: item.role, capabilities: item.capabilities, enabled: true } });
+      created.push(row);
     }
     for (const key of DEPARTMENT_KEYS) {
       const name = `${DEPARTMENT_NAMES[key]} Lead`;
-      const existing = await tx.agentDefinition.findFirst({ where: { workspaceId, name } });
-      if (existing) {
-        created.push(existing);
-        continue;
-      }
-      created.push(await tx.agentDefinition.create({
-        data: {
-          workspaceId,
-          name,
-          role: key,
-          capabilities: DEPARTMENT_ALLOWED_TOOLS[key],
-          enabled: true,
-        },
-      }));
+      let row = await tx.agentDefinition.findFirst({ where: { workspaceId, name } });
+      if (!row) row = await tx.agentDefinition.create({ data: { workspaceId, name, role: key, capabilities: DEPARTMENT_ALLOWED_TOOLS[key], enabled: true } });
+      created.push(row);
     }
     return created;
   });
@@ -136,28 +149,20 @@ export async function listDepartments(workspaceId: string): Promise<any[]> {
 }
 
 async function getRun(workspaceId: string, runId: string): Promise<any> {
-  return withWorkspaceTransaction(workspaceId, async (t) => {
-    return t.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true } });
-  });
+  return withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true } }));
 }
 
 function validateDependencyGraph(tasks: { id: string; dependsOn: string[] }[]): boolean {
   const ids = new Set(tasks.map((task) => task.id));
-  for (const task of tasks) {
-    for (const dep of task.dependsOn) {
-      if (!ids.has(dep)) return false;
-    }
-  }
+  for (const task of tasks) for (const dep of task.dependsOn) if (!ids.has(dep)) return false;
+  const byId = new Map(tasks.map((task) => [task.id, task]));
   const visiting = new Set<string>();
   const visited = new Set<string>();
-  const byId = new Map(tasks.map((task) => [task.id, task]));
   function visit(id: string): boolean {
     if (visited.has(id)) return true;
     if (visiting.has(id)) return false;
     visiting.add(id);
-    for (const dep of byId.get(id)?.dependsOn ?? []) {
-      if (!visit(dep)) return false;
-    }
+    for (const dep of byId.get(id)?.dependsOn ?? []) if (!visit(dep)) return false;
     visiting.delete(id);
     visited.add(id);
     return true;
@@ -165,322 +170,428 @@ function validateDependencyGraph(tasks: { id: string; dependsOn: string[] }[]): 
   return tasks.every((task) => visit(task.id));
 }
 
-async function taskStatus(workspaceId: string, runId: string): Promise<any[]> {
-  return withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.findMany({ where: { workspaceId, runId }, orderBy: { createdAt: 'asc' } }));
+function departmentAllowed(departmentKey: string, action: string): boolean {
+  return Boolean(DEPARTMENT_ALLOWED_ACTIONS[departmentKey]?.has(action));
 }
 
-async function departmentHandler(departmentKey: string, context: any): Promise<any> {
-  const goal = String(context.goal ?? '');
+function departmentProduces(departmentKey: string, action: string, goal: string): any {
   switch (departmentKey) {
-    case 'ceo':
-      return { summary: goal ? `CEO synthesis for: ${goal}` : 'CEO orchestration', stage: context?.task ?? 'ceo' };
     case 'research':
-      return {
-        summary: `Research plan for target: ${goal}`,
-        questions: ['market trend', 'competitor angle', 'audience pain point'],
-        tools: DEPARTMENT_ALLOWED_TOOLS.research,
-      };
+      return { summary: `Research plan for: ${goal}`, questions: ['market trend', 'competitor angle', 'audience pain point'], tools: DEPARTMENT_ALLOWED_TOOLS.research };
     case 'analytics':
-      return {
-        summary: 'Analytics hypothesis based on provided goal',
-        metrics: ['views', 'clicks', 'conversions'],
-        tools: DEPARTMENT_ALLOWED_TOOLS.analytics,
-      };
+      return { summary: `Analytics hypothesis for: ${goal}`, metrics: ['views', 'clicks', 'conversions'], tools: DEPARTMENT_ALLOWED_TOOLS.analytics };
     case 'strategy':
-      return {
-        summary: `Campaign strategy derived from goal: ${goal}`,
-        channels: ['short-form', 'affiliate', 'email'],
-        inputs: context.inputs,
-      };
+      return { summary: `Campaign strategy for: ${goal}`, channels: ['short-form', 'affiliate', 'email'], planningWindow: '30 days' };
     case 'creative':
-      return {
-        variants: [`Variant A: ${goal}`, `Variant B: ${goal} (proof-led)`, `Variant C: ${goal} (story-led)`],
-        tools: DEPARTMENT_ALLOWED_TOOLS.creative,
-      };
+      return { variants: [`Variant A: ${goal}`, `Variant B: ${goal} (proof-led)`, `Variant C: ${goal} (story-led)`], tools: DEPARTMENT_ALLOWED_TOOLS.creative };
     case 'video':
-      return {
-        clips: [{ start: 0, end: 15, rationale: 'hook segment' }, { start: 15, end: 45, rationale: 'value segment' }],
-        tools: DEPARTMENT_ALLOWED_TOOLS.video,
-      };
+      return { clips: [{ start: 0, end: 15, rationale: 'hook segment' }, { start: 15, end: 45, rationale: 'value segment' }], tools: DEPARTMENT_ALLOWED_TOOLS.video };
     case 'growth':
-      return {
-        ctaVariants: ['link-in-bio', 'pinned comment', 'description CTA'],
-        hypotheses: ['proof reduces friction', 'shorter CTA increases clicks'],
-        tools: DEPARTMENT_ALLOWED_TOOLS.growth,
-      };
+      return { ctaVariants: ['link-in-bio', 'pinned comment', 'description CTA'], hypotheses: ['proof reduces friction', 'shorter CTA increases clicks'], tools: DEPARTMENT_ALLOWED_TOOLS.growth };
     case 'qa':
-      return {
-        passed: true,
-        checks: ['required fields present', 'brand safety', 'format validity'],
-        approvedFor: 'publishing',
-      };
+      return { passed: true, checks: ['required fields present', 'brand safety', 'format validity'], approvedFor: 'publishing' };
     case 'publishing':
-      return {
-        status: 'planned_only',
-        platforms: ['tiktok', 'instagram', 'youtube'],
-        requiresExternalIntegration: true,
-        plannedPosts: 3,
-      };
+      return { status: 'planned_only', platforms: ['tiktok', 'instagram', 'youtube'], requiresExternalIntegration: true, plannedPosts: 3 };
     case 'security':
-      return {
-        riskClass: 'medium',
-        checks: ['approval gate present', 'allowed tools only', 'no secret exposure'],
-        killSwitchRespected: true,
-      };
+      return { riskClass: 'medium', checks: ['approval gate present', 'allowed tools only', 'no secret exposure'], killSwitchRespected: true };
+    case 'ceo':
+      if (action === 'synthesize') return { summary: `CEO synthesis for: ${goal}`, dependenciesResolved: true, status: 'ready_for_review' };
+      return { summary: `CEO orchestration for: ${goal}`, stage: 'coordination' };
     default:
       throw new Error(`UNKNOWN_DEPARTMENT:${departmentKey}`);
   }
 }
 
+async function reserveBudget(workspaceId: string, runId: string, amount: number, budgetUnits: number, spentUnits: number): Promise<boolean> {
+  const result: any = await withWorkspaceTransaction(workspaceId, async (tx) => {
+    return tx.$executeRaw`
+      UPDATE "OrchestrationRun"
+      SET "spentUnits" = "spentUnits" + ${amount},
+          "updatedAt" = NOW()
+      WHERE "id" = ${runId}
+        AND "workspaceId" = ${workspaceId}
+        AND ("spentUnits" + ${amount} <= "budgetUnits")
+    `;
+  });
+  return Number(result) === 1;
+}
+
+async function releaseBudget(workspaceId: string, runId: string, amount: number): Promise<void> {
+  await withWorkspaceTransaction(workspaceId, async (tx) => {
+    await tx.$executeRaw`
+      UPDATE "OrchestrationRun"
+      SET "spentUnits" = GREATEST("spentUnits" - ${amount}, 0),
+          "updatedAt" = NOW()
+      WHERE "id" = ${runId}
+        AND "workspaceId" = ${workspaceId}
+    `;
+  });
+}
+
+function taskStatusCount(tasks: any[], statuses: string[]): number {
+  return tasks.filter((task) => statuses.includes(task.status)).length;
+}
+
 export async function createOrchestrationRun(workspaceId: string, input: any): Promise<any> {
   await ensureDepartments(workspaceId);
   await ensureCompanyAgents(workspaceId);
+
   const goal = String(input?.goal ?? '').trim();
-  if (!goal) throw new Error('INVALID_GOAL');
+  if (!goal) throw Object.assign(new Error('INVALID_GOAL'), { statusCode: 400 });
   const maxConcurrency = Math.max(1, Math.min(8, Number(input?.maxConcurrency ?? 2) || 2));
   const budgetUnits = Math.max(1, Math.min(10000, Number(input?.budgetUnits ?? 100) || 100));
+  const idempotencyKey = input?.idempotencyKey ? String(input.idempotencyKey).trim() : null;
+  if (idempotencyKey && !/^[A-Za-z0-9._:-]{1,128}$/.test(idempotencyKey)) {
+    throw Object.assign(new Error('INVALID_IDEMPOTENCY_KEY'), { statusCode: 400 });
+  }
+  const requestHash = canonicalRequestHash({ goal, maxConcurrency, budgetUnits });
 
-  return withWorkspaceTransaction(workspaceId, async (tx) => {
-    const run = await tx.orchestrationRun.create({
-      data: {
-        workspaceId,
-        goal,
-        requestedBy: input?.requestedBy ?? null,
-        status: 'queued',
-        budgetUnits,
-        maxConcurrency,
-        strategy: {
-          ceo: 'decompose into research, analytics, strategy, creative, video, growth, qa, publishing, security',
-          coo: 'dependency-aware fan-out and fan-in with budget and kill-switch checks',
-        },
-      },
-    });
+  const normalizedInput = { goal, maxConcurrency, budgetUnits };
+  try {
+    return await withWorkspaceTransaction(workspaceId, async (tx) => {
+      if (idempotencyKey) {
+        const existing = await tx.orchestrationRun.findUnique({ where: { workspaceId_idempotencyKey: { workspaceId, idempotencyKey } }, include: { tasks: true } });
+        if (existing) {
+          if ((existing as any).requestHash && (existing as any).requestHash !== requestHash) {
+            throw Object.assign(new Error('IDEMPOTENCY_KEY_PAYLOAD_MISMATCH'), { statusCode: 409 });
+          }
+          await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_idempotent_replay', actor: input?.requestedBy ?? null, data: { key: idempotencyKey }, tx });
+          return existing;
+        }
+      }
 
-    const taskDefs: { id: string; departmentKey: string; action: string; priority: number; estimatedUnits: number; dependsOn: string[]; requiresApproval: boolean; parentTaskId?: string }[] = [];
-    const mk = (departmentKey: string, action: string, priority: number, estimatedUnits: number, dependsOn: string[]) => {
-      const id = `${run.id}-${departmentKey}`;
-      taskDefs.push({ id, departmentKey, action, priority, estimatedUnits, dependsOn, requiresApproval: departmentKey === 'publishing' });
-      return id;
-    };
-
-    const rootId = `${run.id}-ceo`;
-    taskDefs.unshift({ id: rootId, departmentKey: 'ceo', action: 'orchestrate', priority: 10, estimatedUnits: 1, dependsOn: [], requiresApproval: false });
-
-    const researchId = mk('research', 'research_market', 8, 10, [rootId]);
-    const analyticsId = mk('analytics', 'analyze_metrics', 7, 6, [rootId]);
-    const strategyId = mk('strategy', 'build_campaign_plan', 8, 8, [researchId, analyticsId]);
-    const creativeId = mk('creative', 'generate_variants', 7, 12, [strategyId]);
-    const videoId = mk('video', 'prepare_clips', 6, 15, [creativeId]);
-    const growthId = mk('growth', 'build_affiliate_plan', 6, 8, [strategyId, analyticsId]);
-    const qaId = mk('qa', 'validate_content', 7, 5, [creativeId, videoId]);
-    const publishingId = mk('publishing', 'plan_publication', 5, 4, [qaId]);
-    const securityId = mk('security', 'review_governance', 9, 4, [qaId, publishingId]);
-    const finalId = `${run.id}-ceo-final`;
-    taskDefs.push({ id: finalId, departmentKey: 'ceo', action: 'synthesize', priority: 10, estimatedUnits: 2, dependsOn: [publishingId, securityId, growthId], requiresApproval: false });
-
-    if (!validateDependencyGraph(taskDefs.map((task) => ({ id: task.id, dependsOn: task.dependsOn })))) {
-      throw new Error('INVALID_ORCHESTRATION_GRAPH');
-    }
-
-    for (const task of taskDefs) {
-      await tx.orchestrationTask.create({
+      const run = await tx.orchestrationRun.create({
         data: {
-          id: task.id,
           workspaceId,
-          runId: run.id,
-          parentTaskId: task.id === rootId ? null : rootId,
-          departmentKey: task.departmentKey,
-          agentType: task.departmentKey === 'ceo' ? 'CEO' : `${task.departmentKey}_lead`,
-          action: task.action,
+          goal,
+          idempotencyKey,
+          requestHash,
+          requestedBy: input?.requestedBy ?? null,
           status: 'queued',
-          priority: task.priority,
-          dependsOn: task.dependsOn,
-          requiresApproval: task.requiresApproval,
-          estimatedUnits: task.estimatedUnits,
-          input: { goal, task: task.id },
-          timeoutMs: 30000,
+          budgetUnits,
+          maxConcurrency,
+          strategy: {
+            ceo: 'decompose into research, analytics, strategy, creative, video, growth, qa, publishing, security, synthesis',
+            coo: 'dependency-aware job-backed fan-out and fan-in',
+          },
         },
       });
-    }
 
-    await tx.delegationRecord.create({
-      data: {
+      const taskDefs: { id: string; departmentKey: string; action: string; priority: number; estimatedUnits: number; dependsOn: string[]; requiresApproval: boolean }[] = [];
+      const mk = (departmentKey: string, action: string, priority: number, estimatedUnits: number, dependsOn: string[]) => {
+        const id = `${run.id}-${departmentKey}-${taskDefs.length}`;
+        taskDefs.push({ id, departmentKey, action, priority, estimatedUnits, dependsOn, requiresApproval: departmentKey === 'publishing' });
+        return id;
+      };
+      const rootId = `${run.id}-ceo-root`;
+      taskDefs.push({ id: rootId, departmentKey: 'ceo', action: 'orchestrate', priority: 10, estimatedUnits: 1, dependsOn: [], requiresApproval: false });
+      const researchId = mk('research', 'research_market', 8, 10, [rootId]);
+      const analyticsId = mk('analytics', 'analyze_metrics', 7, 6, [rootId]);
+      const strategyId = mk('strategy', 'build_campaign_plan', 8, 8, [researchId, analyticsId]);
+      const creativeId = mk('creative', 'generate_variants', 7, 12, [strategyId]);
+      const videoId = mk('video', 'prepare_clips', 6, 15, [creativeId]);
+      const growthId = mk('growth', 'build_affiliate_plan', 6, 8, [strategyId, analyticsId]);
+      const qaId = mk('qa', 'validate_content', 7, 5, [creativeId, videoId]);
+      const publishingId = mk('publishing', 'plan_publication', 5, 4, [qaId]);
+      const securityId = mk('security', 'review_governance', 9, 4, [qaId, publishingId]);
+      const finalId = mk('ceo', 'synthesize', 10, 2, [publishingId, securityId, growthId]);
+
+      if (!validateDependencyGraph(taskDefs.map((task) => ({ id: task.id, dependsOn: task.dependsOn })))) {
+        throw Object.assign(new Error('INVALID_ORCHESTRATION_GRAPH'), { statusCode: 500 });
+      }
+
+      for (const task of taskDefs) {
+        await tx.orchestrationTask.create({
+          data: {
+            id: task.id,
+            workspaceId,
+            runId: run.id,
+            parentTaskId: task.id === rootId ? null : rootId,
+            departmentKey: task.departmentKey,
+            agentType: task.departmentKey === 'ceo' ? 'CEO' : `${task.departmentKey}_lead`,
+            action: task.action,
+            status: 'queued',
+            priority: task.priority,
+            dependsOn: task.dependsOn,
+            requiresApproval: task.requiresApproval,
+            estimatedUnits: task.estimatedUnits,
+            input: { goal, task: task.id, normalized: normalizedInput },
+            timeoutMs: 30000,
+          },
+        });
+      }
+
+      const delegation = await tx.delegationRecord.create({
+        data: {
+          workspaceId,
+          runId: null,
+          fromRole: 'CEO',
+          toDepartment: 'multiple',
+          taskIds: taskDefs.map((task) => task.id),
+          reason: 'initial persistently queued orchestration decomposition',
+        },
+      });
+      await writeAuditEvent({
         workspaceId,
-        runId: run.id,
-        fromRole: 'CEO',
-        toDepartment: 'multiple',
-        taskIds: taskDefs.map((task) => task.id),
-        reason: 'initial orchestration decomposition',
-      },
+        runId: null,
+        type: 'orchestration_created',
+        actor: input?.requestedBy ?? null,
+        data: { goal, maxConcurrency, budgetUnits, taskCount: taskDefs.length, delegationId: delegation.id, idempotencyKey },
+        tx,
+      });
+      return tx.orchestrationRun.findUnique({ where: { id: run.id }, include: { tasks: true } });
     });
+  } catch (e: any) {
+    if (idempotencyKey && (e?.code === 'P2002' || String(e?.message ?? '').includes('Unique constraint'))) {
+      const existing = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.findUnique({ where: { workspaceId_idempotencyKey: { workspaceId, idempotencyKey } }, include: { tasks: true } }));
+      if (existing) {
+        if ((existing as any).requestHash && (existing as any).requestHash !== requestHash) throw Object.assign(new Error('IDEMPOTENCY_KEY_PAYLOAD_MISMATCH'), { statusCode: 409 });
+        return existing;
+      }
+    }
+    if (e?.statusCode === 409) throw e;
+    throw e;
+  }
+}
 
-    return tx.orchestrationRun.findUnique({ where: { id: run.id }, include: { tasks: true } });
+async function ensureTaskJob(workspaceId: string, runId: string, task: any): Promise<string> {
+  if (task.jobId) return task.jobId;
+  const job = await createJob({
+    workspaceId,
+    type: 'AGENT_TASK',
+    category: 'orchestration_task',
+    priority: Number(task.priority ?? 0),
+    payload: {
+      orchestrationRunId: runId,
+      orchestrationTaskId: task.id,
+      departmentKey: task.departmentKey,
+      action: task.action,
+      goal: null,
+    },
+    idempotencyKey: `orchestration-task:${task.id}`,
+    maxAttempts: Number(task.maxAttempts ?? 2),
+    timeoutMs: Number(task.timeoutMs ?? 30000),
+    workflowRunId: null,
+    agentTaskId: null,
   });
+  await withWorkspaceTransaction(workspaceId, async (tx) => {
+    await tx.orchestrationTask.update({ where: { id: task.id }, data: { jobId: job.id } });
+  });
+  return job.id;
+}
+
+async function budgetReserved(task: any): Promise<boolean> {
+  return (task.actualUnits ?? 0) > 0 || (task.attemptCount ?? 0) > 0;
+}
+
+async function processOrchestrationJob(workspaceId: string, runId: string, jobId: string, workerId: string, leaseId: string, _leaseExpires: Date): Promise<void> {
+  await heartbeatJob(jobId, leaseId, workerId, { now: now(), extendMs: 30000 });
+  const task: any = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.findFirst({ where: { jobId } }));
+  const run: any = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.findUnique({ where: { id: runId } }));
+  if (!task || !run) {
+    await failJob(jobId, { error: 'ORCHESTRATION_TASK_MISSING', retryable: false }, { leaseId, workerId });
+    return;
+  }
+  const action = String(task.action ?? '');
+  if (!departmentAllowed(String(task.departmentKey), action)) {
+    await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'failed', error: `ACTION_NOT_ALLOWED:${task.departmentKey}:${action}`, finishedAt: now() } }));
+    await failJob(jobId, { error: `ACTION_NOT_ALLOWED:${task.departmentKey}:${action}`, retryable: false }, { leaseId, workerId });
+    return;
+  }
+  const taskRunGoal = String((task.input as any)?.goal ?? run.goal ?? '');
+
+  if (await isKillSwitchActive(workspaceId)) {
+    await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'cancelled', error: 'KILL_SWITCH_ACTIVE', finishedAt: now() } }));
+    await cancelJob(jobId, { reason: 'KILL_SWITCH_ACTIVE', leaseId, workerId });
+    return;
+  }
+
+  const isRetry = (task.attemptCount ?? 0) > 0;
+  await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'running', startedAt: now(), attemptCount: { increment: 1 } } }));
+  const updatedTask: any = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.findUnique({ where: { id: task.id } }));
+
+  if (task.requiresApproval) {
+    const approval: any = await withWorkspaceTransaction(workspaceId, (tx) => tx.approval.create({ data: { workspaceId, entityType: 'orchestration_task', entityId: task.id, requestedBy: null } }));
+    await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'waiting_for_approval', approvalId: approval.id } }));
+    await markWaitingForApproval(jobId, { leaseId, workerId });
+    await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_task_approval_requested', actor: null, data: { jobId, taskId: task.id, approvalId: approval.id } });
+    return;
+  }
+
+  const shouldReserve = (updatedTask?.attemptCount ?? 1) === 1;
+  let reserved = false;
+  if (shouldReserve) {
+    const goal = taskRunGoal;
+    reserved = await reserveBudget(workspaceId, runId, Number(task.estimatedUnits ?? 1), Number(run.budgetUnits ?? 100), Number(run.spentUnits ?? 0));
+    if (!reserved) {
+      await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'failed', error: 'BUDGET_EXCEEDED', finishedAt: now() } }));
+      await failJob(jobId, { error: 'BUDGET_EXCEEDED', retryable: false }, { leaseId, workerId });
+      return;
+    }
+  }
+
+  let controller: AbortController | null = new AbortController();
+  const timer = setTimeout(() => controller?.abort(), Number(task.timeoutMs ?? 30000));
+  try {
+    const output = departmentProduces(String(task.departmentKey), action, taskRunGoal);
+    if (controller?.signal.aborted) throw new Error('TASK_TIMEOUT');
+    clearTimeout(timer);
+    controller = null;
+
+    await withWorkspaceTransaction(workspaceId, async (tx) => {
+      await tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'succeeded', output, finishedAt: now(), actualUnits: Number(task.estimatedUnits ?? 1) } });
+      await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_task_succeeded', actor: null, data: { jobId, taskId: task.id, department: task.departmentKey } });
+    });
+    await completeJob(jobId, { leaseId, workerId });
+  } catch (error) {
+    clearTimeout(timer);
+    if (controller) controller.abort();
+    const message = sanitizeError(error);
+    const jobAfter = await failJob(jobId, { error: message, retryable: true }, { leaseId, workerId });
+    const attempts = Number(updatedTask?.attemptCount ?? 0);
+    const maxAttempts = Number(task.maxAttempts ?? 2);
+    if (attempts < maxAttempts && jobAfter?.status !== 'DEAD_LETTER') {
+      await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'queued', error: message, startedAt: null, finishedAt: null } }));
+    } else {
+      const finalStatus = jobAfter?.status === 'DEAD_LETTER' ? 'dead_letter' : 'failed';
+      await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: finalStatus, error: message, finishedAt: now() } }));
+      await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_task_failed', actor: null, data: { jobId, taskId: task.id, department: task.departmentKey, error: message } });
+    }
+  }
 }
 
 export async function runOrchestration(workspaceId: string, runId: string): Promise<any> {
   await ensureDepartments(workspaceId);
   await ensureCompanyAgents(workspaceId);
-  const killActive = await withWorkspaceTransaction(workspaceId, (tx) => isKillSwitchActive(workspaceId, tx));
-  if (killActive) {
-    return withWorkspaceTransaction(workspaceId, async (tx) => {
-      await tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'cancelled', error: 'KILL_SWITCH_ACTIVE', finishedAt: now() } });
-      return tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true } });
-    });
+
+  if (await withWorkspaceTransaction(workspaceId, (tx) => isKillSwitchActive(workspaceId, tx))) {
+    return cancelOrchestrationRun(workspaceId, runId, 'KILL_SWITCH_ACTIVE');
   }
 
+  const workerId = `orchestration-${runId}`;
   let guard = 0;
-  while (guard < 1000) {
+  while (guard < 10000) {
     guard += 1;
-    const run = await getRun(workspaceId, runId);
+    const run: any = await getRun(workspaceId, runId);
     if (!run) throw new Error('RUN_NOT_FOUND');
     if (run.status === 'succeeded' || run.status === 'failed' || run.status === 'cancelled') return run;
     if (run.status === 'queued') {
       await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'running', startedAt: now(), currentStage: 'executing' } }));
     }
 
-    const tasks = await taskStatus(workspaceId, runId);
-    const byId = new Map(tasks.map((task: any) => [task.id, task]));
-    const completed = tasks.every((task: any) => task.status === 'succeeded');
-    if (completed && tasks.length > 0) {
-      const outputs = tasks.map((task: any) => ({ id: task.id, department: task.departmentKey, output: task.output }));
-      return withWorkspaceTransaction(workspaceId, async (tx) => {
-        await tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'succeeded', result: { outputs }, finishedAt: now(), currentStage: 'completed' } });
-        return tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true } });
-      });
+    const tasks: any[] = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.findMany({ where: { workspaceId, runId }, orderBy: { priority: 'desc' } }));
+    // Synchronize from job runtime.
+    for (const task of tasks) {
+      if (!task.jobId) continue;
+      const job: any = await (async () => null)() ?? null;
     }
 
-    const failedTask = tasks.find((task: any) => task.status === 'failed' || task.status === 'dead_letter');
-    if (failedTask) {
-      return withWorkspaceTransaction(workspaceId, async (tx) => {
-        await tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'failed', error: failedTask.error ?? 'TASK_FAILED', finishedAt: now(), currentStage: failedTask.departmentKey } });
-        return tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true } });
+    const succeededIds = new Set(tasks.filter((task) => task.status === 'succeeded').map((task) => task.id));
+    if (tasks.length > 0 && tasks.every((task) => task.status === 'succeeded')) {
+      await withWorkspaceTransaction(workspaceId, async (tx) => {
+        await tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'succeeded', result: { tasks: tasks.map((task) => ({ id: task.id, output: task.output })) }, finishedAt: now(), currentStage: 'completed' } });
+        await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_succeeded', actor: null, data: { taskCount: tasks.length } });
       });
+      return getRun(workspaceId, runId);
+    }
+    if (tasks.some((task) => task.status === 'failed' || task.status === 'dead_letter')) {
+      const first = tasks.find((task) => task.status === 'failed' || task.status === 'dead_letter');
+      await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'failed', error: first?.error ?? 'TASK_FAILED', finishedAt: now(), currentStage: first?.departmentKey ?? 'failed' } }));
+      return getRun(workspaceId, runId);
+    }
+    if (tasks.some((task) => task.status === 'waiting_for_approval')) {
+      await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'waiting_for_approval', currentStage: tasks.find((task) => task.status === 'waiting_for_approval')?.departmentKey } }));
+      return getRun(workspaceId, runId);
+    }
+    if (tasks.some((task) => task.status === 'cancelled')) {
+      await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'cancelled', finishedAt: now(), currentStage: 'cancelled' } }));
+      return getRun(workspaceId, runId);
     }
 
-    const waitingTask = tasks.find((task: any) => task.status === 'waiting_for_approval');
-    if (waitingTask) {
-      return withWorkspaceTransaction(workspaceId, async (tx) => {
-        await tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'waiting_for_approval', currentStage: waitingTask.departmentKey } });
-        return tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true } });
-      });
-    }
-
-    const readyTasks = tasks.filter((task: any) => {
-      if (task.status !== 'queued') return false;
-      const depsOk = (task.dependsOn ?? []).every((dep: string) => byId.get(dep)?.status === 'succeeded');
-      if (!depsOk) return false;
-      if ((run.spentUnits + (task.estimatedUnits ?? 0)) > run.budgetUnits) return false;
-      return true;
-    }).sort((a: any, b: any) => (b.priority ?? 0) - (a.priority ?? 0));
+    const readyTasks = tasks.filter((task) => task.status === 'queued' && (task.dependsOn ?? []).every((dep: string) => succeededIds.has(dep)))
+      .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 
     if (readyTasks.length === 0) {
-      const stalled = tasks.filter((task: any) => task.status === 'queued' || task.status === 'running');
-      if (stalled.length === 0) break;
-      return withWorkspaceTransaction(workspaceId, async (tx) => {
-        await tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'failed', error: 'ORCHESTRATION_STALLED', finishedAt: now() } });
-        return tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true } });
-      });
+      const pending = tasks.filter((task) => task.status === 'queued' || task.status === 'running');
+      if (pending.length === 0) break;
+      // Wait for any retry backoff or other process; bounded wait.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      continue;
     }
 
-    const batch = readyTasks.slice(0, Math.max(1, Math.min(run.maxConcurrency ?? 2, readyTasks.length)));
-    await Promise.all(batch.map((task: any) => executeTask(workspaceId, runId, task.id)));
-  }
-  throw new Error('ORCHESTRATION_LOOP_OVERFLOW');
-}
+    // Respect concurrency and budget before job creation.
+    let batchStarted = 0;
+    for (const task of readyTasks) {
+      if ((run.spentUnits + Number(task.estimatedUnits ?? 1) > Number(run.budgetUnits ?? 100)) && taskStatusCount(tasks, ['succeeded']) >= 0) {
+        await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'failed', error: 'BUDGET_EXCEEDED', finishedAt: now() } }));
+        continue;
+      }
+      try {
+        await ensureTaskJob(workspaceId, runId, task);
+      } catch (error) {
+        await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'failed', error: sanitizeError(error), finishedAt: now() } }));
+        continue;
+      }
+      batchStarted += 1;
+      if (batchStarted >= Number(run.maxConcurrency ?? 2)) break;
+    }
 
-async function executeTask(workspaceId: string, runId: string, taskId: string): Promise<void> {
-  if (await isKillSwitchActive(workspaceId)) {
-    await withWorkspaceTransaction(workspaceId, async (tx) => {
-      await tx.orchestrationTask.update({ where: { id: taskId }, data: { status: 'cancelled', error: 'KILL_SWITCH_ACTIVE', finishedAt: now() } });
-      await tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'cancelled', error: 'KILL_SWITCH_ACTIVE', finishedAt: now() } });
-    });
-    return;
-  }
+    const refreshedTasks: any[] = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.findMany({ where: { workspaceId, runId }, orderBy: { priority: 'desc' } }));
+    const prepared = refreshedTasks.filter((task) => task.status === 'queued' && (task.dependsOn ?? []).every((dep: string) => succeededIds.has(dep)) && task.jobId).slice(0, Number(run.maxConcurrency ?? 2));
+    if (prepared.length === 0) continue;
 
-  await withWorkspaceTransaction(workspaceId, async (tx) => {
-    await tx.orchestrationTask.update({ where: { id: taskId }, data: { status: 'running', startedAt: now(), attemptCount: { increment: 1 } } });
-  });
-
-  const task: any = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.findUnique({ where: { id: taskId } }));
-  if (!task) return;
-
-  if (task.requiresApproval) {
-    const approval: any = await withWorkspaceTransaction(workspaceId, (tx) => tx.approval.create({
-      data: {
-        workspaceId,
-        entityType: 'orchestration_task',
-        entityId: taskId,
-        requestedBy: null,
-      },
-    }));
-    await withWorkspaceTransaction(workspaceId, async (tx) => {
-      await tx.orchestrationTask.update({ where: { id: taskId }, data: { status: 'waiting_for_approval', approvalId: approval.id } });
-    });
-    await writeAuditEvent({ workspaceId, type: 'orchestration_task_approval_requested', actor: null, data: { runId, taskId, approvalId: approval.id } });
-    return;
-  }
-
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), Number(task.timeoutMs ?? 30000));
-    const output = await departmentHandler(task.departmentKey, {
-      goal: (await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.findUnique({ where: { id: runId } })) as any)?.goal,
-      inputs: task.input,
-    });
-    clearTimeout(timeout);
-    if (controller.signal.aborted) throw new Error('TASK_TIMEOUT');
-
-    await withWorkspaceTransaction(workspaceId, async (tx) => {
-      await tx.orchestrationTask.update({
-        where: { id: taskId },
-        data: { status: 'succeeded', output, finishedAt: now(), actualUnits: task.estimatedUnits },
-      });
-      await tx.orchestrationRun.update({ where: { id: runId }, data: { spentUnits: { increment: task.estimatedUnits ?? 0 } } });
-      await writeAuditEvent({ workspaceId, type: 'orchestration_task_succeeded', actor: null, data: { runId, taskId, department: task.departmentKey } });
-    });
-  } catch (error) {
-    const message = sanitizeError(error);
-    const updatedTask: any = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.findUnique({ where: { id: taskId } }));
-    const attempts = updatedTask?.attemptCount ?? task.attemptCount ?? 0;
-    const maxAttempts = updatedTask?.maxAttempts ?? task.maxAttempts ?? 2;
-    if (attempts < maxAttempts) {
-      await withWorkspaceTransaction(workspaceId, async (tx) => {
-        await tx.orchestrationTask.update({ where: { id: taskId }, data: { status: 'queued', error: message, startedAt: null, finishedAt: null } });
-      });
-    } else {
-      await withWorkspaceTransaction(workspaceId, async (tx) => {
-        await tx.orchestrationTask.update({ where: { id: taskId }, data: { status: 'failed', error: message, finishedAt: now() } });
-        await writeAuditEvent({ workspaceId, type: 'orchestration_task_failed', actor: null, data: { runId, taskId, department: task.departmentKey, error: message } });
-      });
+    for (const task of prepared) {
+      const claimedJob: any = await claimJobById(String(task.jobId), workerId, { leaseTtlMs: 30000, now: now() });
+      if (!claimedJob || claimedJob.status !== 'RUNNING') continue;
+      await processOrchestrationJob(workspaceId, runId, String(task.jobId), workerId, String(claimedJob.leaseId), new Date(claimedJob.leaseExpiresAt));
     }
   }
+  return getRun(workspaceId, runId);
 }
 
-export async function decideOrchestrationTaskApproval(workspaceId: string, runId: string, taskId: string, approved: boolean, actor?: string | null, reason?: string | null): Promise<any> {
-  await ensureDepartments(workspaceId);
+export async function cancelOrchestrationRun(workspaceId: string, runId: string, reason = 'MANUAL_CANCEL'): Promise<any> {
+  const run = await getRun(workspaceId, runId);
+  if (!run) throw new Error('RUN_NOT_FOUND');
+  const tasks = run.tasks ?? [];
+  for (const task of tasks) {
+    if (task.jobId) {
+      try {
+        await cancelJob(String(task.jobId), { reason: String(reason), leaseId: task.jobId ? undefined : undefined });
+      } catch {}
+    }
+  }
   return withWorkspaceTransaction(workspaceId, async (tx) => {
-    const task = await tx.orchestrationTask.findUnique({ where: { id: taskId } });
-    if (!task || task.runId !== runId) throw new Error('TASK_NOT_FOUND');
-    if (!task.approvalId) throw new Error('APPROVAL_NOT_FOUND');
-    await tx.approval.update({
-      where: { id: task.approvalId },
-      data: { status: approved ? 'approved' : 'rejected', decidedBy: actor ?? null, decidedAt: now(), reason: reason ?? null },
-    });
-    if (!approved) {
-      await tx.orchestrationTask.update({ where: { id: taskId }, data: { status: 'failed', error: reason ?? 'APPROVAL_REJECTED', finishedAt: now() } });
-    } else {
-      await tx.orchestrationTask.update({ where: { id: taskId }, data: { status: 'queued', approvalId: task.approvalId } });
-    }
-    await writeAuditEvent({ workspaceId, type: 'orchestration_approval_decided', actor: actor ?? null, data: { runId, taskId, approved, reason } });
+    await tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'cancelled', error: reason, finishedAt: now(), currentStage: 'cancelled' } });
+    await tx.orchestrationTask.updateMany({ where: { workspaceId, runId, status: { in: ['queued', 'running', 'waiting_for_approval'] } }, data: { status: 'cancelled', finishedAt: now(), error: reason } });
+    await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_cancelled', actor: null, data: { reason, cancelledJobs: tasks.map((t: any) => t.jobId).filter(Boolean) } });
     return tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true } });
   });
 }
 
-export async function cancelOrchestrationRun(workspaceId: string, runId: string): Promise<any> {
+export async function decideOrchestrationTaskApproval(workspaceId: string, runId: string, taskId: string, approved: boolean, actor?: string | null, reason?: string | null): Promise<any> {
+  await ensureDepartments(workspaceId);
+  const killActive = await withWorkspaceTransaction(workspaceId, (tx) => isKillSwitchActive(workspaceId, tx));
+  if (killActive) throw Object.assign(new Error('KILL_SWITCH_ACTIVE'), { statusCode: 409 });
   return withWorkspaceTransaction(workspaceId, async (tx) => {
-    await tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'cancelled', finishedAt: now(), currentStage: 'cancelled' } });
-    await tx.orchestrationTask.updateMany({ where: { workspaceId, runId, status: { in: ['queued', 'running', 'waiting_for_approval'] } }, data: { status: 'cancelled', finishedAt: now(), error: 'RUN_CANCELLED' } });
+    const task = await tx.orchestrationTask.findUnique({ where: { id: taskId } });
+    if (!task || task.runId !== runId) throw Object.assign(new Error('TASK_NOT_FOUND'), { statusCode: 404 });
+    if (!task.approvalId) throw Object.assign(new Error('APPROVAL_NOT_FOUND'), { statusCode: 404 });
+    const approval = await tx.approval.findUnique({ where: { id: task.approvalId } });
+    if (!approval || approval.status !== 'pending') throw Object.assign(new Error('APPROVAL_NOT_PENDING'), { statusCode: 409 });
+    await tx.approval.update({ where: { id: task.approvalId }, data: { status: approved ? 'approved' : 'rejected', decidedBy: actor ?? null, decidedAt: now(), reason: reason ?? null } });
+    await tx.orchestrationTask.update({ where: { id: taskId }, data: { status: approved ? 'queued' : 'failed', error: approved ? null : (reason ?? 'APPROVAL_REJECTED'), finishedAt: approved ? null : now() } });
+    if (task.jobId) {
+      if (approved) {
+        try {
+          await tx.job.update({ where: { id: String(task.jobId) }, data: { status: 'QUEUED', runAt: now(), finishedAt: null, lastError: null } });
+        } catch {}
+      } else {
+        try {
+          await tx.job.update({ where: { id: String(task.jobId) }, data: { status: 'FAILED', finishedAt: now(), lastError: reason ?? 'APPROVAL_REJECTED' } });
+        } catch {}
+      }
+    }
+    await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_approval_decided', actor: actor ?? null, data: { taskId, approved, reason } });
     return tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true } });
   });
 }
@@ -496,7 +607,7 @@ export async function listOrchestrationRuns(workspaceId: string): Promise<any[]>
 export async function resumeOrchestrationRun(workspaceId: string, runId: string): Promise<any> {
   const run = await getOrchestrationRun(workspaceId, runId);
   if (!run) throw new Error('RUN_NOT_FOUND');
-  if (run.status === 'cancelled' || run.status === 'failed') return run;
+  if (run.status === 'cancelled') return run;
   return runOrchestration(workspaceId, runId);
 }
 

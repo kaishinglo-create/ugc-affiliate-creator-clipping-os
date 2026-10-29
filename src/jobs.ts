@@ -893,3 +893,44 @@ export async function advanceJob(jobId: string, toStatus: string, opts: JobActio
 export function assertTransition(from: string, to: string): void {
   if (!transitionAllowed(from, to)) throw new Error(`INVALID_TRANSITION:${from}->${to}`);
 }
+
+export async function claimJobById(jobId: string, workerId: string, opts: ClaimJobsOptions = {}): Promise<any> {
+  const now = toNow(opts.now);
+  const leaseTtlMs = Math.max(1, Number(opts.leaseTtlMs ?? DEFAULT_JOB_LEASE_TTL_MS) || DEFAULT_JOB_LEASE_TTL_MS);
+  const job = await prisma.job.findUnique({ where: { id: jobId } });
+  if (!job) return null;
+
+  const killActive = await withWorkspaceTransaction(job.workspaceId, async (tx) => {
+    await recoverWorkspaceExpiredJobs(tx, job.workspaceId, now);
+    return isKillSwitchActive(job.workspaceId, tx);
+  });
+  if (killActive) return null;
+
+  const leaseId = randomUUID();
+  const leaseExpiresAt = new Date(now.getTime() + leaseTtlMs);
+  const result = await withWorkspaceTransaction(job.workspaceId, async (tx) => {
+    return tx.job.updateMany({
+      where: {
+        id: jobId,
+        status: { in: ['QUEUED', 'RETRY_WAIT'] },
+        runAt: { lte: now },
+        OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lt: now } }],
+      },
+      data: {
+        status: 'RUNNING',
+        startedAt: now,
+        leaseId,
+        leaseOwner: workerId,
+        leaseExpiresAt,
+        attempts: { increment: 1 },
+        updatedAt: now,
+      },
+    });
+  });
+  if (result.count !== 1) {
+    return prisma.job.findUnique({ where: { id: jobId } });
+  }
+  return prisma.job.findUnique({ where: { id: jobId } });
+}
+
+export { claimJobById as claimJobByTask };

@@ -963,8 +963,9 @@ app.post('/api/orchestrations', async (req, reply) => {
   const body = (req.body ?? {}) as any;
   const goal = String(body.goal ?? '').trim();
   if (!goal) return reply.code(400).send({ error: 'INVALID_GOAL' });
+  const idempotencyKey = String((req.headers as any)['x-idempotency-key'] ?? body.idempotencyKey ?? '').trim() || null;
   const mod = await import('./orchestration.js');
-  const run = await mod.createOrchestrationRun(ctx.workspaceId, { goal, maxConcurrency: body.maxConcurrency, budgetUnits: body.budgetUnits, requestedBy: ctx.userId });
+  const run = await mod.createOrchestrationRun(ctx.workspaceId, { goal, maxConcurrency: body.maxConcurrency, budgetUnits: body.budgetUnits, requestedBy: ctx.userId, idempotencyKey });
   const executed = await mod.runOrchestration(ctx.workspaceId, run.id);
   reply.code(201).send({ orchestration: executed });
   return;
