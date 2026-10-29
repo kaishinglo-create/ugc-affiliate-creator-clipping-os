@@ -43,7 +43,10 @@ CREATE UNIQUE INDEX "Job_workspaceId_idempotencyKey_key" ON "Job"("workspaceId",
 CREATE INDEX "Job_workspaceId_status_runAt_idx" ON "Job"("workspaceId", "status", "runAt");
 
 -- CreateIndex
-CREATE INDEX "Job_workflowRunId_idx" ON "Job"("workflowRunId);
+CREATE INDEX "Job_workflowRunId_idx" ON "Job"("workflowRunId");
+
+-- CreateIndex
+CREATE INDEX "Job_leaseExpiresAt_idx" ON "Job"("leaseExpiresAt");
 
 -- CreateForeignKey
 ALTER TABLE "Job" ADD CONSTRAINT "Job_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE CASCADE ON UPDATE CASCADE;

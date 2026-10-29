@@ -735,6 +735,191 @@ app.post('/api/install-checks', async (req, reply) => {
   reply.code(201).send({ check: c }); return;
 });
 
+// Jobs runtime (Phase 19)
+app.get('/api/jobs', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { getJobs } = await import('./jobs.js');
+  const q = (req.query ?? {}) as any;
+  const rows = await getJobs(ctx.workspaceId, { status: q.status, type: q.type, limit: q.limit, offset: q.offset });
+  return { jobs: rows };
+});
+
+app.post('/api/jobs', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const type = String(body.type ?? 'WORKFLOW_RUN').trim() as any;
+  if (!type) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const { createJob } = await import('./jobs.js');
+  const job = await createJob({ workspaceId: ctx.workspaceId, type, category: body.category ?? null, priority: body.priority, payload: body.payload ?? {}, idempotencyKey: body.idempotencyKey ?? null, maxAttempts: body.maxAttempts, timeoutMs: body.timeoutMs, runAt: body.runAt ? new Date(body.runAt) : null });
+  reply.code(201).send({ job });
+  return;
+});
+
+app.get('/api/jobs/:id', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { getJob } = await import('./jobs.js');
+  const job = await getJob((req.params as any).id);
+  if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  return { job };
+});
+
+app.post('/api/jobs/:id/claim', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const { claimJob } = await import('./jobs.js');
+  const workerId = String(body.workerId ?? ctx.userId);
+  const job = await claimJob(ctx.workspaceId, workerId, { now: body.now ? new Date(body.now) : undefined, leaseTtlMs: body.leaseTtlMs });
+  if (!job) return reply.code(404).send({ error: 'NO_JOB_AVAILABLE' });
+  return { job };
+});
+
+app.post('/api/jobs/claim', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const { claimDueJobs } = await import('./jobs.js');
+  const workerId = String(body.workerId ?? ctx.userId);
+  const jobs = await claimDueJobs(ctx.workspaceId, workerId, { now: body.now ? new Date(body.now) : undefined, limit: body.limit, leaseTtlMs: body.leaseTtlMs });
+  return { jobs };
+});
+
+app.post('/api/jobs/:id/heartbeat', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const id = (req.params as any).id;
+  const job = await (await import('../lib/db.js')).prisma.job.findUnique({ where: { id } });
+  if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const { heartbeatJob } = await import('./jobs.js');
+  const leaseId = String(body.leaseId ?? job.leaseId);
+  const workerId = String(body.workerId ?? job.leaseOwner ?? ctx.userId);
+  const updated = await heartbeatJob(id, leaseId, workerId, { now: body.now ? new Date(body.now) : undefined, extendMs: body.extendMs });
+  return { job: updated };
+});
+
+app.post('/api/jobs/:id/complete', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const id = (req.params as any).id;
+  const body = (req.body ?? {}) as any;
+  const job = await (await import('../lib/db.js')).prisma.job.findUnique({ where: { id } });
+  if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const { completeJob } = await import('./jobs.js');
+  const updated = await completeJob(id, { leaseId: body.leaseId ?? job.leaseId, workerId: body.workerId ?? job.leaseOwner });
+  return { job: updated };
+});
+
+app.post('/api/jobs/:id/fail', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const id = (req.params as any).id;
+  const body = (req.body ?? {}) as any;
+  const job = await (await import('../lib/db.js')).prisma.job.findUnique({ where: { id } });
+  if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const { failJob } = await import('./jobs.js');
+  const updated = await failJob(id, { error: body.error ?? body.reason, retryable: body.retryable, nextRunAt: body.nextRunAt ? new Date(body.nextRunAt) : undefined, leaseId: body.leaseId ?? job.leaseId, workerId: body.workerId ?? job.leaseOwner }, {});
+  return { job: updated };
+});
+
+app.post('/api/jobs/:id/cancel', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const id = (req.params as any).id;
+  const body = (req.body ?? {}) as any;
+  const job = await (await import('../lib/db.js')).prisma.job.findUnique({ where: { id } });
+  if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const { cancelJob } = await import('./jobs.js');
+  const updated = await cancelJob(id, { reason: body.reason, leaseId: body.leaseId ?? job.leaseId, workerId: body.workerId ?? job.leaseOwner });
+  return { job: updated };
+});
+
+app.post('/api/jobs/:id/requeue', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const id = (req.params as any).id;
+  const body = (req.body ?? {}) as any;
+  const job = await (await import('../lib/db.js')).prisma.job.findUnique({ where: { id } });
+  if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const { requeueDeadLetterJob } = await import('./jobs.js');
+  const updated = await requeueDeadLetterJob(id, { actor: ctx.userId, reason: body.reason ?? null, maxAttempts: body.maxAttempts });
+  return { job: updated };
+});
+
+app.post('/api/jobs/:id/retry', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const id = (req.params as any).id;
+  const body = (req.body ?? {}) as any;
+  const job = await (await import('../lib/db.js')).prisma.job.findUnique({ where: { id } });
+  if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const { requeueDeadLetterJob } = await import('./jobs.js');
+  const updated = await requeueDeadLetterJob(id, { actor: ctx.userId, reason: body.reason ?? null, maxAttempts: body.maxAttempts });
+  return { job: updated };
+});
+
+app.post('/api/jobs/:id/resume', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const id = (req.params as any).id;
+  const body = (req.body ?? {}) as any;
+  const job = await (await import('../lib/db.js')).prisma.job.findUnique({ where: { id } });
+  if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const { resumeJob } = await import('./jobs.js');
+  const updated = await resumeJob(id, { actor: ctx.userId, reason: body.reason ?? null, leaseId: body.leaseId ?? job.leaseId, workerId: body.workerId ?? job.leaseOwner });
+  return { job: updated };
+});
+
+async function jobRuntimeStatusHandler(ctx: any) {
+  const { getJobRuntimeStatus } = await import('./jobs.js');
+  const status = await getJobRuntimeStatus(ctx.workspaceId);
+  return { status };
+}
+
+app.get('/api/jobs/status', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  return jobRuntimeStatusHandler(ctx);
+});
+
+app.get('/api/runtime/status', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  return jobRuntimeStatusHandler(ctx);
+});
+
+app.get('/api/runtime/jobs', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  return jobRuntimeStatusHandler(ctx);
+});
+
+app.get('/api/queue/status', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  return jobRuntimeStatusHandler(ctx);
+});
+
+app.post('/api/jobs/scheduler/run', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const jobs = await (await import('./jobs.js')).runSchedulerOnce({ workspaceId: ctx.workspaceId, now: body.now ? new Date(body.now) : undefined, batchSize: body.batchSize, limit: body.limit, leaseTtlMs: body.leaseTtlMs, workerId: body.workerId ?? ctx.userId });
+  return { jobs };
+});
+
+app.post('/api/scheduler/run', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const { runSchedulerOnce } = await import('./jobs.js');
+  const jobs = await runSchedulerOnce({ workspaceId: ctx.workspaceId, now: body.now ? new Date(body.now) : undefined, batchSize: body.batchSize, limit: body.limit, leaseTtlMs: body.leaseTtlMs, workerId: body.workerId ?? ctx.userId });
+  return { jobs };
+});
+
 // SPA + static file serving (after all API routes so API takes precedence)
 const PUBLIC_DIR = join(process.cwd(), 'public');
 
