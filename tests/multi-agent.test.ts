@@ -23,4 +23,25 @@ describe('multi-agent', () => {
     expect(run.statusCode).toBe(200);
     expect(run.json().task.status).toBe('completed');
   });
+
+  it('blocks agent task execution when kill switch is active', async () => {
+    const email = `mab-${Date.now()}@x.com`;
+    const slug = `mab-${Date.now()}`;
+    const r = await app.inject({ method: 'POST', url: '/api/auth/signup', payload: { email, password: 'password1234', workspaceName: 'MAB', workspaceSlug: slug } });
+    const ws = r.json().workspace.id;
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email, password: 'password1234' } });
+    const cookie = login.headers['set-cookie'];
+    const a = await app.inject({ method: 'POST', url: '/api/agents', headers: { cookie, 'x-workspace-id': ws }, payload: { name: 'Research2', role: 'research', capabilities: ['search'] } });
+    const t = await app.inject({ method: 'POST', url: '/api/agent-tasks', headers: { cookie, 'x-workspace-id': ws }, payload: { name: 'task2', agentId: a.json().agent.id, input: { q: 'test2' } } });
+    const act = await app.inject({ method: 'POST', url: '/api/security/kill-switch/activate', headers: { cookie, 'x-workspace-id': ws }, payload: { reason: 'test-kill-agent' } });
+    expect(act.statusCode).toBe(200);
+    const run = await app.inject({ method: 'POST', url: `/api/agent-tasks/${t.json().task.id}/run`, headers: { cookie, 'x-workspace-id': ws } });
+    expect(run.statusCode).toBe(409);
+    expect(run.json().error).toBe('KILL_SWITCH_ACTIVE');
+    const list = await app.inject({ method: 'GET', url: '/api/agent-tasks', headers: { cookie, 'x-workspace-id': ws } });
+    const task = (list.json().tasks || []).find((x: any) => x.id === t.json().task.id);
+    expect(task.status).toBe('queued');
+    const de = await app.inject({ method: 'POST', url: '/api/security/kill-switch/deactivate', headers: { cookie, 'x-workspace-id': ws } });
+    expect(de.statusCode).toBe(200);
+  });
 });

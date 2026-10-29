@@ -7,10 +7,12 @@ export type AuditEventInput = {
   type: string;
   actor?: string | null;
   data?: unknown;
+  tx?: any;
 };
 
 export async function writeAuditEvent(input: AuditEventInput) {
-  return prisma.auditEvent.create({
+  const tx = input.tx ?? prisma;
+  return tx.auditEvent.create({
     data: {
       workspaceId: input.workspaceId ?? null,
       userId: input.userId ?? null,

@@ -9,20 +9,43 @@ import { stat } from 'node:fs/promises';
 import { join, extname, resolve, sep } from 'node:path';
 import { createReadStream } from 'node:fs';
 import { prisma, withWorkspaceTransaction } from '../lib/db.js';
+import { writeAuditEvent } from '../lib/audit.js';
 import { hashPassword, verifyPassword, createSession, verifySession, sessionCookieHeader, readSessionCookie, revokeSession } from '../lib/auth.js';
 
 const app = Fastify({ logger: true });
 
 const config = loadConfig();
 const allowedOrigin = config.corsOrigin;
-app.register(helmet, { contentSecurityPolicy: false });
+app.register(helmet, {
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'"],
+      imgSrc: ["'self'", 'data:'],
+      fontSrc: ["'self'"],
+      connectSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      frameAncestors: ["'none'"],
+    },
+  },
+});
 app.register(cors, { origin: allowedOrigin, credentials: true });
 app.register(rateLimit, { max: 100, timeWindow: '1 minute' });
 
-app.setErrorHandler((err, req, reply) => {
+app.setErrorHandler(async (err, req, reply) => {
   const status = (err as any).statusCode ?? 500;
   const message = status >= 500 ? 'INTERNAL_ERROR' : (err as Error).message;
   req.log.error(err);
+  const errMessage = (err as Error)?.message ?? '';
+  if (status < 500 && (errMessage.includes('SESSION_JWT_SECRET') || errMessage.includes('DATABASE_URL'))) {
+    try {
+      await writeAuditEvent({ workspaceId: null, userId: null, runId: null, type: 'security_config_error', actor: null, data: { message: errMessage } });
+    } catch (auditErr) {
+      req.log.error(auditErr);
+    }
+  }
   reply.code(status).send({ error: message });
 });
 
@@ -463,6 +486,7 @@ app.post('/api/approvals/:id/decide', async (req, reply) => {
   const status = body.status === 'approved' ? 'approved' : body.status === 'rejected' ? 'rejected' : null;
   if (!status) return reply.code(400).send({ error: 'INVALID_INPUT' });
   const a = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.approval.update({ where: { id }, data: { status, decidedBy: ctx.userId, decidedAt: new Date(), reason: body.reason ?? null } }));
+  await writeAuditEvent({ workspaceId: ctx.workspaceId, userId: ctx.userId, runId: null, type: 'approval_decided', actor: ctx.userId, data: { approvalId: (a as any)?.id, status, entityType: body.entityType, entityId: body.entityId } });
   return { approval: a };
 });
 
@@ -582,6 +606,9 @@ app.post('/api/agent-tasks/:id/run', async (req, reply) => {
   const id = (req.params as any).id;
   const task = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.agentTask.findUnique({ where: { id } })) as any;
   if (!task) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const { isKillSwitchActive } = await import('../lib/security.js');
+  const active = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => isKillSwitchActive(ctx.workspaceId, tx));
+  if (active) { return reply.code(409).send({ error: 'KILL_SWITCH_ACTIVE' }); }
   await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.agentTask.update({ where: { id }, data: { status: 'running', startedAt: new Date() } }));
   // simple execution: echo input
   const output = { echoed: task.input, agent: task.agentId };

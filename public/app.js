@@ -58,11 +58,11 @@ async function loadMe() {
 }
 
 function authScreen() {
-  return '<div class="page" style="max-width:420px;margin:60px auto"><section class="panel"><h2>Sign in</h2><form id="login-form" class="field-grid"><div class="field full"><label>Email</label><input name="email" type="email" required></div><div class="field full"><label>Password</label><input name="password" type="password" required></div><div class="field full"><button class="btn primary" type="submit">Login</button></div></form><p class="sub">No account? <a href="#" id="show-signup">Sign up</a></p><div id="auth-msg" class="sub"></div></section></div>';
+  return '<div class="page auth-wrap"><section class="panel"><h2>Sign in</h2><form id="login-form" class="field-grid"><div class="field full"><label>Email</label><input name="email" type="email" required></div><div class="field full"><label>Password</label><input name="password" type="password" required></div><div class="field full"><button class="btn primary" type="submit">Login</button></div></form><p class="sub">No account? <a href="#" id="show-signup">Sign up</a></p><div id="auth-msg" class="sub"></div></section></div>';
 }
 
 function signupScreen() {
-  return '<div class="page" style="max-width:420px;margin:60px auto"><section class="panel"><h2>Sign up</h2><form id="signup-form" class="field-grid"><div class="field full"><label>Email</label><input name="email" type="email" required></div><div class="field full"><label>Password (min 10)</label><input name="password" type="password" required minlength="10"></div><div class="field full"><label>Name</label><input name="name"></div><div class="field full"><label>Workspace name</label><input name="workspaceName" required></div><div class="field full"><label>Workspace slug</label><input name="workspaceSlug" required></div><div class="field full"><button class="btn primary" type="submit">Create account</button></div></form><p class="sub">Already have an account? <a href="#" id="show-login">Login</a></p><div id="auth-msg" class="sub"></div></section></div>';
+  return '<div class="page auth-wrap"><section class="panel"><h2>Sign up</h2><form id="signup-form" class="field-grid"><div class="field full"><label>Email</label><input name="email" type="email" required></div><div class="field full"><label>Password (min 10)</label><input name="password" type="password" required minlength="10"></div><div class="field full"><label>Name</label><input name="name"></div><div class="field full"><label>Workspace name</label><input name="workspaceName" required></div><div class="field full"><label>Workspace slug</label><input name="workspaceSlug" required></div><div class="field full"><button class="btn primary" type="submit">Create account</button></div></form><p class="sub">Already have an account? <a href="#" id="show-login">Login</a></p><div id="auth-msg" class="sub"></div></section></div>';
 }
 
 let authMode = "login";
@@ -340,7 +340,7 @@ function openForm(title, fields, kind) {
 
 async function boot() {
   wireEvents();
-  const prof = document.querySelector(".profile"); if (prof && !prof.querySelector("[data-action=logout]")) { const b=document.createElement("button"); b.className="btn"; b.dataset.action="logout"; b.textContent="Logout"; b.style.marginTop="8px"; prof.appendChild(b); }
+  const prof = document.querySelector(".profile"); if (prof && !prof.querySelector("[data-action=logout]")) { const b=document.createElement("button"); b.className="btn"; b.dataset.action="logout"; b.textContent="Logout"; prof.appendChild(b); }
   const ok = await loadMe();
   if (!ok) { renderAuth(); return; }
   // add logout to profile area if possible

@@ -1,4 +1,6 @@
 import { withWorkspaceTransaction } from '../lib/db.js';
+import { isKillSwitchActive } from '../lib/security.js';
+import { writeAuditEvent } from '../lib/audit.js';
 
 export interface StepDef { name: string; action: string; }
 
@@ -26,12 +28,32 @@ export async function executeRun(workspaceId: string, runId: string) {
   const run = await tx.workflowRun.findUnique({ where: { id: runId }, include: { definition: true, steps: true } });
   if (!run) throw new Error('RUN_NOT_FOUND');
   if (run.status === 'succeeded' || run.status === 'cancelled') return run;
+  const killSwitchActive = await isKillSwitchActive(workspaceId, tx);
+  if (killSwitchActive) {
+    await tx.workflowRun.update({ where: { id: runId }, data: { status: 'cancelled', error: 'KILL_SWITCH_ACTIVE', finishedAt: new Date() } });
+    await writeAuditEvent({ workspaceId, runId: null, type: 'workflow_run_blocked', actor: null, data: { runId, reason: 'KILL_SWITCH_ACTIVE' }, tx });
+    return tx.workflowRun.findUnique({ where: { id: runId } });
+  }
   await tx.workflowRun.update({ where: { id: runId }, data: { status: 'running' } });
+  await writeAuditEvent({ workspaceId, runId: null, type: 'workflow_run_started', actor: null, data: { runId, definitionId: run.definitionId }, tx });
   const steps = run.definition.steps as StepDef[];
   const current = run.currentStep;
   for (let i = current; i < steps.length; i++) {
-    const step = steps[i];
-    const stepRun = await tx.workflowStepRun.create({ data: { runId, stepIndex: i, name: step.name, status: 'running', startedAt: new Date(), input: run.input } });
+      const step = steps[i];
+      const approval = await tx.approval.findFirst({ where: { workspaceId, entityType: 'workflow_step', entityId: `${runId}#${step.action}` } });
+      if (approval) {
+        if (approval.status === 'pending') {
+          await tx.workflowRun.update({ where: { id: runId }, data: { status: 'waiting_for_approval', error: 'APPROVAL_PENDING', finishedAt: new Date() } });
+          await writeAuditEvent({ workspaceId, runId: null, type: 'workflow_step_blocked', actor: null, data: { runId, stepIndex: i, action: step.action, approvalId: approval.id, reason: 'APPROVAL_PENDING' }, tx });
+          return tx.workflowRun.findUnique({ where: { id: runId } });
+        }
+        if (approval.status === 'rejected' || !approval.decidedAt) {
+          await tx.workflowRun.update({ where: { id: runId }, data: { status: 'failed', error: 'APPROVAL_REJECTED', finishedAt: new Date() } });
+          await writeAuditEvent({ workspaceId, runId: null, type: 'workflow_step_blocked', actor: null, data: { runId, stepIndex: i, action: step.action, approvalId: approval.id, reason: 'APPROVAL_REJECTED' }, tx });
+          return tx.workflowRun.findUnique({ where: { id: runId } });
+        }
+      }
+      const stepRun = await tx.workflowStepRun.create({ data: { runId, stepIndex: i, name: step.name, status: 'running', startedAt: new Date(), input: run.input } });
     try {
       const action = ACTION_REGISTRY[step.action] ?? (async (x: any) => ({ skipped: true, action: step.action, input: x }));
       const output = await action(run.input);
@@ -40,10 +62,12 @@ export async function executeRun(workspaceId: string, runId: string) {
     } catch (e: any) {
       await tx.workflowStepRun.update({ where: { id: stepRun.id }, data: { status: 'failed', error: e.message, finishedAt: new Date() } });
       await tx.workflowRun.update({ where: { id: runId }, data: { status: 'failed', error: e.message, finishedAt: new Date() } });
+      await writeAuditEvent({ workspaceId, runId: null, type: 'workflow_run_failed', actor: null, data: { runId, error: e.message }, tx });
       return tx.workflowRun.findUnique({ where: { id: runId } });
     }
   }
   await tx.workflowRun.update({ where: { id: runId }, data: { status: 'succeeded', finishedAt: new Date() } });
+  await writeAuditEvent({ workspaceId, runId: null, type: 'workflow_run_succeeded', actor: null, data: { runId, definitionId: run.definitionId }, tx });
   return tx.workflowRun.findUnique({ where: { id: runId } });
   });
 }
