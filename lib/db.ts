@@ -1,10 +1,13 @@
 import { PrismaClient } from '../src/generated/prisma/index.js';
+import { PrismaPg } from '@prisma/adapter-pg';
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 const globalForPrisma = globalThis as unknown as { __ugcPrisma?: PrismaClient };
 
-export const prisma = globalForPrisma.__ugcPrisma ?? new PrismaClient();
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL ?? '' });
+
+export const prisma = globalForPrisma.__ugcPrisma ?? new PrismaClient({ adapter });
 
 if (process.env.NODE_ENV !== 'production') {
   globalForPrisma.__ugcPrisma = prisma;

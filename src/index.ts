@@ -39,7 +39,7 @@ app.get('/ready', async (req, reply) => {
 });
 
 const SignupSchema = z.object({
-  email: z.string().trim().toLowerCase().email().max(254),
+  email: z.string().trim().toLowerCase().max(254).pipe(z.email()),
   password: z.string().min(10).max(200),
   name: z.string().trim().min(1).max(120).optional(),
   workspaceName: z.string().trim().min(1).max(120),
@@ -68,7 +68,7 @@ app.post('/api/auth/signup', { config: { rateLimit: { max: 10, timeWindow: '1 mi
   return;
 });
 
-const LoginSchema = z.object({ email: z.string().trim().toLowerCase().email(), password: z.string().min(1) });
+const LoginSchema = z.object({ email: z.string().trim().toLowerCase().pipe(z.email()), password: z.string().min(1) });
 
 app.post('/api/auth/login', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (req, reply) => {
   const parsed = LoginSchema.safeParse(req.body);
