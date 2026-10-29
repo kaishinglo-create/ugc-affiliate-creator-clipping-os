@@ -15,13 +15,22 @@ export async function createDefinition(workspaceId: string, name: string, steps:
 }
 
 export async function startRun(workspaceId: string, definitionId: string, input: any, idempotencyKey?: string) {
-  const run = await withWorkspaceTransaction(workspaceId, async (tx) => {
-    if (idempotencyKey) {
-      const existing = await tx.workflowRun.findUnique({ where: { workspaceId_idempotencyKey: { workspaceId, idempotencyKey } } });
-      if (existing) return existing;
+  const run = await (async () => {
+    try {
+      return await withWorkspaceTransaction(workspaceId, async (tx) => {
+        if (idempotencyKey) {
+          const existing = await tx.workflowRun.findUnique({ where: { workspaceId_idempotencyKey: { workspaceId, idempotencyKey } } });
+          if (existing) return existing;
+        }
+        return tx.workflowRun.create({ data: { workspaceId, definitionId, status: 'queued', input, idempotencyKey: idempotencyKey ?? null, startedAt: new Date() } });
+      });
+    } catch (e: any) {
+      if (idempotencyKey && (e?.code === 'P2002' || String(e?.message ?? '').includes('Unique constraint'))) {
+        return withWorkspaceTransaction(workspaceId, (tx) => tx.workflowRun.findUnique({ where: { workspaceId_idempotencyKey: { workspaceId, idempotencyKey } } }));
+      }
+      throw e;
     }
-    return tx.workflowRun.create({ data: { workspaceId, definitionId, status: 'queued', input, idempotencyKey: idempotencyKey ?? null, startedAt: new Date() } });
-  });
+  })();
   await createJob({ workspaceId, type: 'WORKFLOW_RUN', category: 'workflow', payload: { runId: run.id, definitionId, input }, idempotencyKey: idempotencyKey ?? null, workflowRunId: run.id });
   return run;
 }
@@ -30,7 +39,7 @@ export async function executeRun(workspaceId: string, runId: string) {
   return withWorkspaceTransaction(workspaceId, async (tx) => {
   const run = await tx.workflowRun.findUnique({ where: { id: runId }, include: { definition: true, steps: true } });
   if (!run) throw new Error('RUN_NOT_FOUND');
-  if (run.status === 'succeeded' || run.status === 'cancelled') return run;
+  if (run.status === 'succeeded' || run.status === 'cancelled' || run.status === 'running') return run;
   const killSwitchActive = await isKillSwitchActive(workspaceId, tx);
   if (killSwitchActive) {
     await tx.workflowRun.update({ where: { id: runId }, data: { status: 'cancelled', error: 'KILL_SWITCH_ACTIVE', finishedAt: new Date() } });
@@ -70,7 +79,8 @@ export async function executeRun(workspaceId: string, runId: string) {
       }
       const stepRun = await tx.workflowStepRun.create({ data: { runId, stepIndex: i, name: step.name, status: 'running', startedAt: new Date(), input: run.input } });
     try {
-      const action = ACTION_REGISTRY[step.action] ?? (async (x: any) => ({ skipped: true, action: step.action, input: x }));
+      const action = ACTION_REGISTRY[step.action];
+      if (!action) throw new Error(`UNKNOWN_ACTION:${step.action}`);
       const output = await action(run.input);
       await tx.workflowStepRun.update({ where: { id: stepRun.id }, data: { status: 'succeeded', output, finishedAt: new Date() } });
       await tx.workflowRun.update({ where: { id: runId }, data: { currentStep: i + 1 } });

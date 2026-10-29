@@ -155,23 +155,35 @@ export async function createJob(input: CreateJobInput): Promise<any> {
         ? new Date(now.getTime() + Math.max(1, Number(input.timeoutMs)))
         : null;
 
-    return tx.job.create({
-      data: {
-        workspaceId: input.workspaceId,
-        type: input.type,
-        category: input.category ?? null,
-        status: 'QUEUED',
-        priority: Number.isFinite(Number(input.priority)) ? Number(input.priority) : 0,
-        payload: input.payload,
-        idempotencyKey: input.idempotencyKey ?? null,
-        maxAttempts: input.maxAttempts && input.maxAttempts > 0 ? input.maxAttempts : DEFAULT_JOB_MAX_ATTEMPTS,
-        parentJobId: input.parentJobId ?? null,
-        workflowRunId: input.workflowRunId ?? null,
-        agentTaskId: input.agentTaskId ?? null,
-        runAt,
-        timeoutAt,
-      },
-    });
+    try {
+      return await tx.job.create({
+        data: {
+          workspaceId: input.workspaceId,
+          type: input.type,
+          category: input.category ?? null,
+          status: 'QUEUED',
+          priority: Number.isFinite(Number(input.priority)) ? Number(input.priority) : 0,
+          payload: input.payload,
+          idempotencyKey: input.idempotencyKey ?? null,
+          maxAttempts: input.maxAttempts && input.maxAttempts > 0 ? input.maxAttempts : DEFAULT_JOB_MAX_ATTEMPTS,
+          parentJobId: input.parentJobId ?? null,
+          workflowRunId: input.workflowRunId ?? null,
+          agentTaskId: input.agentTaskId ?? null,
+          runAt,
+          timeoutAt,
+        },
+      });
+    } catch (e: any) {
+      if (input.idempotencyKey && (e?.code === 'P2002' || String(e?.message ?? '').includes('Unique constraint'))) {
+        const existing = await prisma.job.findUnique({
+          where: {
+            workspaceId_idempotencyKey: { workspaceId: input.workspaceId, idempotencyKey: input.idempotencyKey },
+          },
+        });
+        if (existing) return existing;
+      }
+      throw e;
+    }
   });
 }
 
@@ -315,18 +327,25 @@ export async function heartbeatJob(jobId: string, leaseId: string, workerId: str
   const now = toNow(opts.now);
   if (job.leaseExpiresAt && job.leaseExpiresAt < now) return job;
 
-  try {
-    return await prisma.job.update({
-      where: { id: jobId },
-      data: {
-        heartbeatAt: now,
-        leaseExpiresAt: new Date(now.getTime() + (opts.extendMs ?? DEFAULT_JOB_LEASE_TTL_MS)),
-        updatedAt: now,
-      },
-    });
-  } catch {
+  const renewedUntil = new Date(now.getTime() + (opts.extendMs ?? DEFAULT_JOB_LEASE_TTL_MS));
+  const result = await prisma.job.updateMany({
+    where: {
+      id: jobId,
+      status: 'RUNNING',
+      leaseId,
+      leaseOwner: workerId,
+      leaseExpiresAt: { gte: now },
+    },
+    data: {
+      heartbeatAt: now,
+      leaseExpiresAt: renewedUntil,
+      updatedAt: now,
+    },
+  });
+  if (result.count !== 1) {
     return prisma.job.findUnique({ where: { id: jobId } });
   }
+  return prisma.job.findUnique({ where: { id: jobId } });
 }
 
 export async function completeJob(jobId: string, opts: JobActionOptions = {}): Promise<any> {
@@ -339,22 +358,28 @@ export async function completeJob(jobId: string, opts: JobActionOptions = {}): P
 
   if (!transitionAllowed(job.status, 'SUCCEEDED')) return job;
 
-  try {
-    return await prisma.job.update({
-      where: { id: jobId },
-      data: {
-        status: 'SUCCEEDED',
-        finishedAt: new Date(),
-        leaseId: null,
-        leaseOwner: null,
-        leaseExpiresAt: null,
-        heartbeatAt: null,
-        updatedAt: new Date(),
-      },
-    });
-  } catch {
+  const where: any = { id: jobId, status: job.status };
+  if (opts.leaseId) {
+    where.leaseId = opts.leaseId;
+    if (opts.workerId) where.leaseOwner = opts.workerId;
+  }
+
+  const result = await prisma.job.updateMany({
+    where,
+    data: {
+      status: 'SUCCEEDED',
+      finishedAt: new Date(),
+      leaseId: null,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      heartbeatAt: null,
+      updatedAt: new Date(),
+    },
+  });
+  if (result.count !== 1) {
     return prisma.job.findUnique({ where: { id: jobId } });
   }
+  return prisma.job.findUnique({ where: { id: jobId } });
 }
 
 export async function failJob(jobId: string, input: FailJobInput | string = {}, opts: JobActionOptions = {}): Promise<any> {
@@ -400,18 +425,23 @@ export async function failJob(jobId: string, input: FailJobInput | string = {}, 
   };
 
   if (terminalFailure) {
-    try {
-      return await prisma.job.update({
-        where: { id: jobId },
-        data: {
-          ...base,
-          status: targetStatus,
-          finishedAt: now,
-        },
-      });
-    } catch {
+    const fencedWhere: any = { id: jobId, status: job.status };
+    if (leaseId) {
+      fencedWhere.leaseId = leaseId;
+      if (workerId) fencedWhere.leaseOwner = workerId;
+    }
+    const terminalUpdate = await prisma.job.updateMany({
+      where: fencedWhere,
+      data: {
+        ...base,
+        status: targetStatus,
+        finishedAt: now,
+      },
+    });
+    if (terminalUpdate.count !== 1) {
       return prisma.job.findUnique({ where: { id: jobId } });
     }
+    return prisma.job.findUnique({ where: { id: jobId } });
   }
 
   const delay = normalizedInput.nextRunAt
@@ -421,19 +451,24 @@ export async function failJob(jobId: string, input: FailJobInput | string = {}, 
     ? toNow(normalizedInput.nextRunAt)
     : new Date(now.getTime() + (delay > 0 ? delay : computeBackoffMs(attempts)));
 
-  try {
-    return await prisma.job.update({
-      where: { id: jobId },
-      data: {
-        ...base,
-        status: 'RETRY_WAIT',
-        runAt,
-        finishedAt: null,
-      },
-    });
-  } catch {
+  const retryWhere: any = { id: jobId, status: job.status };
+  if (leaseId) {
+    retryWhere.leaseId = leaseId;
+    if (workerId) retryWhere.leaseOwner = workerId;
+  }
+  const retryUpdate = await prisma.job.updateMany({
+    where: retryWhere,
+    data: {
+      ...base,
+      status: 'RETRY_WAIT',
+      runAt,
+      finishedAt: null,
+    },
+  });
+  if (retryUpdate.count !== 1) {
     return prisma.job.findUnique({ where: { id: jobId } });
   }
+  return prisma.job.findUnique({ where: { id: jobId } });
 }
 
 function computeBackoffMs(attempt: number): number {
@@ -448,23 +483,28 @@ export async function cancelJob(jobId: string, opts: JobActionOptions = {}): Pro
 
   if (opts.leaseId && !leaseMatches(job, opts.leaseId, opts.workerId)) return job;
 
-  try {
-    return await prisma.job.update({
-      where: { id: jobId },
-      data: {
-        status: 'CANCELLED',
-        finishedAt: new Date(),
-        leaseId: null,
-        leaseOwner: null,
-        leaseExpiresAt: null,
-        heartbeatAt: null,
-        lastError: opts.reason ? sanitizeJobError(opts.reason) : job.lastError,
-        updatedAt: new Date(),
-      },
-    });
-  } catch {
+  const cancelWhere: any = { id: jobId, status: job.status };
+  if (opts.leaseId) {
+    cancelWhere.leaseId = opts.leaseId;
+    if (opts.workerId) cancelWhere.leaseOwner = opts.workerId;
+  }
+  const cancelUpdate = await prisma.job.updateMany({
+    where: cancelWhere,
+    data: {
+      status: 'CANCELLED',
+      finishedAt: new Date(),
+      leaseId: null,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      heartbeatAt: null,
+      lastError: opts.reason ? sanitizeJobError(opts.reason) : job.lastError,
+      updatedAt: new Date(),
+    },
+  });
+  if (cancelUpdate.count !== 1) {
     return prisma.job.findUnique({ where: { id: jobId } });
   }
+  return prisma.job.findUnique({ where: { id: jobId } });
 }
 
 export async function markWaitingForApproval(jobId: string, opts: JobActionOptions = {}): Promise<any> {
@@ -475,8 +515,13 @@ export async function markWaitingForApproval(jobId: string, opts: JobActionOptio
   if (opts.leaseId && !leaseMatches(job, opts.leaseId, opts.workerId)) return job;
   if (!transitionAllowed(job.status, 'WAITING_FOR_APPROVAL')) return job;
 
-  const updated = await prisma.job.update({
-    where: { id: jobId },
+  const waitingWhere: any = { id: jobId, status: 'RUNNING' };
+  if (opts.leaseId) {
+    waitingWhere.leaseId = opts.leaseId;
+    if (opts.workerId) waitingWhere.leaseOwner = opts.workerId;
+  }
+  const waitingUpdate = await prisma.job.updateMany({
+    where: waitingWhere,
     data: {
       status: 'WAITING_FOR_APPROVAL',
       finishedAt: new Date(),
@@ -487,6 +532,10 @@ export async function markWaitingForApproval(jobId: string, opts: JobActionOptio
       updatedAt: new Date(),
     },
   });
+  if (waitingUpdate.count !== 1) {
+    return prisma.job.findUnique({ where: { id: jobId } });
+  }
+  const updated = await prisma.job.findUnique({ where: { id: jobId } });
   await writeAuditEvent({
     workspaceId: job.workspaceId,
     runId: job.workflowRunId,
@@ -502,8 +551,8 @@ export async function resumeAfterApproval(jobId: string, opts: JobActionOptions 
   if (!job) return null;
   if (job.status !== 'WAITING_FOR_APPROVAL') return job;
 
-  const updated = await prisma.job.update({
-    where: { id: jobId },
+  const resumeUpdate = await prisma.job.updateMany({
+    where: { id: jobId, status: 'WAITING_FOR_APPROVAL' },
     data: {
       status: 'QUEUED',
       finishedAt: null,
@@ -515,6 +564,10 @@ export async function resumeAfterApproval(jobId: string, opts: JobActionOptions 
       updatedAt: new Date(),
     },
   });
+  if (resumeUpdate.count !== 1) {
+    return prisma.job.findUnique({ where: { id: jobId } });
+  }
+  const updated = await prisma.job.findUnique({ where: { id: jobId } });
   await writeAuditEvent({
     workspaceId: job.workspaceId,
     runId: job.workflowRunId,
@@ -531,8 +584,8 @@ export async function rejectJob(jobId: string, opts: JobActionOptions = {}): Pro
   if (job.status !== 'WAITING_FOR_APPROVAL') return job;
 
   const error = sanitizeJobError(opts.error ?? 'APPROVAL_REJECTED');
-  const updated = await prisma.job.update({
-    where: { id: jobId },
+  const rejectUpdate = await prisma.job.updateMany({
+    where: { id: jobId, status: 'WAITING_FOR_APPROVAL' },
     data: {
       status: 'FAILED',
       finishedAt: new Date(),
@@ -544,6 +597,10 @@ export async function rejectJob(jobId: string, opts: JobActionOptions = {}): Pro
       updatedAt: new Date(),
     },
   });
+  if (rejectUpdate.count !== 1) {
+    return prisma.job.findUnique({ where: { id: jobId } });
+  }
+  const updated = await prisma.job.findUnique({ where: { id: jobId } });
   await writeAuditEvent({
     workspaceId: job.workspaceId,
     runId: job.workflowRunId,
@@ -559,8 +616,12 @@ export async function requeueDeadLetterJob(jobId: string, opts: RequeueOptions =
   if (!job) return null;
   if (job.status !== 'DEAD_LETTER' && job.status !== 'FAILED' && job.status !== 'CANCELLED') return job;
 
-  const updated = await prisma.job.update({
-    where: { id: jobId },
+  const requeueWhere: any = { id: jobId };
+  if (job.status === 'DEAD_LETTER' || job.status === 'FAILED' || job.status === 'CANCELLED') {
+    requeueWhere.status = job.status;
+  }
+  const requeueUpdate = await prisma.job.updateMany({
+    where: requeueWhere,
     data: {
       status: 'QUEUED',
       attempts: 0,
@@ -575,6 +636,10 @@ export async function requeueDeadLetterJob(jobId: string, opts: RequeueOptions =
       updatedAt: new Date(),
     },
   });
+  if (requeueUpdate.count !== 1) {
+    return prisma.job.findUnique({ where: { id: jobId } });
+  }
+  const updated = await prisma.job.findUnique({ where: { id: jobId } });
   await writeAuditEvent({
     workspaceId: job.workspaceId,
     runId: job.workflowRunId,
