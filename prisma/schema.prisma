@@ -58,6 +58,7 @@ model Workspace {
   incidents Incident[]
   agents AgentDefinition[]
   agentTasks AgentTask[]
+  jobs Job[]
   contentPosts ContentPost[]
   performanceSnapshots PerformanceSnapshot[]
   policies OperationalPolicy[]
@@ -226,6 +227,22 @@ enum WorkflowStatus {
   cancelled
 }
 
+enum JobStatus {
+  QUEUED
+  RUNNING
+  RETRY_WAIT
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  DEAD_LETTER
+  WAITING_FOR_APPROVAL
+}
+
+enum JobType {
+  WORKFLOW_RUN
+  AGENT_TASK
+}
+
 model WorkflowDefinition {
   id          String   @id @default(cuid())
   workspaceId String
@@ -276,6 +293,38 @@ model WorkflowStepRun {
   @@index([runId])
 }
 
+
+model Job {
+  id            String   @id @default(cuid())
+  workspaceId  String
+  type         JobType  @default(WORKFLOW_RUN)
+  category     String?
+  status       JobStatus @default(QUEUED)
+  priority     Int      @default(0)
+  payload      Json
+  idempotencyKey String?
+  attempts      Int      @default(0)
+  maxAttempts   Int      @default(3)
+  lastError     String?
+  leaseId       String?
+  leaseOwner    String?
+  leaseExpiresAt DateTime?
+  heartbeatAt   DateTime?
+  runAt         DateTime  @default(now())
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  timeoutAt    DateTime?
+  parentJobId  String?
+  workflowRunId String?
+  agentTaskId  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status, runAt])
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workflowRunId])
+}
 
 model AnalyticsSnapshot {
   id          String   @id @default(cuid())
