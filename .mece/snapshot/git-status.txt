@@ -1,0 +1,13 @@
+ M .env.example
+ M AGENTS.md
+ M eslint.config.js
+ M lib/auth.ts
+ M public/app.js
+ M src/index.ts
+ M src/jobs.ts
+?? .mece-control/
+?? .mece/
+?? .opencode/
+?? .run/
+?? scripts/test-ollama.ts
+?? src/ollama.ts
