@@ -48,10 +48,12 @@ export interface ClaimJobsOptions {
 export interface HeartbeatOptions {
   extendMs?: number;
   now?: Date;
+  workspaceId: string;
 }
 
 export interface FailJobInput {
   error?: string;
+  workspaceId?: string | null;
   retryable?: boolean;
   nextRunAt?: Date | null;
   maxAttempts?: number;
@@ -70,6 +72,7 @@ export interface JobActionOptions {
   workerId?: string | null;
   data?: unknown;
   error?: string | null;
+  workspaceId: string;
 }
 
 export interface RequeueOptions {
@@ -78,6 +81,7 @@ export interface RequeueOptions {
   maxAttempts?: number;
   leaseId?: string | null;
   workerId?: string | null;
+  workspaceId: string;
 }
 
 export interface SchedulerOptions {
@@ -175,11 +179,13 @@ export async function createJob(input: CreateJobInput): Promise<any> {
       });
     } catch (e: any) {
       if (input.idempotencyKey && (e?.code === 'P2002' || String(e?.message ?? '').includes('Unique constraint'))) {
-        const existing = await prisma.job.findUnique({
-          where: {
-            workspaceId_idempotencyKey: { workspaceId: input.workspaceId, idempotencyKey: input.idempotencyKey },
-          },
-        });
+        const existing = await withWorkspaceTransaction(input.workspaceId, (tx2) =>
+          tx2.job.findUnique({
+            where: {
+              workspaceId_idempotencyKey: { workspaceId: input.workspaceId, idempotencyKey: input.idempotencyKey },
+            },
+          })
+        );
         if (existing) return existing;
       }
       throw e;
@@ -187,8 +193,22 @@ export async function createJob(input: CreateJobInput): Promise<any> {
   });
 }
 
-export async function getJob(jobId: string): Promise<any> {
+async function readJob(jobId: string, requestedWorkspaceId: string | null = null): Promise<any> {
+  if (requestedWorkspaceId) {
+    return withWorkspaceTransaction(requestedWorkspaceId, (tx) =>
+      tx.job.findFirst({ where: { id: jobId, workspaceId: requestedWorkspaceId } })
+    );
+  }
   return prisma.job.findUnique({ where: { id: jobId } });
+}
+
+export async function getJob(jobId: string, workspaceIdOrOpts: string | { workspaceId: string } | null): Promise<any> {
+  const workspaceId = typeof workspaceIdOrOpts === 'string'
+    ? workspaceIdOrOpts
+    : (workspaceIdOrOpts?.workspaceId ?? null);
+  const job = await readJob(jobId, workspaceId);
+  if (workspaceId && job && job.workspaceId !== workspaceId) return null;
+  return job;
 }
 
 export async function getJobs(workspaceId: string, filters: any = {}): Promise<any[]> {
@@ -319,8 +339,10 @@ async function recoverWorkspaceExpiredJobs(tx: any, workspaceId: string, now: Da
   `;
 }
 
-export async function heartbeatJob(jobId: string, leaseId: string, workerId: string, opts: HeartbeatOptions = {}): Promise<any> {
-  const job = await prisma.job.findUnique({ where: { id: jobId } });
+export async function heartbeatJob(jobId: string, leaseId: string, workerId: string, opts: HeartbeatOptions = { workspaceId: "" } as HeartbeatOptions): Promise<any> {
+  const requestedWorkspaceId = opts.workspaceId ?? null;
+  if (!requestedWorkspaceId) return null;
+  const job = await readJob(jobId, requestedWorkspaceId);
   if (!job) return null;
   if (job.status !== 'RUNNING') return job;
   if (!leaseMatches(job, leaseId, workerId)) return job;
@@ -328,28 +350,33 @@ export async function heartbeatJob(jobId: string, leaseId: string, workerId: str
   if (job.leaseExpiresAt && job.leaseExpiresAt < now) return job;
 
   const renewedUntil = new Date(now.getTime() + (opts.extendMs ?? DEFAULT_JOB_LEASE_TTL_MS));
-  const result = await prisma.job.updateMany({
-    where: {
-      id: jobId,
-      status: 'RUNNING',
-      leaseId,
-      leaseOwner: workerId,
-      leaseExpiresAt: { gte: now },
-    },
-    data: {
-      heartbeatAt: now,
-      leaseExpiresAt: renewedUntil,
-      updatedAt: now,
-    },
-  });
+  const result: any = await withWorkspaceTransaction(job.workspaceId, (tx) =>
+    tx.job.updateMany({
+      where: {
+        id: jobId,
+        workspaceId: job.workspaceId,
+        status: 'RUNNING',
+        leaseId,
+        leaseOwner: workerId,
+        leaseExpiresAt: { gte: now },
+      },
+      data: {
+        heartbeatAt: now,
+        leaseExpiresAt: renewedUntil,
+        updatedAt: now,
+      },
+    })
+  );
   if (result.count !== 1) {
-    return prisma.job.findUnique({ where: { id: jobId } });
+    return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   }
-  return prisma.job.findUnique({ where: { id: jobId } });
+  return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
 }
 
-export async function completeJob(jobId: string, opts: JobActionOptions = {}): Promise<any> {
-  const job = await prisma.job.findUnique({ where: { id: jobId } });
+export async function completeJob(jobId: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+  const requestedWorkspaceId = opts.workspaceId ?? null;
+  if (!requestedWorkspaceId) return null;
+  const job = await readJob(jobId, requestedWorkspaceId);
   if (!job) return null;
   if (job.status === 'SUCCEEDED') return job;
   if (job.status !== 'RUNNING' && job.status !== 'WAITING_FOR_APPROVAL') return job;
@@ -358,36 +385,40 @@ export async function completeJob(jobId: string, opts: JobActionOptions = {}): P
 
   if (!transitionAllowed(job.status, 'SUCCEEDED')) return job;
 
-  const where: any = { id: jobId, status: job.status };
+  const where: any = { id: jobId, workspaceId: job.workspaceId, status: job.status };
   if (opts.leaseId) {
     where.leaseId = opts.leaseId;
     if (opts.workerId) where.leaseOwner = opts.workerId;
   }
 
-  const result = await prisma.job.updateMany({
-    where,
-    data: {
-      status: 'SUCCEEDED',
-      finishedAt: new Date(),
-      leaseId: null,
-      leaseOwner: null,
-      leaseExpiresAt: null,
-      heartbeatAt: null,
-      updatedAt: new Date(),
-    },
-  });
+  const result: any = await withWorkspaceTransaction(job.workspaceId, (tx) =>
+    tx.job.updateMany({
+      where,
+      data: {
+        status: 'SUCCEEDED',
+        finishedAt: new Date(),
+        leaseId: null,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        heartbeatAt: null,
+        updatedAt: new Date(),
+      },
+    })
+  );
   if (result.count !== 1) {
-    return prisma.job.findUnique({ where: { id: jobId } });
+    return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   }
-  return prisma.job.findUnique({ where: { id: jobId } });
+  return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
 }
 
-export async function failJob(jobId: string, input: FailJobInput | string = {}, opts: JobActionOptions = {}): Promise<any> {
+export async function failJob(jobId: string, input: FailJobInput | string = {}, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
   const normalizedInput: FailJobInput = typeof input === 'string' ? { error: input } : (input ?? {});
   const mergedOpts: JobActionOptions = { ...normalizedInput, ...opts } as any;
+  const requestedWorkspaceId = ((String(opts.workspaceId || "").trim()) || (typeof input === 'object' && input && !(input instanceof Array) ? (input as any).workspaceId : null) || null);
 
-  const job = await prisma.job.findUnique({ where: { id: jobId } });
+  const job = await readJob(jobId, requestedWorkspaceId);
   if (!job) return null;
+  if (requestedWorkspaceId && job.workspaceId !== requestedWorkspaceId) return null;
   if (job.status === 'SUCCEEDED' || job.status === 'CANCELLED' || job.status === 'FAILED' || job.status === 'DEAD_LETTER') return job;
   if (job.status !== 'RUNNING' && job.status !== 'RETRY_WAIT') return job;
 
@@ -425,23 +456,25 @@ export async function failJob(jobId: string, input: FailJobInput | string = {}, 
   };
 
   if (terminalFailure) {
-    const fencedWhere: any = { id: jobId, status: job.status };
+    const fencedWhere: any = { id: jobId, workspaceId: job.workspaceId, status: job.status };
     if (leaseId) {
       fencedWhere.leaseId = leaseId;
       if (workerId) fencedWhere.leaseOwner = workerId;
     }
-    const terminalUpdate = await prisma.job.updateMany({
-      where: fencedWhere,
-      data: {
-        ...base,
-        status: targetStatus,
-        finishedAt: now,
-      },
-    });
+    const terminalUpdate: any = await withWorkspaceTransaction(job.workspaceId, (tx) =>
+      tx.job.updateMany({
+        where: fencedWhere,
+        data: {
+          ...base,
+          status: targetStatus,
+          finishedAt: now,
+        },
+      })
+    );
     if (terminalUpdate.count !== 1) {
-      return prisma.job.findUnique({ where: { id: jobId } });
+      return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
     }
-    return prisma.job.findUnique({ where: { id: jobId } });
+    return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   }
 
   const delay = normalizedInput.nextRunAt
@@ -451,24 +484,26 @@ export async function failJob(jobId: string, input: FailJobInput | string = {}, 
     ? toNow(normalizedInput.nextRunAt)
     : new Date(now.getTime() + (delay > 0 ? delay : computeBackoffMs(attempts)));
 
-  const retryWhere: any = { id: jobId, status: job.status };
+  const retryWhere: any = { id: jobId, workspaceId: job.workspaceId, status: job.status };
   if (leaseId) {
     retryWhere.leaseId = leaseId;
     if (workerId) retryWhere.leaseOwner = workerId;
   }
-  const retryUpdate = await prisma.job.updateMany({
-    where: retryWhere,
-    data: {
-      ...base,
-      status: 'RETRY_WAIT',
-      runAt,
-      finishedAt: null,
-    },
-  });
+  const retryUpdate: any = await withWorkspaceTransaction(job.workspaceId, (tx) =>
+    tx.job.updateMany({
+      where: retryWhere,
+      data: {
+        ...base,
+        status: 'RETRY_WAIT',
+        runAt,
+        finishedAt: null,
+      },
+    })
+  );
   if (retryUpdate.count !== 1) {
-    return prisma.job.findUnique({ where: { id: jobId } });
+    return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   }
-  return prisma.job.findUnique({ where: { id: jobId } });
+  return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
 }
 
 function computeBackoffMs(attempt: number): number {
@@ -476,66 +511,76 @@ function computeBackoffMs(attempt: number): number {
   return exp + Math.floor(Math.random() * 100);
 }
 
-export async function cancelJob(jobId: string, opts: JobActionOptions = {}): Promise<any> {
-  const job = await prisma.job.findUnique({ where: { id: jobId } });
+export async function cancelJob(jobId: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+  const requestedWorkspaceId = opts.workspaceId ?? null;
+  if (!requestedWorkspaceId) return null;
+  const job = await readJob(jobId, requestedWorkspaceId);
   if (!job) return null;
+  if (requestedWorkspaceId && job.workspaceId !== requestedWorkspaceId) return null;
   if (['SUCCEEDED', 'FAILED', 'DEAD_LETTER', 'CANCELLED'].includes(job.status)) return job;
 
   if (opts.leaseId && !leaseMatches(job, opts.leaseId, opts.workerId)) return job;
 
-  const cancelWhere: any = { id: jobId, status: job.status };
+  const cancelWhere: any = { id: jobId, workspaceId: job.workspaceId, status: job.status };
   if (opts.leaseId) {
     cancelWhere.leaseId = opts.leaseId;
     if (opts.workerId) cancelWhere.leaseOwner = opts.workerId;
   }
-  const cancelUpdate = await prisma.job.updateMany({
-    where: cancelWhere,
-    data: {
-      status: 'CANCELLED',
-      finishedAt: new Date(),
-      leaseId: null,
-      leaseOwner: null,
-      leaseExpiresAt: null,
-      heartbeatAt: null,
-      lastError: opts.reason ? sanitizeJobError(opts.reason) : job.lastError,
-      updatedAt: new Date(),
-    },
-  });
+  const cancelUpdate: any = await withWorkspaceTransaction(job.workspaceId, (tx) =>
+    tx.job.updateMany({
+      where: cancelWhere,
+      data: {
+        status: 'CANCELLED',
+        finishedAt: new Date(),
+        leaseId: null,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        heartbeatAt: null,
+        lastError: opts.reason ? sanitizeJobError(opts.reason) : job.lastError,
+        updatedAt: new Date(),
+      },
+    })
+  );
   if (cancelUpdate.count !== 1) {
-    return prisma.job.findUnique({ where: { id: jobId } });
+    return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   }
-  return prisma.job.findUnique({ where: { id: jobId } });
+  return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
 }
 
-export async function markWaitingForApproval(jobId: string, opts: JobActionOptions = {}): Promise<any> {
-  const job = await prisma.job.findUnique({ where: { id: jobId } });
+export async function markWaitingForApproval(jobId: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+  const requestedWorkspaceId = opts.workspaceId ?? null;
+  if (!requestedWorkspaceId) return null;
+  const job = await readJob(jobId, requestedWorkspaceId);
   if (!job) return null;
+  if (requestedWorkspaceId && job.workspaceId !== requestedWorkspaceId) return null;
   if (job.status !== 'RUNNING') return job;
 
   if (opts.leaseId && !leaseMatches(job, opts.leaseId, opts.workerId)) return job;
   if (!transitionAllowed(job.status, 'WAITING_FOR_APPROVAL')) return job;
 
-  const waitingWhere: any = { id: jobId, status: 'RUNNING' };
+  const waitingWhere: any = { id: jobId, workspaceId: job.workspaceId, status: 'RUNNING' };
   if (opts.leaseId) {
     waitingWhere.leaseId = opts.leaseId;
     if (opts.workerId) waitingWhere.leaseOwner = opts.workerId;
   }
-  const waitingUpdate = await prisma.job.updateMany({
-    where: waitingWhere,
-    data: {
-      status: 'WAITING_FOR_APPROVAL',
-      finishedAt: new Date(),
-      leaseId: null,
-      leaseOwner: null,
-      leaseExpiresAt: null,
-      heartbeatAt: null,
-      updatedAt: new Date(),
-    },
-  });
+  const waitingUpdate: any = await withWorkspaceTransaction(job.workspaceId, (tx) =>
+    tx.job.updateMany({
+      where: waitingWhere,
+      data: {
+        status: 'WAITING_FOR_APPROVAL',
+        finishedAt: new Date(),
+        leaseId: null,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        heartbeatAt: null,
+        updatedAt: new Date(),
+      },
+    })
+  );
   if (waitingUpdate.count !== 1) {
-    return prisma.job.findUnique({ where: { id: jobId } });
+    return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   }
-  const updated = await prisma.job.findUnique({ where: { id: jobId } });
+  const updated = await withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   await writeAuditEvent({
     workspaceId: job.workspaceId,
     runId: job.workflowRunId,
@@ -546,28 +591,33 @@ export async function markWaitingForApproval(jobId: string, opts: JobActionOptio
   return updated;
 }
 
-export async function resumeAfterApproval(jobId: string, opts: JobActionOptions = {}): Promise<any> {
-  const job = await prisma.job.findUnique({ where: { id: jobId } });
+export async function resumeAfterApproval(jobId: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+  const requestedWorkspaceId = opts.workspaceId ?? null;
+  if (!requestedWorkspaceId) return null;
+  const job = await readJob(jobId, requestedWorkspaceId);
   if (!job) return null;
+  if (requestedWorkspaceId && job.workspaceId !== requestedWorkspaceId) return null;
   if (job.status !== 'WAITING_FOR_APPROVAL') return job;
 
-  const resumeUpdate = await prisma.job.updateMany({
-    where: { id: jobId, status: 'WAITING_FOR_APPROVAL' },
-    data: {
-      status: 'QUEUED',
-      finishedAt: null,
-      runAt: new Date(),
-      leaseId: null,
-      leaseOwner: null,
-      leaseExpiresAt: null,
-      heartbeatAt: null,
-      updatedAt: new Date(),
-    },
-  });
+  const resumeUpdate: any = await withWorkspaceTransaction(job.workspaceId, (tx) =>
+    tx.job.updateMany({
+      where: { id: jobId, workspaceId: job.workspaceId, status: 'WAITING_FOR_APPROVAL' },
+      data: {
+        status: 'QUEUED',
+        finishedAt: null,
+        runAt: new Date(),
+        leaseId: null,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        heartbeatAt: null,
+        updatedAt: new Date(),
+      },
+    })
+  );
   if (resumeUpdate.count !== 1) {
-    return prisma.job.findUnique({ where: { id: jobId } });
+    return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   }
-  const updated = await prisma.job.findUnique({ where: { id: jobId } });
+  const updated = await withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   await writeAuditEvent({
     workspaceId: job.workspaceId,
     runId: job.workflowRunId,
@@ -578,29 +628,34 @@ export async function resumeAfterApproval(jobId: string, opts: JobActionOptions 
   return updated;
 }
 
-export async function rejectJob(jobId: string, opts: JobActionOptions = {}): Promise<any> {
-  const job = await prisma.job.findUnique({ where: { id: jobId } });
+export async function rejectJob(jobId: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+  const requestedWorkspaceId = opts.workspaceId ?? null;
+  if (!requestedWorkspaceId) return null;
+  const job = await readJob(jobId, requestedWorkspaceId);
   if (!job) return null;
+  if (requestedWorkspaceId && job.workspaceId !== requestedWorkspaceId) return null;
   if (job.status !== 'WAITING_FOR_APPROVAL') return job;
 
   const error = sanitizeJobError(opts.error ?? 'APPROVAL_REJECTED');
-  const rejectUpdate = await prisma.job.updateMany({
-    where: { id: jobId, status: 'WAITING_FOR_APPROVAL' },
-    data: {
-      status: 'FAILED',
-      finishedAt: new Date(),
-      lastError: error,
-      leaseId: null,
-      leaseOwner: null,
-      leaseExpiresAt: null,
-      heartbeatAt: null,
-      updatedAt: new Date(),
-    },
-  });
+  const rejectUpdate: any = await withWorkspaceTransaction(job.workspaceId, (tx) =>
+    tx.job.updateMany({
+      where: { id: jobId, workspaceId: job.workspaceId, status: 'WAITING_FOR_APPROVAL' },
+      data: {
+        status: 'FAILED',
+        finishedAt: new Date(),
+        lastError: error,
+        leaseId: null,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        heartbeatAt: null,
+        updatedAt: new Date(),
+      },
+    })
+  );
   if (rejectUpdate.count !== 1) {
-    return prisma.job.findUnique({ where: { id: jobId } });
+    return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   }
-  const updated = await prisma.job.findUnique({ where: { id: jobId } });
+  const updated = await withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   await writeAuditEvent({
     workspaceId: job.workspaceId,
     runId: job.workflowRunId,
@@ -611,35 +666,37 @@ export async function rejectJob(jobId: string, opts: JobActionOptions = {}): Pro
   return updated;
 }
 
-export async function requeueDeadLetterJob(jobId: string, opts: RequeueOptions = {}): Promise<any> {
-  const job = await prisma.job.findUnique({ where: { id: jobId } });
+export async function requeueDeadLetterJob(jobId: string, opts: RequeueOptions = { workspaceId: "" } as RequeueOptions): Promise<any> {
+  const requestedWorkspaceId = opts.workspaceId ?? null;
+  if (!requestedWorkspaceId) return null;
+  const job = await readJob(jobId, requestedWorkspaceId);
   if (!job) return null;
+  if (requestedWorkspaceId && job.workspaceId !== requestedWorkspaceId) return null;
   if (job.status !== 'DEAD_LETTER' && job.status !== 'FAILED' && job.status !== 'CANCELLED') return job;
 
-  const requeueWhere: any = { id: jobId };
-  if (job.status === 'DEAD_LETTER' || job.status === 'FAILED' || job.status === 'CANCELLED') {
-    requeueWhere.status = job.status;
-  }
-  const requeueUpdate = await prisma.job.updateMany({
-    where: requeueWhere,
-    data: {
-      status: 'QUEUED',
-      attempts: 0,
-      lastError: null,
-      runAt: new Date(),
-      finishedAt: null,
-      leaseId: null,
-      leaseOwner: null,
-      leaseExpiresAt: null,
-      heartbeatAt: null,
-      maxAttempts: opts.maxAttempts && opts.maxAttempts > 0 ? opts.maxAttempts : job.maxAttempts,
-      updatedAt: new Date(),
-    },
-  });
+  const requeueWhere: any = { id: jobId, workspaceId: job.workspaceId, status: job.status };
+  const requeueUpdate: any = await withWorkspaceTransaction(job.workspaceId, (tx) =>
+    tx.job.updateMany({
+      where: requeueWhere,
+      data: {
+        status: 'QUEUED',
+        attempts: 0,
+        lastError: null,
+        runAt: new Date(),
+        finishedAt: null,
+        leaseId: null,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        heartbeatAt: null,
+        maxAttempts: opts.maxAttempts && opts.maxAttempts > 0 ? opts.maxAttempts : job.maxAttempts,
+        updatedAt: new Date(),
+      },
+    })
+  );
   if (requeueUpdate.count !== 1) {
-    return prisma.job.findUnique({ where: { id: jobId } });
+    return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   }
-  const updated = await prisma.job.findUnique({ where: { id: jobId } });
+  const updated = await withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   await writeAuditEvent({
     workspaceId: job.workspaceId,
     runId: job.workflowRunId,
@@ -650,19 +707,22 @@ export async function requeueDeadLetterJob(jobId: string, opts: RequeueOptions =
   return updated;
 }
 
-export async function requeueJob(jobId: string, opts: RequeueOptions = {}): Promise<any> {
+export async function requeueJob(jobId: string, opts: RequeueOptions = { workspaceId: "" } as RequeueOptions): Promise<any> {
   return requeueDeadLetterJob(jobId, opts);
 }
 
-export async function retryJob(jobId: string, opts: RequeueOptions = {}): Promise<any> {
+export async function retryJob(jobId: string, opts: RequeueOptions = { workspaceId: "" } as RequeueOptions): Promise<any> {
   return requeueDeadLetterJob(jobId, opts);
 }
 
-export async function resumeJob(jobId: string, opts: JobActionOptions = {}): Promise<any> {
-  const job = await prisma.job.findUnique({ where: { id: jobId } });
+export async function resumeJob(jobId: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+  const requestedWorkspaceId = opts.workspaceId ?? null;
+  if (!requestedWorkspaceId) return null;
+  const job = await readJob(jobId, requestedWorkspaceId);
   if (!job) return null;
-  if (job.status === 'WAITING_FOR_APPROVAL') return resumeAfterApproval(jobId, opts);
-  if (job.status === 'DEAD_LETTER' || job.status === 'FAILED' || job.status === 'CANCELLED') return requeueDeadLetterJob(jobId, opts);
+  if (requestedWorkspaceId && job.workspaceId !== requestedWorkspaceId) return null;
+  if (job.status === 'WAITING_FOR_APPROVAL') return resumeAfterApproval(jobId, { ...opts, workspaceId: job.workspaceId });
+  if (job.status === 'DEAD_LETTER' || job.status === 'FAILED' || job.status === 'CANCELLED') return requeueDeadLetterJob(jobId, { ...opts, workspaceId: job.workspaceId });
   return job;
 }
 
@@ -832,9 +892,12 @@ export {
   runSchedulerOnce as workerTick,
 };
 
-export async function transitionJob(jobId: string, toStatus: string, opts: JobActionOptions = {}): Promise<any> {
-  const job = await prisma.job.findUnique({ where: { id: jobId } });
+export async function transitionJob(jobId: string, toStatus: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+  const requestedWorkspaceId = opts.workspaceId ?? null;
+  if (!requestedWorkspaceId) return null;
+  const job = await readJob(jobId, requestedWorkspaceId);
   if (!job) return null;
+  if (requestedWorkspaceId && job.workspaceId !== requestedWorkspaceId) return null;
   const from = job.status;
   const to = String(toStatus).toUpperCase();
   if (from === to) return job;
@@ -842,22 +905,24 @@ export async function transitionJob(jobId: string, toStatus: string, opts: JobAc
     throw new Error(`INVALID_TRANSITION:${from}->${to}`);
   }
 
+  const scopedOpts = { ...opts, workspaceId: job.workspaceId };
+
   switch (to) {
     case 'SUCCEEDED':
-      return completeJob(jobId, opts);
+      return completeJob(jobId, scopedOpts);
     case 'CANCELLED':
-      return cancelJob(jobId, opts);
+      return cancelJob(jobId, scopedOpts);
     case 'WAITING_FOR_APPROVAL':
-      return markWaitingForApproval(jobId, opts);
+      return markWaitingForApproval(jobId, scopedOpts);
     case 'FAILED':
-      return failJob(jobId, { error: opts.error ?? opts.reason ?? 'TRANSITION_FAILED', retryable: false }, opts);
+      return failJob(jobId, { error: opts.error ?? opts.reason ?? 'TRANSITION_FAILED', retryable: false }, scopedOpts);
     case 'DEAD_LETTER':
-      return failJob(jobId, { error: opts.error ?? opts.reason ?? 'TRANSITION_DEAD_LETTER', retryable: true }, opts);
+      return failJob(jobId, { error: opts.error ?? opts.reason ?? 'TRANSITION_DEAD_LETTER', retryable: true }, scopedOpts);
     case 'RETRY_WAIT':
-      return failJob(jobId, { error: opts.error ?? opts.reason ?? 'TRANSITION_RETRY', retryable: true, nextRunAt: opts.data instanceof Date ? opts.data as any : undefined }, opts);
+      return failJob(jobId, { error: opts.error ?? opts.reason ?? 'TRANSITION_RETRY', retryable: true, nextRunAt: opts.data instanceof Date ? opts.data as any : undefined }, scopedOpts);
     case 'QUEUED':
-      if (job.status === 'WAITING_FOR_APPROVAL') return resumeAfterApproval(jobId, opts);
-      if (job.status === 'DEAD_LETTER' || job.status === 'FAILED' || job.status === 'CANCELLED') return requeueDeadLetterJob(jobId, opts);
+      if (job.status === 'WAITING_FOR_APPROVAL') return resumeAfterApproval(jobId, scopedOpts);
+      if (job.status === 'DEAD_LETTER' || job.status === 'FAILED' || job.status === 'CANCELLED') return requeueDeadLetterJob(jobId, { ...scopedOpts, actor: opts.actor, reason: opts.reason, maxAttempts: (opts as any).maxAttempts });
       return job;
     case 'RUNNING':
       return job;
@@ -866,27 +931,27 @@ export async function transitionJob(jobId: string, toStatus: string, opts: JobAc
   }
 }
 
-export async function updateJobStatus(jobId: string, toStatus: string, opts: JobActionOptions = {}): Promise<any> {
+export async function updateJobStatus(jobId: string, toStatus: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
   return transitionJob(jobId, toStatus, opts);
 }
 
-export async function changeJobStatus(jobId: string, toStatus: string, opts: JobActionOptions = {}): Promise<any> {
+export async function changeJobStatus(jobId: string, toStatus: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
   return transitionJob(jobId, toStatus, opts);
 }
 
-export async function moveJobToState(jobId: string, toStatus: string, opts: JobActionOptions = {}): Promise<any> {
+export async function moveJobToState(jobId: string, toStatus: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
   return transitionJob(jobId, toStatus, opts);
 }
 
-export async function setJobStatus(jobId: string, toStatus: string, opts: JobActionOptions = {}): Promise<any> {
+export async function setJobStatus(jobId: string, toStatus: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
   return transitionJob(jobId, toStatus, opts);
 }
 
-export async function applyJobTransition(jobId: string, toStatus: string, opts: JobActionOptions = {}): Promise<any> {
+export async function applyJobTransition(jobId: string, toStatus: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
   return transitionJob(jobId, toStatus, opts);
 }
 
-export async function advanceJob(jobId: string, toStatus: string, opts: JobActionOptions = {}): Promise<any> {
+export async function advanceJob(jobId: string, toStatus: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
   return transitionJob(jobId, toStatus, opts);
 }
 
@@ -894,11 +959,14 @@ export function assertTransition(from: string, to: string): void {
   if (!transitionAllowed(from, to)) throw new Error(`INVALID_TRANSITION:${from}->${to}`);
 }
 
-export async function claimJobById(jobId: string, workerId: string, opts: ClaimJobsOptions = {}): Promise<any> {
+export async function claimJobById(jobId: string, workerId: string, opts: ClaimJobsOptions & { workspaceId: string }): Promise<any> {
   const now = toNow(opts.now);
   const leaseTtlMs = Math.max(1, Number(opts.leaseTtlMs ?? DEFAULT_JOB_LEASE_TTL_MS) || DEFAULT_JOB_LEASE_TTL_MS);
-  const job = await prisma.job.findUnique({ where: { id: jobId } });
+  const requestedWorkspaceId = opts.workspaceId ?? null;
+  if (!requestedWorkspaceId) return null;
+  const job = await readJob(jobId, requestedWorkspaceId);
   if (!job) return null;
+  if (requestedWorkspaceId && job.workspaceId !== requestedWorkspaceId) return null;
 
   const killActive = await withWorkspaceTransaction(job.workspaceId, async (tx) => {
     await recoverWorkspaceExpiredJobs(tx, job.workspaceId, now);
@@ -908,10 +976,11 @@ export async function claimJobById(jobId: string, workerId: string, opts: ClaimJ
 
   const leaseId = randomUUID();
   const leaseExpiresAt = new Date(now.getTime() + leaseTtlMs);
-  const result = await withWorkspaceTransaction(job.workspaceId, async (tx) => {
+  const result: any = await withWorkspaceTransaction(job.workspaceId, async (tx) => {
     return tx.job.updateMany({
       where: {
         id: jobId,
+        workspaceId: job.workspaceId,
         status: { in: ['QUEUED', 'RETRY_WAIT'] },
         runAt: { lte: now },
         OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lt: now } }],
@@ -928,9 +997,9 @@ export async function claimJobById(jobId: string, workerId: string, opts: ClaimJ
     });
   });
   if (result.count !== 1) {
-    return prisma.job.findUnique({ where: { id: jobId } });
+    return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   }
-  return prisma.job.findUnique({ where: { id: jobId } });
+  return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
 }
 
 export { claimJobById as claimJobByTask };

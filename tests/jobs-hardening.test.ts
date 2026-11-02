@@ -21,7 +21,7 @@ describe('jobs hardening', () => {
       claimDueJobs(ws, 'w2', { now: new Date(), limit: 1, leaseTtlMs: 60000 }),
     ]);
     expect(a.length + b.length).toBe(1);
-    await prisma.job.deleteMany({ where: { workspaceId: ws } });
+    await withWorkspaceTransaction(ws, (tx: any) => tx.job.deleteMany({ where: { workspaceId: ws } }));
   });
 
   it('stale heartbeat is rejected', async () => {
@@ -35,10 +35,10 @@ describe('jobs hardening', () => {
     await new Promise((resolve) => setTimeout(resolve, 25));
     const second = await claimDueJobs(ws, 'w2', { now: new Date(Date.now() + 30), limit: 1, leaseTtlMs: 60000 });
     expect(second.length).toBe(1);
-    const hb = await heartbeatJob(job.id, oldLease, 'w1', { now: new Date() });
+    const hb = await heartbeatJob(job.id, oldLease, 'w1', { now: new Date(), workspaceId: ws });
     expect(hb.status).toBe('RUNNING');
     expect(hb.leaseOwner).toBe('w2');
-    await prisma.job.deleteMany({ where: { workspaceId: ws } });
+    await withWorkspaceTransaction(ws, (tx: any) => tx.job.deleteMany({ where: { workspaceId: ws } }));
   });
 
   it('stale completion does not succeed', async () => {
@@ -51,9 +51,9 @@ describe('jobs hardening', () => {
     const oldLease = first[0].leaseId;
     await new Promise((resolve) => setTimeout(resolve, 25));
     await claimDueJobs(ws, 'w2', { now: new Date(Date.now() + 30), limit: 1, leaseTtlMs: 60000 });
-    const after = await completeJob(job.id, { leaseId: oldLease, workerId: 'w1' });
+    const after = await completeJob(job.id, { leaseId: oldLease, workerId: 'w1', workspaceId: ws });
     expect(after.status).toBe('RUNNING');
-    await prisma.job.deleteMany({ where: { workspaceId: ws } });
+    await withWorkspaceTransaction(ws, (tx: any) => tx.job.deleteMany({ where: { workspaceId: ws } }));
   });
 
   it('unknown workflow action fails', async () => {
@@ -90,6 +90,6 @@ describe('jobs hardening', () => {
       createJob({ workspaceId: ws, type: 'WORKFLOW_RUN', category: 'workflow', payload: {}, idempotencyKey: key }),
     ]);
     expect(a.id).toBe(b.id);
-    await prisma.job.deleteMany({ where: { workspaceId: ws } });
+    await withWorkspaceTransaction(ws, (tx: any) => tx.job.deleteMany({ where: { workspaceId: ws } }));
   });
 });

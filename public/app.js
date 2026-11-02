@@ -11,10 +11,11 @@ const state = {
     niches: [], items: []
   },
   loading: false,
-  error: null
+  error: null,
+  browserSessionId: ""
 };
 
-const titles = {overview:"Overview",radar:"Product Radar",creators:"Creators",campaigns:"Campaigns",scripts:"Script Studio",clipping:"Clipping Studio",youtube:"YouTube Intelligence",content:"Content Factory",calendar:"Publishing Calendar",analytics:"Analytics & Revenue",agents:"Agent Control",integrations:"Integrations"};
+const titles = {overview:"Overview",radar:"Product Radar",creators:"Creators",campaigns:"Campaigns",scripts:"Script Studio",clipping:"Clipping Studio",youtube:"YouTube Intelligence",content:"Content Factory",calendar:"Publishing Calendar",analytics:"Analytics & Revenue",agents:"Agent Control",integrations:"Integrations","agent-browser":"Agent Browser"};
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -47,8 +48,9 @@ async function loadMe() {
     const r = await api("/api/auth/me");
     state.user = r.user;
     state.workspaces = r.workspaces || [];
-    if (!state.workspaceId && state.workspaces.length) state.workspaceId = state.workspaces[0].id;
+    if (!state.workspaces.some((w)=>w.id===state.workspaceId)) state.workspaceId = state.workspaces.length ? state.workspaces[0].id : null;
     if (state.workspaceId) localStorage.setItem("ugc_workspaceId", state.workspaceId);
+    else localStorage.removeItem("ugc_workspaceId");
     return true;
   } catch {
     state.user = null;
@@ -226,7 +228,48 @@ function integrations() {
   return heading("Integrations","Honest status from /api/integrations. No secrets stored in browser.") + '<div class="notice">Credentials are never stored in browser code. Set API keys server-side via env or POST /api/integrations/:provider.</div><div class="cards">'+cards+'</div>' + loadingBlock();
 }
 
-const views = {overview,radar,creators,campaigns,scripts,clipping,youtube,content,calendar,analytics,agents,integrations};
+
+async function agentBrowser() {
+  const status = await api('/api/browser/status').catch(()=>({runtime:{available:false,message:'status unavailable'}}));
+  const sessions = await api('/api/browser/sessions').catch(()=>({sessions:[]}));
+  const list = sessions.sessions || [];
+  const sid = state.browserSessionId || (list[0] && list[0].id) || '';
+  state.browserSessionId = sid;
+  const session = sid ? await api('/api/browser/sessions/'+sid).then(r=>r.session).catch(()=>null) : null;
+  const screen = session && session.runtimeSessionId ? await api('/api/browser/sessions/'+sid+'/screenshot').catch(()=>null) : null;
+  const tabs = (session && Array.isArray(session.tabs)) ? session.tabs : [];
+  const statusText = status.runtime && status.runtime.available ? 'Runtime connected' : 'Runtime blocked/unavailable';
+  const workspaceText = state.workspaceId ? state.workspaceId : 'none';
+  const controlText = session ? session.controllerState : 'none';
+  const controllerText = session ? (session.controllerActorId || 'none') : 'none';
+  const tabsHtml = tabs.length ? tabs.map(function(t) {
+    return '<span class="tag '+(t.id===session.activeTabId?'blue':'')+'">'+esc(t.title||t.url||t.id)+'</span> ' +
+      '<button class="btn '+(t.id===session.activeTabId?'primary':'')+'" data-action="browser-switch-tab" data-tab-id="'+esc(t.id)+'">Switch</button> ' +
+      '<button class="btn" data-action="browser-close-tab" data-tab-id="'+esc(t.id)+'">Close</button> ';
+  }).join('<br>') : '<div class="panel">No tabs yet.</div>';
+  return heading("Agent Browser","Shared human/agent browser workspace. Runtime: "+statusText) +
+    '<section class="panel"><div class="field-grid">' +
+      '<div class="field full"><label>Workspace</label><input value="'+esc(workspaceText)+'" readonly></div>' +
+      '<div class="field full"><label>Session</label><input value="'+esc(sid||'none')+'" readonly></div>' +
+      '<div class="field full"><label>Control</label><input value="'+esc(controlText)+'" readonly></div>' +
+      '<div class="field full"><label>Controller</label><input value="'+esc(controllerText)+'" readonly></div>' +
+      '<div class="field full"><label>Address</label><input id="browser-url" value="'+esc(session ? session.url : 'https://example.com')+'"></div>' +
+      '<div class="field"><button class="btn primary" data-action="browser-create">New session</button></div>' +
+      '<div class="field"><button class="btn" data-action="browser-home">Home</button></div>' +
+      '<div class="field"><button class="btn" data-action="browser-navigate">Navigate</button></div>' +
+      '<div class="field"><button class="btn" data-action="browser-back">Back</button></div>' +
+      '<div class="field"><button class="btn" data-action="browser-forward">Forward</button></div>' +
+      '<div class="field"><button class="btn" data-action="browser-reload">Reload</button></div>' +
+      '<div class="field"><button class="btn" data-action="browser-new-tab">New tab</button></div>' +
+      '<div class="field"><button class="btn" data-action="browser-screenshot">Screenshot</button></div>' +
+      '<div class="field"><button class="btn" data-action="browser-takeover">Take over</button></div>' +
+    '</div>' +
+    '<div class="panel"><h3>Tabs</h3>'+tabsHtml+'</div>' +
+    (screen && screen.base64 ? '<img alt="browser screenshot" style="max-width:100%;border:1px solid #333" src="data:'+esc(screen.mimeType||'image/png')+';base64,'+screen.base64+'">' : '<div class="panel">No screenshot (runtime may be blocked).</div>') +
+    '</section>' + loadingBlock();
+}
+
+const views = {overview,radar,creators,campaigns,scripts,clipping,youtube,content,calendar,analytics,agents,integrations,"agent-browser":agentBrowser};
 
 function renderAuth() {
   document.body.innerHTML = authMode==="login" ? authScreen() : signupScreen();
@@ -234,24 +277,6 @@ function renderAuth() {
   const sf = $("#signup-form"); if (sf) sf.addEventListener("submit", handleSignup);
   const sl = $("#show-login"); if (sl) sl.addEventListener("click", (e)=>{e.preventDefault(); authMode="login"; renderAuth();});
   const ss = $("#show-signup"); if (ss) ss.addEventListener("click", (e)=>{e.preventDefault(); authMode="signup"; renderAuth();});
-}
-
-function render() {
-  if (!state.user) { renderAuth(); return; }
-  // ensure shell exists
-  if (!$("#page")) {
-    document.body.innerHTML = '<div class="app"><aside class="sidebar" id="sidebar"></aside><main><header class="topbar"></header><section id="page" class="page"></section></main></div>';
-  }
-  // minimal shell: reuse original index.html? We replaced body, so rebuild minimal
-  // Instead, if shell missing, redirect to reload to get original HTML
-  if (!document.querySelector(".app")) {
-    window.location.reload();
-    return;
-  }
-  $("#page").innerHTML = (views[state.view]||overview)();
-  const crumb = $("#crumb"); if (crumb) crumb.textContent = titles[state.view]||"Overview";
-  document.querySelectorAll(".nav[data-view]").forEach(b=>b.classList.toggle("active",b.dataset.view===state.view));
-  const sb = $("#sidebar"); if (sb) sb.classList.remove("open");
 }
 
 // We rely on original index.html shell. Re-render into #page only.
@@ -278,6 +303,70 @@ function wireEvents() {
       const name = a.dataset.action;
       if (name === "refresh") { await loadView(state.view); return; }
       if (name === "logout") { await doLogout(); return; }
+      if (name === "browser-create") {
+        const res = await api('/api/browser/sessions', {method:'POST', body: JSON.stringify({initialUrl: document.getElementById('browser-url').value})});
+        state.browserSessionId = res.session.id;
+        toast('Browser session created');
+        await loadView(state.view);
+        return;
+      }
+      if (name === "browser-navigate") {
+        if (!state.browserSessionId) { toast('Create a session first'); return; }
+        await api('/api/browser/sessions/'+state.browserSessionId+'/navigate', {method:'POST', body: JSON.stringify({url: document.getElementById('browser-url').value, actorType:'human', actorId: state.user && state.user.id ? state.user.id : 'human'})});
+        toast('Navigation requested');
+        await loadView(state.view);
+        return;
+      }
+      if (name === "browser-back") {
+        if (!state.browserSessionId) return;
+        await api('/api/browser/sessions/'+state.browserSessionId+'/back', {method:'POST', body: JSON.stringify({})});
+        await loadView(state.view); return;
+      }
+      if (name === "browser-forward") {
+        if (!state.browserSessionId) return;
+        await api('/api/browser/sessions/'+state.browserSessionId+'/forward', {method:'POST', body: JSON.stringify({})});
+        await loadView(state.view); return;
+      }
+      if (name === "browser-reload") {
+        if (!state.browserSessionId) return;
+        await api('/api/browser/sessions/'+state.browserSessionId+'/reload', {method:'POST', body: JSON.stringify({})});
+        await loadView(state.view); return;
+      }
+      if (name === "browser-new-tab") {
+        if (!state.browserSessionId) return;
+        const url = document.getElementById('browser-url').value;
+        await api('/api/browser/sessions/'+state.browserSessionId+'/tabs', {method:'POST', body: JSON.stringify({url})});
+        await loadView(state.view); return;
+      }
+      if (name === "browser-screenshot") {
+        await loadView(state.view); return;
+      }
+      if (name === "browser-home") {
+        const input = document.getElementById('browser-url');
+        if (input) input.value = 'https://example.com';
+        return;
+      }
+      if (name === "browser-switch-tab") {
+        if (!state.browserSessionId) return;
+        const tabId = a.dataset.tabId;
+        await api('/api/browser/sessions/'+state.browserSessionId+'/tabs/'+encodeURIComponent(tabId)+'/activate', {method:'POST', body: JSON.stringify({})});
+        await loadView(state.view);
+        return;
+      }
+      if (name === "browser-close-tab") {
+        if (!state.browserSessionId) return;
+        const tabId = a.dataset.tabId;
+        await api('/api/browser/sessions/'+state.browserSessionId+'/tabs/'+encodeURIComponent(tabId)+'/close', {method:'POST', body: JSON.stringify({})});
+        await loadView(state.view);
+        return;
+      }
+      if (name === "browser-takeover") {
+        if (!state.browserSessionId) return;
+        await api('/api/browser/sessions/'+state.browserSessionId+'/control/takeover', {method:'POST', body: JSON.stringify({})});
+        toast('Control taken over');
+        await loadView(state.view);
+        return;
+      }
       if (name === "add-product") { openForm("Add product", [{n:"name",l:"Name"},{n:"category",l:"Category"},{n:"source",l:"Source"}], "product"); return; }
       if (name === "add-creator") { openForm("Add creator", [{n:"name",l:"Name"},{n:"email",l:"Email"},{n:"niches",l:"Niches"},{n:"platforms",l:"Platforms"}], "creator"); return; }
       if (name === "add-campaign") { openForm("Add campaign", [{n:"name",l:"Name"},{n:"goal",l:"Goal"},{n:"status",l:"Status"}], "campaign"); return; }
@@ -309,7 +398,6 @@ function wireEvents() {
     }
   });
   document.addEventListener("submit", async (e)=>{
-    console.log("SUBMIT EVENT", e.target && e.target.id);
     if (e.target.id === "entry-form") {
       e.preventDefault();
       const d = Object.fromEntries(new FormData(e.target));

@@ -1,0 +1,153 @@
+{
+  "generatedAt": "2026-11-01T12:07:41.034Z",
+  "command": "node node_modules/eslint/bin/eslint.js . --format json",
+  "totalBefore": 12,
+  "warningsBefore": 10,
+  "errorsBefore": 2,
+  "issues": [
+    {
+      "file": ".mece/security-repair-r2-r4/test-r2-auth-control-center.mjs",
+      "line": 2,
+      "column": 8,
+      "endLine": 2,
+      "endColumn": 12,
+      "severity": "error",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "message": "'http' is defined but never used.",
+      "nodeType": "Identifier",
+      "status": "NEW-UNTRACKED-ARTIFACT"
+    },
+    {
+      "file": "src/index.ts",
+      "line": 1118,
+      "column": 7,
+      "endLine": 1118,
+      "endColumn": 29,
+      "severity": "error",
+      "ruleId": "prefer-const",
+      "message": "'budgetValidationFailed' is never reassigned. Use 'const' instead.",
+      "nodeType": "Identifier",
+      "status": "NEW-REGRESSION"
+    },
+    {
+      "file": "src/index.ts",
+      "line": 1118,
+      "column": 7,
+      "endLine": 1118,
+      "endColumn": 29,
+      "severity": "warning",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "message": "'budgetValidationFailed' is assigned a value but never used. Allowed unused vars must match /^_/u.",
+      "nodeType": "Identifier",
+      "status": "NEW-REGRESSION"
+    },
+    {
+      "file": "src/orchestration.ts",
+      "line": 207,
+      "column": 82,
+      "endLine": 207,
+      "endColumn": 93,
+      "severity": "warning",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "message": "'budgetUnits' is defined but never used. Allowed unused args must match /^_/u.",
+      "nodeType": "Identifier",
+      "status": "PRE-EXISTING"
+    },
+    {
+      "file": "src/orchestration.ts",
+      "line": 207,
+      "column": 103,
+      "endLine": 207,
+      "endColumn": 113,
+      "severity": "warning",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "message": "'spentUnits' is defined but never used. Allowed unused args must match /^_/u.",
+      "nodeType": "Identifier",
+      "status": "PRE-EXISTING"
+    },
+    {
+      "file": "src/orchestration.ts",
+      "line": 233,
+      "column": 10,
+      "endLine": 233,
+      "endColumn": 25,
+      "severity": "warning",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "message": "'taskStatusCount' is defined but never used. Allowed unused vars must match /^_/u.",
+      "nodeType": "Identifier",
+      "status": "PRE-EXISTING"
+    },
+    {
+      "file": "src/orchestration.ts",
+      "line": 299,
+      "column": 13,
+      "endLine": 299,
+      "endColumn": 20,
+      "severity": "warning",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "message": "'finalId' is assigned a value but never used. Allowed unused vars must match /^_/u.",
+      "nodeType": "Identifier",
+      "status": "PRE-EXISTING"
+    },
+    {
+      "file": "src/orchestration.ts",
+      "line": 385,
+      "column": 16,
+      "endLine": 385,
+      "endColumn": 30,
+      "severity": "warning",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "message": "'budgetReserved' is defined but never used. Allowed unused vars must match /^_/u.",
+      "nodeType": "Identifier",
+      "status": "PRE-EXISTING"
+    },
+    {
+      "file": "src/orchestration.ts",
+      "line": 411,
+      "column": 9,
+      "endLine": 411,
+      "endColumn": 16,
+      "severity": "warning",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "message": "'isRetry' is assigned a value but never used. Allowed unused vars must match /^_/u.",
+      "nodeType": "Identifier",
+      "status": "PRE-EXISTING"
+    },
+    {
+      "file": "src/orchestration.ts",
+      "line": 423,
+      "column": 9,
+      "endLine": 423,
+      "endColumn": 17,
+      "severity": "warning",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "message": "'reserved' is assigned a value but never used. Allowed unused vars must match /^_/u.",
+      "nodeType": "Identifier",
+      "status": "PRE-EXISTING"
+    },
+    {
+      "file": "src/orchestration.ts",
+      "line": 478,
+      "column": 13,
+      "endLine": 478,
+      "endColumn": 16,
+      "severity": "warning",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "message": "'job' is assigned a value but never used. Allowed unused vars must match /^_/u.",
+      "nodeType": "Identifier",
+      "status": "PRE-EXISTING"
+    },
+    {
+      "file": "tests/jobs-workspace-scope.test.ts",
+      "line": 11,
+      "column": 7,
+      "endLine": 11,
+      "endColumn": 14,
+      "severity": "warning",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "message": "'cookieA' is assigned a value but never used. Allowed unused vars must match /^_/u.",
+      "nodeType": "Identifier",
+      "status": "NEW-REGRESSION"
+    }
+  ]
+}
