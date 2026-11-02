@@ -1,0 +1,13 @@
+{
+  "mcp": {
+    "test-server": {
+      "type": "local",
+      "command": [
+        "/bin/echo",
+        "hello"
+      ],
+      "enabled": false,
+      "environment": {}
+    }
+  }
+}
