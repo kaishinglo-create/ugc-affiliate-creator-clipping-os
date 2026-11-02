@@ -204,7 +204,7 @@ function departmentProduces(departmentKey: string, action: string, goal: string)
   }
 }
 
-async function reserveBudget(workspaceId: string, runId: string, amount: number, budgetUnits: number, spentUnits: number): Promise<boolean> {
+async function reserveBudget(workspaceId: string, runId: string, amount: number): Promise<boolean> {
   const result: any = await withWorkspaceTransaction(workspaceId, async (tx) => {
     return tx.$executeRaw`
       UPDATE "OrchestrationRun"
@@ -230,9 +230,6 @@ async function releaseBudget(workspaceId: string, runId: string, amount: number)
   });
 }
 
-function taskStatusCount(tasks: any[], statuses: string[]): number {
-  return tasks.filter((task) => statuses.includes(task.status)).length;
-}
 
 export async function createOrchestrationRun(workspaceId: string, input: any): Promise<any> {
   await ensureDepartments(workspaceId);
@@ -296,7 +293,7 @@ export async function createOrchestrationRun(workspaceId: string, input: any): P
       const qaId = mk('qa', 'validate_content', 7, 5, [creativeId, videoId]);
       const publishingId = mk('publishing', 'plan_publication', 5, 4, [qaId]);
       const securityId = mk('security', 'review_governance', 9, 4, [qaId, publishingId]);
-      const finalId = mk('ceo', 'synthesize', 10, 2, [publishingId, securityId, growthId]);
+      mk('ceo', 'synthesize', 10, 2, [publishingId, securityId, growthId]);
 
       if (!validateDependencyGraph(taskDefs.map((task) => ({ id: task.id, dependsOn: task.dependsOn })))) {
         throw Object.assign(new Error('INVALID_ORCHESTRATION_GRAPH'), { statusCode: 500 });
@@ -382,47 +379,41 @@ async function ensureTaskJob(workspaceId: string, runId: string, task: any): Pro
   return job.id;
 }
 
-async function budgetReserved(task: any): Promise<boolean> {
-  return (task.actualUnits ?? 0) > 0 || (task.attemptCount ?? 0) > 0;
-}
 
 async function processOrchestrationJob(workspaceId: string, runId: string, jobId: string, workerId: string, leaseId: string, _leaseExpires: Date): Promise<void> {
-  await heartbeatJob(jobId, leaseId, workerId, { now: now(), extendMs: 30000 });
+  await heartbeatJob(jobId, leaseId, workerId, { now: now(), extendMs: 30000, workspaceId });
   const task: any = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.findFirst({ where: { jobId } }));
   const run: any = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.findUnique({ where: { id: runId } }));
   if (!task || !run) {
-    await failJob(jobId, { error: 'ORCHESTRATION_TASK_MISSING', retryable: false }, { leaseId, workerId });
+    await failJob(jobId, { error: 'ORCHESTRATION_TASK_MISSING', retryable: false }, { leaseId, workerId, workspaceId });
     return;
   }
   const action = String(task.action ?? '');
   if (!departmentAllowed(String(task.departmentKey), action)) {
     await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'failed', error: `ACTION_NOT_ALLOWED:${task.departmentKey}:${action}`, finishedAt: now() } }));
-    await failJob(jobId, { error: `ACTION_NOT_ALLOWED:${task.departmentKey}:${action}`, retryable: false }, { leaseId, workerId });
+    await failJob(jobId, { error: `ACTION_NOT_ALLOWED:${task.departmentKey}:${action}`, retryable: false }, { leaseId, workerId, workspaceId });
     return;
   }
   const taskRunGoal = String((task.input as any)?.goal ?? run.goal ?? '');
 
   if (await isKillSwitchActive(workspaceId)) {
     await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'cancelled', error: 'KILL_SWITCH_ACTIVE', finishedAt: now() } }));
-    await cancelJob(jobId, { reason: 'KILL_SWITCH_ACTIVE', leaseId, workerId });
+    await cancelJob(jobId, { reason: 'KILL_SWITCH_ACTIVE', leaseId, workerId, workspaceId });
     return;
   }
 
-  const isRetry = (task.attemptCount ?? 0) > 0;
   await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'running', startedAt: now(), attemptCount: { increment: 1 } } }));
   const updatedTask: any = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.findUnique({ where: { id: task.id } }));
 
   if (task.requiresApproval) {
     const approval: any = await withWorkspaceTransaction(workspaceId, (tx) => tx.approval.create({ data: { workspaceId, entityType: 'orchestration_task', entityId: task.id, requestedBy: null } }));
     await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'waiting_for_approval', approvalId: approval.id } }));
-    await markWaitingForApproval(jobId, { leaseId, workerId });
+    await markWaitingForApproval(jobId, { leaseId, workerId, workspaceId });
     await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_task_approval_requested', actor: null, data: { jobId, taskId: task.id, approvalId: approval.id } });
     return;
   }
 
-  const reserved = false;
-
-  let controller: AbortController | null = new AbortController();
+    let controller: AbortController | null = new AbortController();
   const timer = setTimeout(() => controller?.abort(), Number(task.timeoutMs ?? 30000));
   try {
     const output = departmentProduces(String(task.departmentKey), action, taskRunGoal);
@@ -434,12 +425,12 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
       await tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'succeeded', output, finishedAt: now(), actualUnits: Number(task.estimatedUnits ?? 1) } });
       await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_task_succeeded', actor: null, data: { jobId, taskId: task.id, department: task.departmentKey } });
     });
-    await completeJob(jobId, { leaseId, workerId });
+    await completeJob(jobId, { leaseId, workerId, workspaceId });
   } catch (error) {
     clearTimeout(timer);
     if (controller) controller.abort();
     const message = sanitizeError(error);
-    const jobAfter = await failJob(jobId, { error: message, retryable: true }, { leaseId, workerId });
+    const jobAfter = await failJob(jobId, { error: message, retryable: true }, { leaseId, workerId, workspaceId });
     const attempts = Number(updatedTask?.attemptCount ?? 0);
     const maxAttempts = Number(task.maxAttempts ?? 2);
     if (attempts < maxAttempts && jobAfter?.status !== 'DEAD_LETTER') {
@@ -473,16 +464,11 @@ export async function runOrchestration(workspaceId: string, runId: string): Prom
 
     const tasks: any[] = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.findMany({ where: { workspaceId, runId }, orderBy: { priority: 'desc' } }));
     // Synchronize from job runtime.
-    for (const task of tasks) {
-      if (!task.jobId) continue;
-      const job: any = await (async () => null)() ?? null;
-    }
-
     const succeededIds = new Set(tasks.filter((task) => task.status === 'succeeded').map((task) => task.id));
     await recoverExpiredJobs(workspaceId);
     for (const task of tasks) {
       if (!task.jobId) continue;
-      const job: any = await getJob(String(task.jobId));
+      const job: any = await getJob(String(task.jobId), workspaceId);
       if (!job) continue;
       if (job.status === 'SUCCEEDED' && task.status !== 'succeeded') {
         await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'succeeded', finishedAt: now(), actualUnits: Number(task.estimatedUnits ?? 1) } }));
@@ -541,7 +527,7 @@ export async function runOrchestration(workspaceId: string, runId: string): Prom
       const estimated = Number(task.estimatedUnits ?? 1);
       let jobId = task.jobId;
       if (!jobId) {
-        const reserved = await reserveBudget(workspaceId, runId, estimated, Number(run.budgetUnits ?? 100), 0);
+        const reserved = await reserveBudget(workspaceId, runId, estimated);
         if (!reserved) {
           await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'failed', error: 'BUDGET_EXCEEDED', finishedAt: now() } }));
           continue;
@@ -563,7 +549,7 @@ export async function runOrchestration(workspaceId: string, runId: string): Prom
     if (prepared.length === 0) continue;
 
     for (const task of prepared) {
-      const claimedJob: any = await claimJobById(String(task.jobId), workerId, { leaseTtlMs: 30000, now: now() });
+      const claimedJob: any = await claimJobById(String(task.jobId), workerId, { leaseTtlMs: 30000, now: now(), workspaceId });
       if (!claimedJob || claimedJob.status !== 'RUNNING') continue;
       await processOrchestrationJob(workspaceId, runId, String(task.jobId), workerId, String(claimedJob.leaseId), new Date(claimedJob.leaseExpiresAt));
     }
@@ -581,7 +567,7 @@ export async function cancelOrchestrationRun(workspaceId: string, runId: string,
   for (const task of tasks) {
     if (!task.jobId) continue;
     try {
-      await cancelJob(String(task.jobId), { reason: String(reason) });
+      await cancelJob(String(task.jobId), { reason: String(reason), workspaceId });
     } catch (error) {
       cancelErrors.push({ jobId: task.jobId, error: sanitizeError(error) });
     }

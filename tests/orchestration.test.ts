@@ -57,7 +57,7 @@ describe('orchestration', () => {
     const approved = await app.inject({ method: 'POST', url: `/api/orchestrations/${orchestration.id}/tasks/${waiting.id}/approve`, headers: { cookie, 'x-workspace-id': ws }, payload: { status: 'approved', reason: 'test' } });
     expect(approved.statusCode).toBe(200);
     expect(['succeeded', 'waiting_for_approval']).toContain(approved.json().orchestration.status);
-    await prisma.job.deleteMany({ where: { workspaceId: ws } });
+    await withWorkspaceTransaction(ws, (tx: any) => tx.job.deleteMany({ where: { workspaceId: ws } }));
     await withWorkspaceTransaction(ws, (tx) => tx.orchestrationRun.deleteMany({ where: { workspaceId: ws } }));
   });
 

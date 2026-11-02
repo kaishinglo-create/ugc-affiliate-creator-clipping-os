@@ -63,7 +63,7 @@ export async function revokeSession(sessionId: string) {
 }
 
 export function sessionCookieHeader(jwt: string, expiresAt: Date) {
-  const secure = process.env.APP_ENV === 'production' ? '; Secure' : '';
+  const secure = process.env.APP_ENV === 'production' || process.env.NODE_ENV === 'production' ? '; Secure' : '';
   return `${SESSION_COOKIE}=${jwt}; Path=/; HttpOnly; SameSite=Lax; Expires=${expiresAt.toUTCString()}${secure}`;
 }
 

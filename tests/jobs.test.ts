@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { buildServer } from '../src/index.js';
-import { prisma } from '../lib/db.js';
+import { prisma, withWorkspaceTransaction } from '../lib/db.js';
 import { createJob, claimDueJobs, completeJob, failJob, cancelJob, heartbeatJob } from '../src/jobs.js';
 import { createDefinition, executeRun, startRun } from '../src/workflows.js';
 
@@ -25,13 +25,13 @@ describe('jobs', () => {
     expect(claimed[0].leaseOwner).toBe('worker-test');
     expect(claimed[0].attempts).toBe(1);
 
-    const hb = await heartbeatJob(claimed[0].id, claimed[0].leaseId, 'worker-test', { now: new Date() });
+    const hb = await heartbeatJob(claimed[0].id, claimed[0].leaseId, 'worker-test', { now: new Date(), workspaceId: ws });
     expect(hb.heartbeatAt).not.toBeNull();
 
-    const done = await completeJob(claimed[0].id);
+    const done = await completeJob(claimed[0].id, { workspaceId: ws });
     expect(done.status).toBe('SUCCEEDED');
 
-    await prisma.job.deleteMany({ where: { workspaceId: ws } });
+    await withWorkspaceTransaction(ws, (tx: any) => tx.job.deleteMany({ where: { workspaceId: ws } }));
   });
 
   it('retries with backoff and dead-letters after max attempts', async () => {
@@ -42,18 +42,18 @@ describe('jobs', () => {
 
     await createJob({ workspaceId: ws, type: 'WORKFLOW_RUN', category: 'workflow', payload: {}, idempotencyKey: `jobr-key-${Date.now()}`, maxAttempts: 2 });
     const claimed = await claimDueJobs(ws, 'worker-test', { now: new Date(), limit: 1, leaseTtlMs: 60_000 });
-    const retry = await failJob(claimed[0].id, { error: 'TRANSIENT', retryable: true, maxAttempts: 2 });
+    const retry = await failJob(claimed[0].id, { error: 'TRANSIENT', retryable: true, maxAttempts: 2, workspaceId: ws });
     expect(retry.status).toBe('RETRY_WAIT');
     expect(retry.attempts).toBe(1);
 
     const retryDue = new Date(Date.now() + 60_000);
     const claimed2 = await claimDueJobs(ws, 'worker-test', { now: retryDue, limit: 1, leaseTtlMs: 60_000 });
     expect(claimed2.length).toBe(1);
-    const dead = await failJob(claimed2[0].id, { error: 'TRANSIENT', retryable: true, maxAttempts: 2 });
+    const dead = await failJob(claimed2[0].id, { error: 'TRANSIENT', retryable: true, maxAttempts: 2, workspaceId: ws });
     expect(dead.status).toBe('DEAD_LETTER');
     expect(dead.attempts).toBe(2);
 
-    await prisma.job.deleteMany({ where: { workspaceId: ws } });
+    await withWorkspaceTransaction(ws, (tx: any) => tx.job.deleteMany({ where: { workspaceId: ws } }));
   });
 
   it('rejects duplicate idempotency keys', async () => {
@@ -66,7 +66,7 @@ describe('jobs', () => {
     const second = await createJob({ workspaceId: ws, type: 'WORKFLOW_RUN', category: 'workflow', payload: { a: 1 }, idempotencyKey: key });
     expect(second.id).toBe(first.id);
 
-    await prisma.job.deleteMany({ where: { workspaceId: ws } });
+    await withWorkspaceTransaction(ws, (tx: any) => tx.job.deleteMany({ where: { workspaceId: ws } }));
   });
 
   it('cancels a job and blocks workflow jobs via kill switch', async () => {
@@ -77,13 +77,13 @@ describe('jobs', () => {
 
     const def = await createDefinition(ws, 'Job kill', [{ name: 'step1', action: 'echo' }]);
     const run = await startRun(ws, def.id, { hello: 'block' }, `jobk-run-${Date.now()}`);
-    const createdJobs = await prisma.job.findMany({ where: { workflowRunId: run.id } });
+    const createdJobs: any = await withWorkspaceTransaction(ws, (tx: any) => tx.job.findMany({ where: { workflowRunId: run.id } }));
     expect(createdJobs.length).toBe(1);
     expect(createdJobs[0].type).toBe('WORKFLOW_RUN');
 
     const claimed = await claimDueJobs(ws, 'worker-test', { now: new Date(), limit: 1, leaseTtlMs: 60_000 });
     expect(claimed.length).toBe(1);
-    const cancelled = await cancelJob(claimed[0].id, { reason: 'TEST_CANCEL' });
+    const cancelled = await cancelJob(claimed[0].id, { reason: 'TEST_CANCEL', workspaceId: ws });
     expect(cancelled.status).toBe('CANCELLED');
     const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email, password: 'password1234' } });
     const cookie = login.headers['set-cookie'];
@@ -91,9 +91,9 @@ describe('jobs', () => {
     expect(act.statusCode).toBe(200);
     const executed = await executeRun(ws, run.id);
     expect(executed.status).toBe('cancelled');
-    const blockedJobs = await prisma.job.findMany({ where: { workflowRunId: run.id } });
+    const blockedJobs: any = await withWorkspaceTransaction(ws, (tx: any) => tx.job.findMany({ where: { workflowRunId: run.id } }));
     expect(blockedJobs[0].status).toBe('CANCELLED');
 
-    await prisma.job.deleteMany({ where: { workspaceId: ws } });
+    await withWorkspaceTransaction(ws, (tx: any) => tx.job.deleteMany({ where: { workspaceId: ws } }));
   });
 });
