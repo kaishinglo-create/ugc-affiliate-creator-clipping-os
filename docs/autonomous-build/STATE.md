@@ -17,3 +17,12 @@ Details: .mece/eslint-audit/
 Phase: Partial implementation; backend gateway + MCP adapter + UI + docs.
 Runtime: BLOCKED (no Chromium/Playwright or BROWSER_RUNTIME_URL).
 Tests: browser-gateway 5/5 PASS; typecheck/build/lint PASS.
+
+## P1 Persistent Scheduler (2026-11-03)
+
+Branch: `local/audit-untracked-2026-11-02`
+HEAD: `3f77552`
+Phase 0 stabilization documented in `.mece/cells/phase0-stabilization/REPORT.md`.
+Implemented opt-in persistent scheduler with DB advisory leader lock, recovery, graceful shutdown and status endpoint.
+Checks: typecheck PASS, eslint PASS, scheduler isolated test 5/5 PASS.
+Blockers remain: Android process lifetime, no process supervisor, Ollama credit/config, Prisma migrate on Android.
