@@ -928,6 +928,14 @@ app.get('/api/queue/status', async (req, reply) => {
   return jobRuntimeStatusHandler(ctx);
 });
 
+app.get('/api/scheduler/status', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { getSchedulerStatus } = await import('./scheduler.js');
+  const queue = await jobRuntimeStatusHandler(ctx);
+  return { scheduler: getSchedulerStatus(), queue };
+});
+
 app.post('/api/jobs/scheduler/run', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;
@@ -1570,11 +1578,27 @@ export async function buildServer() {
   return app;
 }
 
-process.on('SIGTERM', async () => { await app.close(); process.exit(0); });
-process.on('SIGINT', async () => { await app.close(); process.exit(0); });
+process.on('SIGTERM', async () => {
+  try { const { stopScheduler } = await import('./scheduler.js'); await stopScheduler(); } catch {}
+  await app.close();
+  try { await prisma.$disconnect(); } catch {}
+  process.exit(0);
+});
+process.on('SIGINT', async () => {
+  try { const { stopScheduler } = await import('./scheduler.js'); await stopScheduler(); } catch {}
+  await app.close();
+  try { await prisma.$disconnect(); } catch {}
+  process.exit(0);
+});
 
 async function main() {
   const port = config.port;
+  try { await prisma.$queryRaw`SELECT 1`; } catch (err) { app.log.error(err); throw err; }
+  if (String(process.env.JOBSCHEDULER_ENABLED ?? '').trim().toLowerCase() === 'true' || String(process.env.JOBSCHEDULER_ENABLED ?? '').trim() === '1') {
+    const { startScheduler } = await import('./scheduler.js');
+    await startScheduler();
+    app.log.info({ scheduler: true }, 'job scheduler started');
+  }
   await app.listen({ port, host: '0.0.0.0' });
 }
 

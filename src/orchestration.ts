@@ -380,7 +380,7 @@ async function ensureTaskJob(workspaceId: string, runId: string, task: any): Pro
 }
 
 
-async function processOrchestrationJob(workspaceId: string, runId: string, jobId: string, workerId: string, leaseId: string, _leaseExpires: Date): Promise<void> {
+export async function processOrchestrationJob(workspaceId: string, runId: string, jobId: string, workerId: string, leaseId: string, _leaseExpires: Date): Promise<void> {
   await heartbeatJob(jobId, leaseId, workerId, { now: now(), extendMs: 30000, workspaceId });
   const task: any = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.findFirst({ where: { jobId } }));
   const run: any = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.findUnique({ where: { id: runId } }));
