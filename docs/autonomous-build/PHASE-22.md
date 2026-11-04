@@ -47,7 +47,7 @@ non-superuser role, so row-level security applies):
 | Phase | Status | Evidence / blocker |
 | --- | --- | --- |
 | 22 — engine hardening | **Delivered (this change)** | 6 verified defects + regression tests; suite 103/103 |
-| 23 — real AI agents | **Not started — blocked for live verification** | `src/ollama.ts` is a single provider/model with a daily request cap and no schema validation, fallback or usage accounting. No `OLLAMA_API_KEY` is present in this environment, so a real call cannot be exercised; the work is implementable behind a provider interface with a stubbed provider in tests, but claiming "real AI" would be unverified. |
+| 23 — AI gateway & agents | **Delivered in `PHASE-23.md`** | Provider interface, Ollama Cloud provider, per-agent model config, Zod-validated structured output, budget/usage audit and `AGENT_AI_MODE`; agents wired through the gateway. Live provider call not verified: no `OLLAMA_API_KEY` in this environment. |
 | 24 — persistent company orchestration | **Partially delivered** | Durable state, dependency graph, approvals, retries and budget already exist; approval resumption is now automatic and survives a restart. Remaining: orchestration start no longer blocks the HTTP request (the driver still runs in-request; the engine is the backstop). |
 | 25 — video clipping pipeline | **Not started — blocked** | No media pipeline; `departmentProduces('video')` returns hardcoded clips. No ffmpeg or source media in this sandbox, and no storage backend configured. |
 | 26 — social publishing | **Not started — blocked** | No OAuth or platform clients; `plan_publication` returns `planned_only`. Requires developer apps/credentials for YouTube/Instagram/TikTok. |

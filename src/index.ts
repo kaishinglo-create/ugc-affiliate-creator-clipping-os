@@ -1573,6 +1573,13 @@ app.get('/:file*', async (req, reply) => {
 });
 
 
+app.get('/api/ai/status', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { getAIStatus } = await import('./ai/gateway.js');
+  return getAIStatus(ctx.workspaceId);
+});
+
 app.post('/api/ollama/chat', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;

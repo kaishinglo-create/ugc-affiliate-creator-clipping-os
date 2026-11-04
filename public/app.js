@@ -123,6 +123,7 @@ async function loadView(view) {
         state.data.agents = (await api("/api/agents")).agents;
         state.data.agentTasks = (await api("/api/agent-tasks")).tasks;
         state.data.engine = await api("/api/engine/status").catch(()=>null);
+        state.data.ai = await api("/api/ai/status").catch(()=>null);
         break;
       }
       case "content": state.data.contentPosts = (await api("/api/content-posts")).posts; break;
@@ -233,12 +234,29 @@ function enginePanel() {
     '</section>';
 }
 
+function aiPanel() {
+  const ai = state.data.ai;
+  if (!ai) {
+    return '<section class="panel"><h2>AI gateway</h2><p class="sub">Gateway status unavailable.</p></section>';
+  }
+  const agents = ai.agents || [];
+  const budget = ai.budget || {};
+  return '<section class="panel"><h2>AI gateway</h2>' +
+    '<p>' + tag(ai.configured ? "OLLAMA CONNECTED" : "NOT CONFIGURED", ai.configured ? "green" : "orange") +
+    ' <span class="sub">provider ' + esc(ai.provider) + ' · mode ' + esc(ai.mode) + '</span></p>' +
+    '<p>Requests today: ' + (budget.used || 0) + ' / ' + (budget.limit || 0) + ' <span class="sub">UTC day</span></p>' +
+    (agents.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>Agent</th><th>Model</th></tr></thead><tbody>' +
+      agents.map(a => '<tr><td>' + esc(a.agentKey) + '</td><td>' + esc(a.model) + '</td></tr>').join("") + '</tbody></table></div>' : '') +
+    (ai.configured ? '' : '<p class="sub">Set OLLAMA_API_KEY server-side to run agents on Ollama. Until then agent tasks use the deterministic planner, and each task output is labelled with its source.</p>') +
+    '</section>';
+}
+
 function agents() {
   const agents = state.data.agents || [];
   const tasks = state.data.agentTasks || [];
   return heading("Agent Control","Persisted agents/tasks from /api/agents and /api/agent-tasks.") +
   enginePanel() +
-  '<div class="notice">Safe mode: agent tasks execute a simple echo. No external AI provider connected.</div>' +
+  aiPanel() +
   '<section class="panel"><h2>Agents</h2>' + (agents.length ? agents.map(a=>'<p>'+esc(a.name)+' — '+esc(a.role)+'</p>').join("") : '<p class="sub">No agents yet.</p>') + '</section>' +
   '<section class="panel"><h2>Tasks</h2>' + (tasks.length ? tasks.map(t=>'<p>'+esc(t.name)+' — '+esc(t.status)+'</p>').join("") : '<p class="sub">No tasks yet.</p>') + '</section>' + loadingBlock();
 }

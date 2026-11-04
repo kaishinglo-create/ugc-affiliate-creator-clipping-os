@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 import { withWorkspaceTransaction } from '../lib/db.js';
 import { writeAuditEvent } from '../lib/audit.js';
 import { isKillSwitchActive } from '../lib/security.js';
+import { runAgentTask } from './ai/agent-runtime.js';
+import { isAIGatewayError } from './ai/errors.js';
 import {
   createJob,
   claimJobById,
@@ -439,13 +441,17 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
     // Approved: fall through and execute the task.
   }
 
-    let controller: AbortController | null = new AbortController();
-  const timer = setTimeout(() => controller?.abort(), Number(task.timeoutMs ?? 30000));
   try {
-    const output = departmentProduces(String(task.departmentKey), action, taskRunGoal);
-    if (controller?.signal.aborted) throw new Error('TASK_TIMEOUT');
-    clearTimeout(timer);
-    controller = null;
+    // The agent runtime enforces the task timeout on the provider request and
+    // returns deterministic planner output only when AI is not configured.
+    const output = await runAgentTask({
+      workspaceId,
+      departmentKey: String(task.departmentKey),
+      action,
+      goal: taskRunGoal,
+      timeoutMs: Number(task.timeoutMs ?? 30000),
+      deterministic: () => departmentProduces(String(task.departmentKey), action, taskRunGoal),
+    });
 
     await withWorkspaceTransaction(workspaceId, async (tx) => {
       await tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'succeeded', output, finishedAt: now(), actualUnits: Number(task.estimatedUnits ?? 1) } });
@@ -453,10 +459,10 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
     });
     await completeJob(jobId, { leaseId, workerId, workspaceId });
   } catch (error) {
-    clearTimeout(timer);
-    if (controller) controller.abort();
     const message = sanitizeError(error);
-    const jobAfter = await failJob(jobId, { error: message, retryable: true }, { leaseId, workerId, workspaceId });
+    // AI configuration and budget failures are not retryable; upstream timeouts are.
+    const retryable = !isAIGatewayError(error) || error.retryable;
+    const jobAfter = await failJob(jobId, { error: message, retryable }, { leaseId, workerId, workspaceId });
     const attempts = Number(updatedTask?.attemptCount ?? 0);
     const maxAttempts = Number(task.maxAttempts ?? 2);
     if (attempts < maxAttempts && jobAfter?.status !== 'DEAD_LETTER') {

@@ -1,5 +1,26 @@
 # STATE
 
+## Phase 23 — AI gateway and Ollama-connected agents (2026-11-04)
+
+Phase: provider-independent AI gateway built on `multi-agent-system`; departmental agent tasks now
+run through it instead of returning unlabelled stubs.
+Delivered: `src/ai/errors.ts` (stable error codes, `retryable`), `src/ai/provider.ts`
+(`AIProvider` + `OllamaCloudProvider`), `src/ai/models.ts` (per-agent model env override),
+`src/ai/agents.ts` (prompt + JSON contract + Zod schema per department), `src/ai/gateway.ts`
+(budget, call, JSON parse, Zod validation, `ai_request` usage audit, `getAIStatus`),
+`src/ai/agent-runtime.ts` (`runAgentTask` with `AGENT_AI_MODE=auto|off|required`),
+orchestration wiring, `GET /api/ai/status`, and the Agent Control AI panel.
+Honesty: without a key, output is marked `_meta.source = "deterministic_planner"`; in `required`
+mode a missing key fails the task with `AI_NOT_CONFIGURED`; invalid output throws
+`AI_OUTPUT_INVALID` and is never partially used. Publishing stays `planned_only`.
+Tests: typecheck PASS, build PASS, ESLint PASS, Vitest **33/33 files, 117/117 tests** PASS
+(14 new in `tests/ai-gateway.test.ts`).
+Not verified automatically: a live Ollama Cloud call — `OLLAMA_API_KEY` is absent in this
+environment; the provider is covered only through injected fakes. Dashboard AI panel requires a
+signed-in session.
+Next: Phase 24 — drive orchestration from the engine (no driver in the request path) with a
+durable driver lease. Roadmap/status: `docs/autonomous-build/PHASE-23.md`.
+
 ## Phase 22 — Engine hardening (2026-11-04)
 
 Phase: six confirmed defects fixed on `multi-agent-system` (Phase 21 engine audited first).
