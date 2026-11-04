@@ -504,9 +504,45 @@ app.post('/api/approvals/:id/decide', async (req, reply) => {
     return tx.approval.findUnique({ where: { id } });
   });
   if (!a) return reply.code(404).send({ error: 'NOT_FOUND' });
-  await writeAuditEvent({ workspaceId: ctx.workspaceId, userId: ctx.userId, runId: null, type: 'approval_decided', actor: ctx.userId, data: { approvalId: (a as any)?.id, status, entityType: body.entityType, entityId: body.entityId } });
-  return { approval: a };
+  await writeAuditEvent({ workspaceId: ctx.workspaceId, userId: ctx.userId, runId: null, type: 'approval_decided', actor: ctx.userId, data: { approvalId: (a as any)?.id, status, entityType: (a as any)?.entityType, entityId: (a as any)?.entityId } });
+  // A decision must actually release (or stop) the work that was waiting on it.
+  const resumed = await resumeAfterApprovalDecision(ctx, a as any, status === 'approved');
+  return { approval: a, resumed };
 });
+
+async function resumeAfterApprovalDecision(ctx: any, approval: any, approved: boolean): Promise<{ entityType: string; runId: string | null } | null> {
+  const entityType = String(approval?.entityType ?? '');
+  const entityId = String(approval?.entityId ?? '');
+  try {
+    if (entityType === 'workflow_step') {
+      const runId = entityId.split('#')[0];
+      const job: any = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.job.findFirst({
+        where: { workspaceId: ctx.workspaceId, workflowRunId: runId, status: 'WAITING_FOR_APPROVAL' },
+      }));
+      if (!job) return null;
+      const { resumeAfterApproval, rejectJob } = await import('./jobs.js');
+      if (approved) {
+        await resumeAfterApproval(job.id, { workspaceId: ctx.workspaceId, actor: ctx.userId, reason: 'APPROVAL_GRANTED' });
+      } else {
+        await rejectJob(job.id, { workspaceId: ctx.workspaceId, actor: ctx.userId, error: 'APPROVAL_REJECTED' });
+      }
+      return { entityType, runId };
+    }
+    if (entityType === 'orchestration_task') {
+      const task: any = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.orchestrationTask.findFirst({
+        where: { id: entityId, workspaceId: ctx.workspaceId },
+        select: { runId: true },
+      }));
+      if (!task?.runId) return null;
+      const mod = await import('./orchestration.js');
+      await mod.decideOrchestrationTaskApproval(ctx.workspaceId, task.runId, entityId, approved, ctx.userId, null);
+      return { entityType, runId: task.runId };
+    }
+  } catch {
+    // The decision is already recorded; resumption is retried by the engine.
+  }
+  return null;
+}
 
 app.get('/api/orchestrator/summary', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
@@ -928,21 +964,47 @@ app.get('/api/queue/status', async (req, reply) => {
   return jobRuntimeStatusHandler(ctx);
 });
 
+// A manual tick of the autonomous execution engine. This claims due work AND
+// executes it, so the queue never leaves jobs leased but unprocessed.
+async function engineTickHandler(ctx: any, body: any) {
+  const { runEngineTick } = await import('./engine.js');
+  const summary = await runEngineTick({
+    workspaceId: ctx.workspaceId,
+    now: body?.now ? new Date(body.now) : undefined,
+    batchSize: body?.batchSize,
+    leaseTtlMs: body?.leaseTtlMs,
+    concurrency: body?.concurrency,
+    workerId: body?.workerId ?? `manual-${ctx.userId}`,
+    resumeOrchestrations: true,
+  });
+  return { summary, jobs: summary.jobs };
+}
+
 app.post('/api/jobs/scheduler/run', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;
-  const body = (req.body ?? {}) as any;
-  const jobs = await (await import('./jobs.js')).runSchedulerOnce({ workspaceId: ctx.workspaceId, now: body.now ? new Date(body.now) : undefined, batchSize: body.batchSize, limit: body.limit, leaseTtlMs: body.leaseTtlMs, workerId: body.workerId ?? ctx.userId });
-  return { jobs };
+  return engineTickHandler(ctx, (req.body ?? {}) as any);
 });
 
 app.post('/api/scheduler/run', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;
-  const body = (req.body ?? {}) as any;
-  const { runSchedulerOnce } = await import('./jobs.js');
-  const jobs = await runSchedulerOnce({ workspaceId: ctx.workspaceId, now: body.now ? new Date(body.now) : undefined, batchSize: body.batchSize, limit: body.limit, leaseTtlMs: body.leaseTtlMs, workerId: body.workerId ?? ctx.userId });
-  return { jobs };
+  return engineTickHandler(ctx, (req.body ?? {}) as any);
+});
+
+app.get('/api/engine/status', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { engineStatus } = await import('./engine.js');
+  const queue = await jobRuntimeStatusHandler(ctx);
+  return { engine: engineStatus(), queue: queue.status };
+});
+
+app.post('/api/engine/tick', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  if (ctx.role !== 'OWNER' && ctx.role !== 'ADMIN') return reply.code(403).send({ error: 'INSUFFICIENT_ROLE' });
+  return engineTickHandler(ctx, (req.body ?? {}) as any);
 });
 
 // Company hierarchy and orchestration (Phase 20)
@@ -1570,12 +1632,30 @@ export async function buildServer() {
   return app;
 }
 
-process.on('SIGTERM', async () => { await app.close(); process.exit(0); });
-process.on('SIGINT', async () => { await app.close(); process.exit(0); });
+async function shutdown() {
+  try {
+    const { stopEngine } = await import('./engine.js');
+    await stopEngine();
+  } catch {
+    // The engine may never have started.
+  }
+  await app.close();
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => { void shutdown(); });
+process.on('SIGINT', () => { void shutdown(); });
 
 async function main() {
   const port = config.port;
   await app.listen({ port, host: '0.0.0.0' });
+  // Autonomous execution: claim and run due work in the background.
+  // Set AUTOMATION_ENGINE=off to run an API-only process.
+  if (process.env.AUTOMATION_ENGINE !== 'off') {
+    const { startEngine } = await import('./engine.js');
+    startEngine();
+    app.log.info('automation engine started');
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

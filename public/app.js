@@ -122,6 +122,7 @@ async function loadView(view) {
       case "agents": {
         state.data.agents = (await api("/api/agents")).agents;
         state.data.agentTasks = (await api("/api/agent-tasks")).tasks;
+        state.data.engine = await api("/api/engine/status").catch(()=>null);
         break;
       }
       case "content": state.data.contentPosts = (await api("/api/content-posts")).posts; break;
@@ -213,10 +214,30 @@ function analytics() {
   (Object.keys(m).length ? '<section class="panel"><h2>Metrics</h2><pre>'+esc(JSON.stringify(m,null,2))+'</pre></section>' : '') + loadingBlock();
 }
 
+function enginePanel() {
+  const payload = state.data.engine;
+  if (!payload || !payload.engine) {
+    return '<section class="panel"><h2>Automation engine</h2><p class="sub">Runtime status unavailable.</p></section>';
+  }
+  const engine = payload.engine;
+  const counts = (payload.queue && payload.queue.counts) || {};
+  const lastTick = engine.lastTickAt ? new Date(engine.lastTickAt).toLocaleTimeString() : "not yet";
+  return '<section class="panel"><h2>Automation engine</h2>' +
+    '<p>' + tag(engine.running ? "RUNNING" : "IDLE", engine.running ? "green" : "orange") +
+    ' <span class="sub">worker ' + esc(engine.workerId) + ' · polls every ' + Math.round((engine.intervalMs||0)/1000) + 's · last tick ' + esc(lastTick) + '</span></p>' +
+    (engine.lastError ? '<p class="sub">Last error: ' + esc(engine.lastError) + '</p>' : '') +
+    '<p>Queued ' + (counts.queued||0) + ' · running ' + (counts.running||0) + ' · retry ' + (counts.retryWait||0) +
+    ' · waiting approval ' + (counts.waitingForApproval||0) + ' · dead letter ' + (counts.deadLetter||0) +
+    ' · succeeded ' + (counts.succeeded||0) + '</p>' +
+    '<button class="btn primary" data-action="engine-tick">Run engine now</button>' +
+    '</section>';
+}
+
 function agents() {
   const agents = state.data.agents || [];
   const tasks = state.data.agentTasks || [];
   return heading("Agent Control","Persisted agents/tasks from /api/agents and /api/agent-tasks.") +
+  enginePanel() +
   '<div class="notice">Safe mode: agent tasks execute a simple echo. No external AI provider connected.</div>' +
   '<section class="panel"><h2>Agents</h2>' + (agents.length ? agents.map(a=>'<p>'+esc(a.name)+' — '+esc(a.role)+'</p>').join("") : '<p class="sub">No agents yet.</p>') + '</section>' +
   '<section class="panel"><h2>Tasks</h2>' + (tasks.length ? tasks.map(t=>'<p>'+esc(t.name)+' — '+esc(t.status)+'</p>').join("") : '<p class="sub">No tasks yet.</p>') + '</section>' + loadingBlock();
@@ -303,6 +324,17 @@ function wireEvents() {
       const name = a.dataset.action;
       if (name === "refresh") { await loadView(state.view); return; }
       if (name === "logout") { await doLogout(); return; }
+      if (name === "engine-tick") {
+        try {
+          const res = await api('/api/engine/tick', {method:'POST', body: JSON.stringify({})});
+          const s = (res && res.summary) || {};
+          toast('Engine ran: ' + (s.succeeded||0) + ' done, ' + (s.retried||0) + ' retried, ' + (s.awaitingApproval||0) + ' awaiting approval');
+        } catch (err) {
+          toast('Engine tick failed: ' + err.message);
+        }
+        await loadView(state.view);
+        return;
+      }
       if (name === "browser-create") {
         const res = await api('/api/browser/sessions', {method:'POST', body: JSON.stringify({initialUrl: document.getElementById('browser-url').value})});
         state.browserSessionId = res.session.id;
