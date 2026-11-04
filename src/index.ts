@@ -498,15 +498,44 @@ app.post('/api/approvals/:id/decide', async (req, reply) => {
   const body = (req.body ?? {}) as any;
   const status = body.status === 'approved' ? 'approved' : body.status === 'rejected' ? 'rejected' : null;
   if (!status) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const approved = status === 'approved';
+
+  const existing: any = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) =>
+    tx.approval.findFirst({ where: { id, workspaceId: ctx.workspaceId } })
+  );
+  if (!existing) return reply.code(404).send({ error: 'NOT_FOUND' });
+  // A decided approval is final: re-deciding could flip a rejection into an
+  // approval after the fact (for example a publish gate).
+  if (existing.status !== 'pending') return reply.code(409).send({ error: 'APPROVAL_ALREADY_DECIDED' });
+
+  // Orchestration tasks own their approval row together with the task and the
+  // blocked job, so that module records the decision.
+  if (String(existing.entityType) === 'orchestration_task') {
+    const task: any = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) =>
+      tx.orchestrationTask.findFirst({ where: { id: String(existing.entityId), workspaceId: ctx.workspaceId }, select: { runId: true } })
+    );
+    if (!task?.runId) return reply.code(404).send({ error: 'TASK_NOT_FOUND' });
+    const mod = await import('./orchestration.js');
+    try {
+      await mod.decideOrchestrationTaskApproval(ctx.workspaceId, String(task.runId), String(existing.entityId), approved, ctx.userId, body.reason ?? null);
+    } catch (error: any) {
+      return reply.code(error?.statusCode === 404 ? 404 : 409).send({ error: String(error?.message ?? 'APPROVAL_DECISION_FAILED') });
+    }
+    const { kickOrchestration } = await import('./engine.js');
+    void kickOrchestration(ctx.workspaceId, String(task.runId));
+    const decided: any = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.approval.findUnique({ where: { id } }));
+    return { approval: decided, resumed: { entityType: String(existing.entityType), runId: String(task.runId) } };
+  }
+
   const a = await withWorkspaceTransaction(ctx.workspaceId, async (tx: any) => {
-    const result = await tx.approval.updateMany({ where: { id, workspaceId: ctx.workspaceId }, data: { status, decidedBy: ctx.userId, decidedAt: new Date(), reason: body.reason ?? null } });
+    const result = await tx.approval.updateMany({ where: { id, workspaceId: ctx.workspaceId, status: 'pending' }, data: { status, decidedBy: ctx.userId, decidedAt: new Date(), reason: body.reason ?? null } });
     if (result.count !== 1) return null;
     return tx.approval.findUnique({ where: { id } });
   });
-  if (!a) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (!a) return reply.code(409).send({ error: 'APPROVAL_ALREADY_DECIDED' });
   await writeAuditEvent({ workspaceId: ctx.workspaceId, userId: ctx.userId, runId: null, type: 'approval_decided', actor: ctx.userId, data: { approvalId: (a as any)?.id, status, entityType: (a as any)?.entityType, entityId: (a as any)?.entityId } });
   // A decision must actually release (or stop) the work that was waiting on it.
-  const resumed = await resumeAfterApprovalDecision(ctx, a as any, status === 'approved');
+  const resumed = await resumeAfterApprovalDecision(ctx, a as any, approved);
   return { approval: a, resumed };
 });
 
@@ -527,16 +556,6 @@ async function resumeAfterApprovalDecision(ctx: any, approval: any, approved: bo
         await rejectJob(job.id, { workspaceId: ctx.workspaceId, actor: ctx.userId, error: 'APPROVAL_REJECTED' });
       }
       return { entityType, runId };
-    }
-    if (entityType === 'orchestration_task') {
-      const task: any = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.orchestrationTask.findFirst({
-        where: { id: entityId, workspaceId: ctx.workspaceId },
-        select: { runId: true },
-      }));
-      if (!task?.runId) return null;
-      const mod = await import('./orchestration.js');
-      await mod.decideOrchestrationTaskApproval(ctx.workspaceId, task.runId, entityId, approved, ctx.userId, null);
-      return { entityType, runId: task.runId };
     }
   } catch {
     // The decision is already recorded; resumption is retried by the engine.
@@ -966,11 +985,23 @@ app.get('/api/queue/status', async (req, reply) => {
 
 // A manual tick of the autonomous execution engine. This claims due work AND
 // executes it, so the queue never leaves jobs leased but unprocessed.
-async function engineTickHandler(ctx: any, body: any) {
+/** Scheduler and engine-control routes are operator actions, not member actions. */
+function requireOperatorRole(ctx: any, reply: any): boolean {
+  if (ctx.role === 'OWNER' || ctx.role === 'ADMIN') return true;
+  reply.code(403).send({ error: 'INSUFFICIENT_ROLE' });
+  return false;
+}
+
+async function engineTickHandler(ctx: any, reply: any, body: any) {
   const { runEngineTick } = await import('./engine.js');
+  let now: Date | undefined;
+  if (body?.now !== undefined && body?.now !== null) {
+    now = new Date(body.now);
+    if (!Number.isFinite(now.getTime())) return reply.code(400).send({ error: 'INVALID_NOW' });
+  }
   const summary = await runEngineTick({
     workspaceId: ctx.workspaceId,
-    now: body?.now ? new Date(body.now) : undefined,
+    now,
     batchSize: body?.batchSize,
     leaseTtlMs: body?.leaseTtlMs,
     concurrency: body?.concurrency,
@@ -983,13 +1014,15 @@ async function engineTickHandler(ctx: any, body: any) {
 app.post('/api/jobs/scheduler/run', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;
-  return engineTickHandler(ctx, (req.body ?? {}) as any);
+  if (!requireOperatorRole(ctx, reply)) return;
+  return engineTickHandler(ctx, reply, (req.body ?? {}) as any);
 });
 
 app.post('/api/scheduler/run', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;
-  return engineTickHandler(ctx, (req.body ?? {}) as any);
+  if (!requireOperatorRole(ctx, reply)) return;
+  return engineTickHandler(ctx, reply, (req.body ?? {}) as any);
 });
 
 app.get('/api/engine/status', async (req, reply) => {
@@ -1003,8 +1036,8 @@ app.get('/api/engine/status', async (req, reply) => {
 app.post('/api/engine/tick', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;
-  if (ctx.role !== 'OWNER' && ctx.role !== 'ADMIN') return reply.code(403).send({ error: 'INSUFFICIENT_ROLE' });
-  return engineTickHandler(ctx, (req.body ?? {}) as any);
+  if (!requireOperatorRole(ctx, reply)) return;
+  return engineTickHandler(ctx, reply, (req.body ?? {}) as any);
 });
 
 // Company hierarchy and orchestration (Phase 20)

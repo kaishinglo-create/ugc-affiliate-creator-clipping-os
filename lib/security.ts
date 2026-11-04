@@ -1,6 +1,13 @@
 import { prisma } from './db.js';
 
-export async function isKillSwitchActive(workspaceId: string, tx: any = prisma) {
+/**
+ * `tx` is required on purpose: `KillSwitch` is protected by forced row-level
+ * security, so a client without `app.current_workspace_id` set cannot see the
+ * row at all and would silently report "inactive". Callers must pass a
+ * workspace-scoped transaction (see `withWorkspaceTransaction`).
+ */
+export async function isKillSwitchActive(workspaceId: string, tx: any) {
+  if (!tx) throw new Error('KILL_SWITCH_REQUIRES_WORKSPACE_TRANSACTION');
   const ks = await tx.killSwitch.findUnique({ where: { workspaceId } });
   return ks?.active === true;
 }

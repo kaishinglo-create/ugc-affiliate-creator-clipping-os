@@ -35,26 +35,42 @@ export async function startRun(workspaceId: string, definitionId: string, input:
   return run;
 }
 
+/**
+ * Stop a run that must not continue (kill switch, cancellation) and settle its
+ * job so the queue does not keep a lease on work nobody will finish.
+ */
+async function stopRun(tx: any, workspaceId: string, runId: string, error: string, reason: string) {
+  await tx.workflowRun.update({ where: { id: runId }, data: { status: 'cancelled', error, finishedAt: new Date() } });
+  await writeAuditEvent({ workspaceId, runId: null, type: 'workflow_run_blocked', actor: null, data: { runId, reason }, tx });
+  const job = await tx.job.findFirst({ where: { workspaceId, workflowRunId: runId } });
+  if (job && job.status !== 'CANCELLED' && job.status !== 'SUCCEEDED') {
+    await tx.job.update({ where: { id: job.id }, data: { status: 'CANCELLED', finishedAt: new Date(), lastError: error } });
+  }
+  return tx.workflowRun.findUnique({ where: { id: runId } });
+}
+
 export async function executeRun(workspaceId: string, runId: string) {
   return withWorkspaceTransaction(workspaceId, async (tx) => {
   const run = await tx.workflowRun.findUnique({ where: { id: runId }, include: { definition: true, steps: true } });
   if (!run) throw new Error('RUN_NOT_FOUND');
   if (run.status === 'succeeded' || run.status === 'cancelled' || run.status === 'running') return run;
-  const killSwitchActive = await isKillSwitchActive(workspaceId, tx);
-  if (killSwitchActive) {
-    await tx.workflowRun.update({ where: { id: runId }, data: { status: 'cancelled', error: 'KILL_SWITCH_ACTIVE', finishedAt: new Date() } });
-    await writeAuditEvent({ workspaceId, runId: null, type: 'workflow_run_blocked', actor: null, data: { runId, reason: 'KILL_SWITCH_ACTIVE' }, tx });
-    const blockedJob = await tx.job.findFirst({ where: { workflowRunId: runId } });
-    if (blockedJob) {
-      await tx.job.update({ where: { id: blockedJob.id }, data: { status: 'CANCELLED', finishedAt: new Date(), lastError: 'KILL_SWITCH_ACTIVE' } });
-    }
-    return tx.workflowRun.findUnique({ where: { id: runId } });
+  if (await isKillSwitchActive(workspaceId, tx)) {
+    return stopRun(tx, workspaceId, runId, 'KILL_SWITCH_ACTIVE', 'KILL_SWITCH_ACTIVE');
   }
   await tx.workflowRun.update({ where: { id: runId }, data: { status: 'running' } });
   await writeAuditEvent({ workspaceId, runId: null, type: 'workflow_run_started', actor: null, data: { runId, definitionId: run.definitionId }, tx });
   const steps = run.definition.steps as StepDef[];
   const current = run.currentStep;
   for (let i = current; i < steps.length; i++) {
+      // Re-checked before every step: a run must stop as soon as autonomy is
+      // revoked or the run is cancelled, not only at the start of execution.
+      const live: any = await tx.workflowRun.findUnique({ where: { id: runId }, select: { status: true } });
+      if (live?.status === 'cancelled') {
+        return stopRun(tx, workspaceId, runId, 'RUN_CANCELLED', 'RUN_CANCELLED');
+      }
+      if (await isKillSwitchActive(workspaceId, tx)) {
+        return stopRun(tx, workspaceId, runId, 'KILL_SWITCH_ACTIVE', 'KILL_SWITCH_ACTIVE');
+      }
       const step = steps[i];
       const approval = await tx.approval.findFirst({ where: { workspaceId, entityType: 'workflow_step', entityId: `${runId}#${step.action}` } });
       if (approval) {

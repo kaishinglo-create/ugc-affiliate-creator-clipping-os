@@ -1,5 +1,37 @@
 # STATE
 
+## Phase 22 — Engine hardening (2026-11-04)
+
+Phase: six confirmed defects fixed on `multi-agent-system` (Phase 21 engine audited first).
+Defects (each reproduced by a failing test before the fix, in `tests/engine-hardening.test.ts`):
+1. `isKillSwitchActive` defaulted to the global Prisma client; `KillSwitch` is protected by
+   forced RLS, so the orchestration worker read "inactive" and executed tasks under an active
+   kill switch. The transaction argument is now required (`lib/security.ts`) and
+   `src/orchestration.ts` passes a workspace-scoped one.
+2. Kill switch and cancellation were checked only at workflow entry: `executeRun` now re-checks
+   both before every step and stops the run with `KILL_SWITCH_ACTIVE` / `RUN_CANCELLED`,
+   settling the job (`src/workflows.ts`, `stopRun`).
+3. `POST /api/scheduler/run` and `POST /api/jobs/scheduler/run` ran the engine for any member.
+   Both now require OWNER/ADMIN, like `/api/engine/tick` (`requireOperatorRole`).
+4. An invalid `now` on a tick was silently ignored; it is now `400 INVALID_NOW`.
+5. An approval could be decided repeatedly, so a rejection could be flipped into an approval
+   (a publish gate). Deciding a non-pending approval is now `409 APPROVAL_ALREADY_DECIDED`.
+6. Approving an orchestration task through `POST /api/approvals/:id/decide` never resumed the
+   run: the route marked the approval approved and then delegated to a function that requires a
+   pending approval, and the worker re-created a fresh approval on every attempt so an approved
+   publishing task could never finish. Decisions now go through `decideOrchestrationTaskApproval`,
+   the worker reuses the existing approval row, and the engine resumes runs parked on an approval
+   whose decision has landed (`kickOrchestration`, `orchestrationAwaitingDecision`).
+
+Tests: typecheck PASS, build PASS, ESLint PASS, Vitest **32/32 files, 103/103 tests** PASS
+(6 new in `tests/engine-hardening.test.ts`).
+Not verified automatically: the signed-in dashboard (no replayed session this turn); the same
+routes are covered by the integration tests above.
+Blockers for the next phases: `OLLAMA_API_KEY` absent (Phase 23 cannot be verified live),
+no social-platform developer apps (Phase 26), no ffmpeg/media sources in this sandbox (Phase 25).
+Roadmap and phase-by-phase status: `docs/autonomous-build/PHASE-22.md`.
+Next: Phase 23 — provider-independent AI gateway with structured output and per-workspace budget.
+
 ## Phase 21 — Autonomous execution engine (2026-11-04)
 
 Phase: execution engine implemented on `multi-agent-system`.

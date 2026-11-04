@@ -317,6 +317,41 @@ export async function runEngineTick(opts: EngineTickOptions = {}): Promise<Engin
 const activeOrchestrations = new Set<string>();
 
 /**
+ * True while a task of the run is still blocked on an undecided approval. Such a
+ * run must not be driven; once every blocking approval is decided the run is
+ * resumable again.
+ */
+async function orchestrationAwaitingDecision(workspaceId: string, runId: string): Promise<boolean> {
+  return withWorkspaceTransaction(workspaceId, async (tx) => {
+    const tasks = await tx.orchestrationTask.findMany({
+      where: { workspaceId, runId, status: 'waiting_for_approval' },
+      select: { approvalId: true },
+    });
+    if (tasks.length === 0) return false;
+    for (const task of tasks) {
+      if (!task.approvalId) return true;
+      const approval = await tx.approval.findUnique({ where: { id: String(task.approvalId) }, select: { status: true } });
+      if (!approval || approval.status === 'pending') return true;
+    }
+    return false;
+  });
+}
+
+/**
+ * Drive one orchestration run unless this process already drives it. Used by the
+ * engine tick and by approval decisions so a granted approval makes progress
+ * immediately; the tick remains the durable backstop after a restart.
+ */
+export function kickOrchestration(workspaceId: string, runId: string): Promise<void> {
+  if (activeOrchestrations.has(runId)) return Promise.resolve();
+  activeOrchestrations.add(runId);
+  return runOrchestration(workspaceId, runId)
+    .then(() => undefined)
+    .catch(() => undefined)
+    .finally(() => activeOrchestrations.delete(runId));
+}
+
+/**
  * Restart recovery for orchestration runs: a run left `queued`/`running` after a
  * crash has no live driver, so the engine restarts it. Runs already driven by
  * this process are skipped, so a run is never driven twice at once.
@@ -331,20 +366,26 @@ export async function resumeStaleOrchestrations(opts: { workspaceId?: string | n
     try {
       const killActive = await withWorkspaceTransaction(workspace.id, (tx) => isKillSwitchActive(workspace.id, tx));
       if (killActive) continue;
+      // Stale runs have lost their driver; runs parked on an approval are only
+      // picked up again once the approval has actually been decided.
       const runs: any[] = await withWorkspaceTransaction(workspace.id, (tx) =>
         tx.orchestrationRun.findMany({
-          where: { workspaceId: workspace.id, status: { in: ['queued', 'running'] }, updatedAt: { lt: staleBefore } },
-          select: { id: true },
-          take: 5,
+          where: {
+            workspaceId: workspace.id,
+            OR: [
+              { status: { in: ['queued', 'running'] }, updatedAt: { lt: staleBefore } },
+              { status: 'waiting_for_approval' },
+            ],
+          },
+          select: { id: true, status: true },
+          take: 10,
         })
       );
       for (const run of runs) {
         if (activeOrchestrations.has(run.id)) continue;
-        activeOrchestrations.add(run.id);
+        if (run.status === 'waiting_for_approval' && (await orchestrationAwaitingDecision(workspace.id, String(run.id)))) continue;
         resumed += 1;
-        runOrchestration(workspace.id, run.id)
-          .catch(() => undefined)
-          .finally(() => activeOrchestrations.delete(run.id));
+        void kickOrchestration(workspace.id, String(run.id));
       }
     } catch {
       continue;
