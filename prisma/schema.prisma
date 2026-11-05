@@ -739,6 +739,10 @@ model OrchestrationRun {
   spentUnits     Int                 @default(0)
   maxConcurrency Int                 @default(2)
   currentStage   String?
+  leaseOwner     String?
+  leaseToken     String?             @unique
+  leaseExpiresAt DateTime?
+  leaseEpoch     Int                 @default(0)
   startedAt      DateTime?
   finishedAt     DateTime?
   createdAt      DateTime            @default(now())
