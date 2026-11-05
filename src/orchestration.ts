@@ -469,8 +469,10 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
       await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'queued', error: message, startedAt: null, finishedAt: null } }));
     } else {
       const finalStatus = jobAfter?.status === 'DEAD_LETTER' ? 'dead_letter' : 'failed';
-      await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: finalStatus, error: message, finishedAt: now() } }));
-      await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_task_failed', actor: null, data: { jobId, taskId: task.id, department: task.departmentKey, error: message } });
+      await withWorkspaceTransaction(workspaceId, async (tx) => {
+        await tx.orchestrationTask.update({ where: { id: task.id }, data: { status: finalStatus, error: message, finishedAt: now() } });
+        await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_task_failed', actor: null, data: { jobId, taskId: task.id, department: task.departmentKey, error: message }, tx });
+      });
     }
   }
 }
