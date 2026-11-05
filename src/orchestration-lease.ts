@@ -9,7 +9,6 @@ export type OrchestrationLease = {
   epoch: number;
 };
 
-const TERMINAL = ['succeeded', 'failed', 'cancelled'];
 
 export async function claimOrchestrationLease(
   workspaceId: string,
