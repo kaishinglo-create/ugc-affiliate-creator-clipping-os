@@ -166,6 +166,22 @@ describe('ai gateway', () => {
     expect(provider.calls).toHaveLength(0);
   });
 
+  it('atomically limits 100 concurrent AI calls to the configured quota', async () => {
+    process.env.AI_MAX_DAILY_REQUESTS_PER_WORKSPACE = '10';
+    const ws = await workspace();
+    const provider = new FakeProvider(() => result(VALID_RESEARCH));
+    const settled = await Promise.allSettled(
+      Array.from({ length: 100 }, () => generateStructured(researchInvocation(ws, provider))),
+    );
+    const accepted = settled.filter((entry) => entry.status === 'fulfilled');
+    const rejected = settled.filter((entry) => entry.status === 'rejected');
+    expect(accepted).toHaveLength(10);
+    expect(rejected).toHaveLength(90);
+    expect(provider.calls).toHaveLength(10);
+    expect(await aiAuditEvents(ws)).toHaveLength(10);
+    expect(rejected.every((entry) => entry.status === 'rejected' && entry.reason instanceof AIUsageLimitError)).toBe(true);
+  });
+
   it('reports AI as unconfigured without an API key and never invents a provider answer', async () => {
     const provider = new FakeProvider(() => result(VALID_RESEARCH), false);
     expect(isAIConfigured(provider)).toBe(false);
