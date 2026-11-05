@@ -455,7 +455,7 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
 
     await withWorkspaceTransaction(workspaceId, async (tx) => {
       await tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'succeeded', output, finishedAt: now(), actualUnits: Number(task.estimatedUnits ?? 1) } });
-      await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_task_succeeded', actor: null, data: { jobId, taskId: task.id, department: task.departmentKey } });
+      await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_task_succeeded', actor: null, data: { jobId, taskId: task.id, department: task.departmentKey } , tx });
     });
     await completeJob(jobId, { leaseId, workerId, workspaceId });
   } catch (error) {
@@ -524,7 +524,7 @@ export async function runOrchestration(workspaceId: string, runId: string): Prom
     if (tasks.length > 0 && tasks.every((task) => task.status === 'succeeded')) {
       await withWorkspaceTransaction(workspaceId, async (tx) => {
         await tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'succeeded', result: { tasks: tasks.map((task) => ({ id: task.id, output: task.output })) }, finishedAt: now(), currentStage: 'completed' } });
-        await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_succeeded', actor: null, data: { taskCount: tasks.length } });
+        await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_succeeded', actor: null, data: { taskCount: tasks.length } , tx });
       });
       return getRun(workspaceId, runId);
     }
@@ -607,8 +607,8 @@ export async function cancelOrchestrationRun(workspaceId: string, runId: string,
   return withWorkspaceTransaction(workspaceId, async (tx) => {
     await tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'cancelled', error: reason, finishedAt: now(), currentStage: 'cancelled' } });
     await tx.orchestrationTask.updateMany({ where: { workspaceId, runId, status: { in: ['queued', 'running', 'waiting_for_approval'] } }, data: { status: 'cancelled', finishedAt: now(), error: reason } });
-    await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_cancel_requested', actor: null, data: { reason, requestedJobs: tasks.map((t: any) => t.jobId).filter(Boolean) } });
-    await writeAuditEvent({ workspaceId, runId: null, type: cancelErrors.length ? 'orchestration_cancel_failed' : 'orchestration_cancel_succeeded', actor: null, data: { reason, cancelErrors } });
+    await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_cancel_requested', actor: null, data: { reason, requestedJobs: tasks.map((t: any) => t.jobId).filter(Boolean) } , tx });
+    await writeAuditEvent({ workspaceId, runId: null, type: cancelErrors.length ? 'orchestration_cancel_failed' : 'orchestration_cancel_succeeded', actor: null, data: { reason, cancelErrors } , tx });
     return tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true } });
   });
 }
@@ -636,7 +636,7 @@ export async function decideOrchestrationTaskApproval(workspaceId: string, runId
         } catch {}
       }
     }
-    await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_approval_decided', actor: actor ?? null, data: { taskId, approved, reason } });
+    await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_approval_decided', actor: actor ?? null, data: { taskId, approved, reason } , tx });
     return tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true } });
   });
 }
