@@ -55,7 +55,7 @@ async function reserveRequest(workspaceId: string, context: AIUsageContext, prov
   if (limit <= 0) throw new AIConfigurationError('AI_BUDGET_DISABLED', { limit });
   const day = startOfUtcDay();
   return withWorkspaceTransaction(workspaceId, async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${'ai_request:' + workspaceId + ':' + day.toISOString()}, 0))`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${'ai_request:' + workspaceId + ':' + day.toISOString()}, 0))`;
     const used = await tx.auditEvent.count({
       where: { workspaceId, type: AUDIT_TYPE, createdAt: { gte: day } },
     });
