@@ -465,7 +465,7 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
     const jobAfter = await failJob(jobId, { error: message, retryable }, { leaseId, workerId, workspaceId });
     const attempts = Number(updatedTask?.attemptCount ?? 0);
     const maxAttempts = Number(task.maxAttempts ?? 2);
-    if (attempts < maxAttempts && jobAfter?.status !== 'DEAD_LETTER') {
+    if (retryable && attempts < maxAttempts && jobAfter?.status === 'RETRY_WAIT') {
       await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'queued', error: message, startedAt: null, finishedAt: null } }));
     } else {
       const finalStatus = jobAfter?.status === 'DEAD_LETTER' ? 'dead_letter' : 'failed';
