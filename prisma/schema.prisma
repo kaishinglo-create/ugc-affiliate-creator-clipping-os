@@ -753,6 +753,7 @@ model OrchestrationRun {
   @@unique([workspaceId, idempotencyKey])
   @@index([workspaceId, status])
   @@index([workspaceId, createdAt])
+  @@index([workspaceId, leaseExpiresAt])
 }
 
 model OrchestrationTask {
