@@ -43,6 +43,8 @@ export interface ClaimJobsOptions {
   leaseTtlMs?: number;
   workerId?: string;
   priorityBoost?: number;
+  /** Restrict claiming to these job types. Omitting it keeps the historical behaviour (all types). */
+  types?: JobTypeValue[];
 }
 
 export interface HeartbeatOptions {
@@ -249,6 +251,8 @@ export async function claimDueJobs(workspaceId: string, workerId: string, opts: 
 
   const leaseId = randomUUID();
   const leaseExpiresAt = new Date(now.getTime() + leaseTtlMs);
+  // Empty string means "no type filter"; otherwise a comma separated allowlist.
+  const typeFilter = Array.isArray(opts.types) && opts.types.length > 0 ? opts.types.map(String).join(',') : '';
 
   const rows = await withWorkspaceTransaction(workspaceId, async (tx) => {
     return tx.$queryRaw`
@@ -264,6 +268,7 @@ export async function claimDueJobs(workspaceId: string, workerId: string, opts: 
         SELECT k."id"
         FROM "Job" AS k
         WHERE k."workspaceId" = ${workspaceId}
+          AND (${typeFilter} = '' OR k."type"::text = ANY (string_to_array(${typeFilter}, ',')))
           AND k."status"::text IN ('QUEUED', 'RETRY_WAIT')
           AND k."runAt" <= ${now}
           AND (k."leaseExpiresAt" IS NULL OR k."leaseExpiresAt" < ${now})
@@ -583,10 +588,10 @@ export async function markWaitingForApproval(jobId: string, opts: JobActionOptio
   const updated = await withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   await writeAuditEvent({
     workspaceId: job.workspaceId,
-    runId: job.workflowRunId,
+    runId: null,
     type: 'job_waiting_for_approval',
     actor: opts.actor ?? null,
-    data: { jobId, status: 'WAITING_FOR_APPROVAL', ...(opts.data as any) },
+    data: { workflowRunId: job.workflowRunId, jobId, status: 'WAITING_FOR_APPROVAL', ...(opts.data as any) },
   });
   return updated;
 }
@@ -620,10 +625,10 @@ export async function resumeAfterApproval(jobId: string, opts: JobActionOptions 
   const updated = await withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   await writeAuditEvent({
     workspaceId: job.workspaceId,
-    runId: job.workflowRunId,
+    runId: null,
     type: 'job_resumed_after_approval',
     actor: opts.actor ?? null,
-    data: { jobId, status: 'QUEUED' },
+    data: { workflowRunId: job.workflowRunId, jobId, status: 'QUEUED' },
   });
   return updated;
 }
@@ -658,10 +663,10 @@ export async function rejectJob(jobId: string, opts: JobActionOptions = { worksp
   const updated = await withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   await writeAuditEvent({
     workspaceId: job.workspaceId,
-    runId: job.workflowRunId,
+    runId: null,
     type: 'approval_rejected',
     actor: opts.actor ?? null,
-    data: { jobId, status: 'FAILED', error },
+    data: { workflowRunId: job.workflowRunId, jobId, status: 'FAILED', error },
   });
   return updated;
 }
@@ -699,10 +704,10 @@ export async function requeueDeadLetterJob(jobId: string, opts: RequeueOptions =
   const updated = await withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   await writeAuditEvent({
     workspaceId: job.workspaceId,
-    runId: job.workflowRunId,
+    runId: null,
     type: 'job_requeued',
     actor: opts.actor ?? null,
-    data: { jobId, status: 'QUEUED', reason: opts.reason ?? null },
+    data: { workflowRunId: job.workflowRunId, jobId, status: 'QUEUED', reason: opts.reason ?? null },
   });
   return updated;
 }

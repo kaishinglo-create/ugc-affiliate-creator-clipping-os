@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 import { withWorkspaceTransaction } from '../lib/db.js';
 import { writeAuditEvent } from '../lib/audit.js';
 import { isKillSwitchActive } from '../lib/security.js';
+import { runAgentTask } from './ai/agent-runtime.js';
+import { isAIGatewayError } from './ai/errors.js';
 import {
   createJob,
   claimJobById,
@@ -396,7 +398,7 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
   }
   const taskRunGoal = String((task.input as any)?.goal ?? run.goal ?? '');
 
-  if (await isKillSwitchActive(workspaceId)) {
+  if (await withWorkspaceTransaction(workspaceId, (tx) => isKillSwitchActive(workspaceId, tx))) {
     await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'cancelled', error: 'KILL_SWITCH_ACTIVE', finishedAt: now() } }));
     await cancelJob(jobId, { reason: 'KILL_SWITCH_ACTIVE', leaseId, workerId, workspaceId });
     return;
@@ -406,20 +408,50 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
   const updatedTask: any = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.findUnique({ where: { id: task.id } }));
 
   if (task.requiresApproval) {
-    const approval: any = await withWorkspaceTransaction(workspaceId, (tx) => tx.approval.create({ data: { workspaceId, entityType: 'orchestration_task', entityId: task.id, requestedBy: null } }));
-    await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'waiting_for_approval', approvalId: approval.id } }));
-    await markWaitingForApproval(jobId, { leaseId, workerId, workspaceId });
-    await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_task_approval_requested', actor: null, data: { jobId, taskId: task.id, approvalId: approval.id } });
-    return;
+    // An approval is a decision about the task, not about one attempt: reuse the
+    // existing row so a granted approval lets the retried task run and a
+    // rejection stops it, instead of asking for approval again on every attempt.
+    const existing: any = await withWorkspaceTransaction(workspaceId, async (tx) => {
+      if (task.approvalId) {
+        const row = await tx.approval.findUnique({ where: { id: String(task.approvalId) } });
+        if (row) return row;
+      }
+      return tx.approval.findFirst({
+        where: { workspaceId, entityType: 'orchestration_task', entityId: String(task.id) },
+        orderBy: { createdAt: 'desc' },
+      });
+    });
+
+    if (existing && existing.status === 'rejected') {
+      await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({
+        where: { id: task.id },
+        data: { status: 'failed', error: 'APPROVAL_REJECTED', approvalId: existing.id, finishedAt: now() },
+      }));
+      await failJob(jobId, { error: 'APPROVAL_REJECTED', retryable: false }, { leaseId, workerId, workspaceId });
+      return;
+    }
+
+    if (!existing || existing.status === 'pending') {
+      const approval: any = existing ?? await withWorkspaceTransaction(workspaceId, (tx) => tx.approval.create({ data: { workspaceId, entityType: 'orchestration_task', entityId: String(task.id), requestedBy: null } }));
+      await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'waiting_for_approval', approvalId: approval.id } }));
+      await markWaitingForApproval(jobId, { leaseId, workerId, workspaceId });
+      await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_task_approval_requested', actor: null, data: { jobId, taskId: task.id, approvalId: approval.id } });
+      return;
+    }
+    // Approved: fall through and execute the task.
   }
 
-    let controller: AbortController | null = new AbortController();
-  const timer = setTimeout(() => controller?.abort(), Number(task.timeoutMs ?? 30000));
   try {
-    const output = departmentProduces(String(task.departmentKey), action, taskRunGoal);
-    if (controller?.signal.aborted) throw new Error('TASK_TIMEOUT');
-    clearTimeout(timer);
-    controller = null;
+    // The agent runtime enforces the task timeout on the provider request and
+    // returns deterministic planner output only when AI is not configured.
+    const output = await runAgentTask({
+      workspaceId,
+      departmentKey: String(task.departmentKey),
+      action,
+      goal: taskRunGoal,
+      timeoutMs: Number(task.timeoutMs ?? 30000),
+      deterministic: () => departmentProduces(String(task.departmentKey), action, taskRunGoal),
+    });
 
     await withWorkspaceTransaction(workspaceId, async (tx) => {
       await tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'succeeded', output, finishedAt: now(), actualUnits: Number(task.estimatedUnits ?? 1) } });
@@ -427,13 +459,13 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
     });
     await completeJob(jobId, { leaseId, workerId, workspaceId });
   } catch (error) {
-    clearTimeout(timer);
-    if (controller) controller.abort();
     const message = sanitizeError(error);
-    const jobAfter = await failJob(jobId, { error: message, retryable: true }, { leaseId, workerId, workspaceId });
+    // AI configuration and budget failures are not retryable; upstream timeouts are.
+    const retryable = !isAIGatewayError(error) || error.retryable;
+    const jobAfter = await failJob(jobId, { error: message, retryable }, { leaseId, workerId, workspaceId });
     const attempts = Number(updatedTask?.attemptCount ?? 0);
     const maxAttempts = Number(task.maxAttempts ?? 2);
-    if (attempts < maxAttempts && jobAfter?.status !== 'DEAD_LETTER') {
+    if (retryable && attempts < maxAttempts && jobAfter?.status === 'RETRY_WAIT') {
       await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'queued', error: message, startedAt: null, finishedAt: null } }));
     } else {
       const finalStatus = jobAfter?.status === 'DEAD_LETTER' ? 'dead_letter' : 'failed';

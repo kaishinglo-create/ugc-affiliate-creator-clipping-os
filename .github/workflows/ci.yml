@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, multi-agent-system, 'security/phase-24-*']
   pull_request:
     branches: [main]
 
