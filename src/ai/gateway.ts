@@ -45,11 +45,31 @@ async function countTodayRequests(workspaceId: string): Promise<number> {
   );
 }
 
-async function assertWithinBudget(workspaceId: string): Promise<void> {
+/**
+ * Serialize reservations across processes with a transaction-scoped PostgreSQL
+ * advisory lock. The audit row is the durable reservation and is never deleted:
+ * even a failed provider request consumes one daily request slot.
+ */
+async function reserveRequest(workspaceId: string, context: AIUsageContext, provider: string, model: string): Promise<string> {
   const limit = dailyRequestLimit();
   if (limit <= 0) throw new AIConfigurationError('AI_BUDGET_DISABLED', { limit });
-  const used = await countTodayRequests(workspaceId);
-  if (used >= limit) throw new AIUsageLimitError('AI_BUDGET_EXCEEDED', { used, limit });
+  const day = startOfUtcDay();
+  return withWorkspaceTransaction(workspaceId, async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${'ai_request:' + workspaceId + ':' + day.toISOString()}, 0))`;
+    const used = await tx.auditEvent.count({
+      where: { workspaceId, type: AUDIT_TYPE, createdAt: { gte: day } },
+    });
+    if (used >= limit) throw new AIUsageLimitError('AI_BUDGET_EXCEEDED', { used, limit });
+    const row = await writeAuditEvent({
+      workspaceId, type: AUDIT_TYPE, actor: null, tx,
+      data: {
+        agent: context.agentKey, department: context.departmentKey,
+        action: context.action, provider, model,
+        goalLength: context.goalLength, outcome: 'reserved',
+      },
+    });
+    return row.id;
+  });
 }
 
 export interface AIUsageContext {
@@ -71,9 +91,10 @@ function parseJsonObject(content: string): { ok: true; value: unknown } | { ok: 
   }
 }
 
-/** Best effort: usage accounting must never mask the real AI error. */
+/** Complete the durable reservation. Audit failures are never silently ignored. */
 async function recordUsage(
   context: AIUsageContext,
+  reservationId: string,
   data: {
     provider: string;
     model: string | null;
@@ -83,32 +104,21 @@ async function recordUsage(
   },
   usage: AIUsage | null,
 ): Promise<void> {
-  try {
-    await withWorkspaceTransaction(context.workspaceId, (tx) =>
-      writeAuditEvent({
-        workspaceId: context.workspaceId,
-        type: AUDIT_TYPE,
-        actor: null,
-        tx,
-        data: {
-          agent: context.agentKey,
-          department: context.departmentKey,
-          action: context.action,
-          provider: data.provider,
-          model: data.model,
-          latencyMs: data.latencyMs,
-          outcome: data.outcome,
-          errorCode: data.errorCode,
-          goalLength: context.goalLength,
-          promptTokens: usage?.promptTokens ?? null,
-          completionTokens: usage?.completionTokens ?? null,
-          totalTokens: usage?.totalTokens ?? null,
-        },
-      }),
-    );
-  } catch {
-    // Deliberately ignored: accounting is not allowed to change the AI outcome.
-  }
+  await withWorkspaceTransaction(context.workspaceId, async (tx) => {
+    const updated = await tx.auditEvent.updateMany({
+      where: { id: reservationId, workspaceId: context.workspaceId, type: AUDIT_TYPE },
+      data: { data: {
+        agent: context.agentKey, department: context.departmentKey,
+        action: context.action, provider: data.provider, model: data.model,
+        latencyMs: data.latencyMs, outcome: data.outcome,
+        errorCode: data.errorCode, goalLength: context.goalLength,
+        promptTokens: usage?.promptTokens ?? null,
+        completionTokens: usage?.completionTokens ?? null,
+        totalTokens: usage?.totalTokens ?? null,
+      } },
+    });
+    if (updated.count !== 1) throw new Error('AI_AUDIT_RESERVATION_MISSING');
+  });
 }
 
 export interface GenerateStructuredInput<T> {
@@ -145,8 +155,6 @@ export async function generateStructured<T>(input: GenerateStructuredInput<T>): 
   if (!provider.configured) throw new AIConfigurationError('AI_NOT_CONFIGURED', { provider: provider.name });
 
   const model = input.model?.trim() || resolveAgentModel(input.agentKey);
-  await assertWithinBudget(input.workspaceId);
-
   const usageContext: AIUsageContext = {
     workspaceId: input.workspaceId,
     agentKey: input.agentKey,
@@ -155,6 +163,7 @@ export async function generateStructured<T>(input: GenerateStructuredInput<T>): 
     goalLength: input.goal.length,
   };
 
+  const reservationId = await reserveRequest(input.workspaceId, usageContext, provider.name, model);
   const startedAt = Date.now();
   let result;
   try {
@@ -170,7 +179,7 @@ export async function generateStructured<T>(input: GenerateStructuredInput<T>): 
     });
   } catch (error) {
     const code = error instanceof AIGatewayError ? error.code : 'AI_UPSTREAM_ERROR';
-    await recordUsage(usageContext, { provider: provider.name, model, latencyMs: Date.now() - startedAt, outcome: 'error', errorCode: code }, null);
+    await recordUsage(usageContext, reservationId, { provider: provider.name, model, latencyMs: Date.now() - startedAt, outcome: 'error', errorCode: code }, null);
     throw error;
   }
 
@@ -178,7 +187,7 @@ export async function generateStructured<T>(input: GenerateStructuredInput<T>): 
   const parsed = parseJsonObject(result.content);
   if (!parsed.ok) {
     const error = new AIValidationError({ reason: parsed.reason });
-    await recordUsage(usageContext, { provider: provider.name, model: result.model, latencyMs, outcome: 'invalid_output', errorCode: error.code }, result.usage);
+    await recordUsage(usageContext, reservationId, { provider: provider.name, model: result.model, latencyMs, outcome: 'invalid_output', errorCode: error.code }, result.usage);
     throw error;
   }
 
@@ -187,11 +196,11 @@ export async function generateStructured<T>(input: GenerateStructuredInput<T>): 
     const error = new AIValidationError({
       issues: validated.error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
     });
-    await recordUsage(usageContext, { provider: provider.name, model: result.model, latencyMs, outcome: 'invalid_output', errorCode: error.code }, result.usage);
+    await recordUsage(usageContext, reservationId, { provider: provider.name, model: result.model, latencyMs, outcome: 'invalid_output', errorCode: error.code }, result.usage);
     throw error;
   }
 
-  await recordUsage(usageContext, { provider: provider.name, model: result.model, latencyMs, outcome: 'success', errorCode: null }, result.usage);
+  await recordUsage(usageContext, reservationId, { provider: provider.name, model: result.model, latencyMs, outcome: 'success', errorCode: null }, result.usage);
   return { data: validated.data as T, model: result.model, provider: provider.name, usage: result.usage, latencyMs };
 }
 
