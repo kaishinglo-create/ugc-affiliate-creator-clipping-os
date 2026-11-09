@@ -28,7 +28,7 @@ describe('persistent orchestration lease recovery', () => {
       // Exercise the normal driver on one task so the takeover reaches a
       // terminal state without needing to arrange a publishing approval.
       await withWorkspaceTransaction(workspaceId, (tx) =>
-        tx.orchestrationTask.deleteMany({ where: { runId: run.id, departmentKey: { not: 'ceo' } } })
+        tx.orchestrationTask.deleteMany({ where: { runId: run.id, id: { not: `${run.id}-ceo-root` } } })
       );
       first = runOrchestration(workspaceId, run.id);
       await Promise.race([started, first.then(() => { throw new Error('First worker exited before starting its task'); })]);
