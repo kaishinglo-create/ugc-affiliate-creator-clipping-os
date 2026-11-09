@@ -28,6 +28,7 @@ import {
   recoverExpiredJobs,
 } from './jobs.js';
 import { executeRun } from './workflows.js';
+import { discoveryEnabled, executeDiscovery } from './discovery.js';
 import { runOrchestration } from './orchestration.js';
 
 export const DEFAULT_ENGINE_POLL_INTERVAL_MS = 3_000;
@@ -186,6 +187,10 @@ async function executeClaimedJob(workspaceId: string, job: any, workerId: string
       const result = await executeWorkflowJob(workspaceId, job, workerId, leaseTtlMs);
       outcome = result.outcome;
       error = result.error;
+    } else if (job.type === 'CONTENT_DISCOVERY') {
+      const result = await executeDiscovery(workspaceId, job, workerId, leaseTtlMs);
+      outcome = result.outcome;
+      error = result.error;
     } else {
       // Other job types are owned by their own driver (orchestration owns
       // AGENT_TASK); leave the claim decision to them.
@@ -194,7 +199,7 @@ async function executeClaimedJob(workspaceId: string, job: any, workerId: string
   } catch (unexpected) {
     error = sanitizeError(unexpected);
     outcome = 'retry';
-    await failJob(job.id, { error, retryable: true }, { workspaceId, workerId }).catch(() => undefined);
+    await failJob(job.id, { error, retryable: true }, { workspaceId, workerId, leaseId: job.leaseId }).catch(() => undefined);
   }
 
   try {
@@ -280,7 +285,7 @@ export async function runEngineTick(opts: EngineTickOptions = {}): Promise<Engin
         now,
         limit: batchSize,
         leaseTtlMs,
-        types: ['WORKFLOW_RUN'],
+        types: discoveryEnabled() ? ['WORKFLOW_RUN', 'CONTENT_DISCOVERY'] : ['WORKFLOW_RUN'],
       });
       summary.claimed += claimed.length;
 

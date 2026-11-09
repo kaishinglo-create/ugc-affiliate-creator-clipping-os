@@ -821,7 +821,7 @@ app.post('/api/jobs', async (req, reply) => {
   if (!ctx) return;
   const body = (req.body ?? {}) as any;
   const type = String(body.type ?? 'WORKFLOW_RUN').trim() as any;
-  if (!type) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  if (!type || type === 'CONTENT_DISCOVERY') return reply.code(400).send({ error: 'INVALID_INPUT' });
   const { createJob } = await import('./jobs.js');
   const job = await createJob({ workspaceId: ctx.workspaceId, type, category: body.category ?? null, priority: body.priority, payload: body.payload ?? {}, idempotencyKey: body.idempotencyKey ?? null, maxAttempts: body.maxAttempts, timeoutMs: body.timeoutMs, runAt: body.runAt ? new Date(body.runAt) : null });
   reply.code(201).send({ job });
@@ -866,6 +866,7 @@ app.post('/api/jobs/:id/heartbeat', async (req, reply) => {
   const { getJob } = await import('./jobs.js');
   const job = await getJob(id, ctx.workspaceId);
   if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (job.type === 'CONTENT_DISCOVERY' && !requireOperatorRole(ctx, reply)) return;
   const { heartbeatJob } = await import('./jobs.js');
   const leaseId = String(body.leaseId ?? job.leaseId);
   const workerId = String(body.workerId ?? job.leaseOwner ?? ctx.userId);
@@ -881,6 +882,7 @@ app.post('/api/jobs/:id/complete', async (req, reply) => {
   const { getJob } = await import('./jobs.js');
   const job = await getJob(id, ctx.workspaceId);
   if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (job.type === 'CONTENT_DISCOVERY' && !requireOperatorRole(ctx, reply)) return;
   const { completeJob } = await import('./jobs.js');
   const updated = await completeJob(id, { leaseId: body.leaseId ?? job.leaseId, workerId: body.workerId ?? job.leaseOwner, workspaceId: ctx.workspaceId });
   return { job: updated };
@@ -894,6 +896,7 @@ app.post('/api/jobs/:id/fail', async (req, reply) => {
   const { getJob } = await import('./jobs.js');
   const job = await getJob(id, ctx.workspaceId);
   if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (job.type === 'CONTENT_DISCOVERY' && !requireOperatorRole(ctx, reply)) return;
   const { failJob } = await import('./jobs.js');
   const updated = await failJob(id, { error: body.error ?? body.reason, retryable: body.retryable, nextRunAt: body.nextRunAt ? new Date(body.nextRunAt) : undefined, leaseId: body.leaseId ?? job.leaseId, workerId: body.workerId ?? job.leaseOwner, workspaceId: ctx.workspaceId }, { workspaceId: ctx.workspaceId });
   return { job: updated };
@@ -907,6 +910,7 @@ app.post('/api/jobs/:id/cancel', async (req, reply) => {
   const { getJob } = await import('./jobs.js');
   const job = await getJob(id, ctx.workspaceId);
   if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (job.type === 'CONTENT_DISCOVERY' && !requireOperatorRole(ctx, reply)) return;
   const { cancelJob } = await import('./jobs.js');
   const updated = await cancelJob(id, { reason: body.reason, leaseId: body.leaseId ?? job.leaseId, workerId: body.workerId ?? job.leaseOwner, workspaceId: ctx.workspaceId });
   return { job: updated };
@@ -920,6 +924,7 @@ app.post('/api/jobs/:id/requeue', async (req, reply) => {
   const { getJob } = await import('./jobs.js');
   const job = await getJob(id, ctx.workspaceId);
   if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (job.type === 'CONTENT_DISCOVERY' && !requireOperatorRole(ctx, reply)) return;
   const { requeueDeadLetterJob } = await import('./jobs.js');
   const updated = await requeueDeadLetterJob(id, { actor: ctx.userId, reason: body.reason ?? null, maxAttempts: body.maxAttempts, workspaceId: ctx.workspaceId });
   return { job: updated };
@@ -933,6 +938,7 @@ app.post('/api/jobs/:id/retry', async (req, reply) => {
   const { getJob } = await import('./jobs.js');
   const job = await getJob(id, ctx.workspaceId);
   if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (job.type === 'CONTENT_DISCOVERY' && !requireOperatorRole(ctx, reply)) return;
   const { requeueDeadLetterJob } = await import('./jobs.js');
   const updated = await requeueDeadLetterJob(id, { actor: ctx.userId, reason: body.reason ?? null, maxAttempts: body.maxAttempts, workspaceId: ctx.workspaceId });
   return { job: updated };
@@ -946,6 +952,7 @@ app.post('/api/jobs/:id/resume', async (req, reply) => {
   const { getJob } = await import('./jobs.js');
   const job = await getJob(id, ctx.workspaceId);
   if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (job.type === 'CONTENT_DISCOVERY' && !requireOperatorRole(ctx, reply)) return;
   const { resumeJob } = await import('./jobs.js');
   const updated = await resumeJob(id, { actor: ctx.userId, reason: body.reason ?? null, leaseId: body.leaseId ?? job.leaseId, workerId: body.workerId ?? job.leaseOwner, workspaceId: ctx.workspaceId });
   return { job: updated };
@@ -989,6 +996,24 @@ function requireOperatorRole(ctx: any, reply: any): boolean {
   reply.code(403).send({ error: 'INSUFFICIENT_ROLE' });
   return false;
 }
+
+app.post('/api/discovery/searches', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const { discoveryEnabled, discoveryInput, enqueueDiscovery } = await import('./discovery.js');
+  if (!discoveryEnabled()) return reply.code(503).send({ error: 'DISCOVERY_NOT_CONFIGURED' });
+  const input = discoveryInput.safeParse(req.body);
+  if (!input.success) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const job = await enqueueDiscovery(ctx.workspaceId, input.data);
+  return reply.code(202).send({ job });
+});
+
+app.get('/api/discovery/candidates', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { listDiscoveryCandidates } = await import('./discovery.js');
+  return { candidates: await listDiscoveryCandidates(ctx.workspaceId) };
+});
 
 async function engineTickHandler(ctx: any, reply: any, body: any) {
   const { runEngineTick } = await import('./engine.js');
