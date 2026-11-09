@@ -1015,6 +1015,22 @@ app.get('/api/discovery/candidates', async (req, reply) => {
   return { candidates: await listDiscoveryCandidates(ctx.workspaceId) };
 });
 
+app.get('/api/discovery/schedule', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { getDiscoverySchedule } = await import('./discovery.js');
+  return { schedule: await getDiscoverySchedule(ctx.workspaceId) };
+});
+
+app.put('/api/discovery/schedule', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const { discoveryScheduleInput, setDiscoverySchedule } = await import('./discovery.js');
+  const input = discoveryScheduleInput.safeParse(req.body);
+  if (!input.success) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  return { schedule: await setDiscoverySchedule(ctx.workspaceId, input.data, ctx.userId) };
+});
+
 async function engineTickHandler(ctx: any, reply: any, body: any) {
   const { runEngineTick } = await import('./engine.js');
   let now: Date | undefined;
