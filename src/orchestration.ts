@@ -650,9 +650,8 @@ export async function decideOrchestrationTaskApproval(workspaceId: string, runId
     const task = await tx.orchestrationTask.findUnique({ where: { id: taskId } });
     if (!task || task.runId !== runId) throw Object.assign(new Error('TASK_NOT_FOUND'), { statusCode: 404 });
     if (!task.approvalId) throw Object.assign(new Error('APPROVAL_NOT_FOUND'), { statusCode: 404 });
-    const approval = await tx.approval.findUnique({ where: { id: task.approvalId } });
-    if (!approval || approval.status !== 'pending') throw Object.assign(new Error('APPROVAL_NOT_PENDING'), { statusCode: 409 });
-    await tx.approval.update({ where: { id: task.approvalId }, data: { status: approved ? 'approved' : 'rejected', decidedBy: actor ?? null, decidedAt: now(), reason: reason ?? null } });
+    const decision = await tx.approval.updateMany({ where: { id: task.approvalId, status: 'pending' }, data: { status: approved ? 'approved' : 'rejected', decidedBy: actor ?? null, decidedAt: now(), reason: reason ?? null } });
+    if (decision.count !== 1) throw Object.assign(new Error('APPROVAL_NOT_PENDING'), { statusCode: 409 });
     await tx.orchestrationTask.update({ where: { id: taskId }, data: { status: approved ? 'queued' : 'failed', error: approved ? null : (reason ?? 'APPROVAL_REJECTED'), finishedAt: approved ? null : now() } });
     if (task.jobId) {
       if (approved) {
@@ -676,13 +675,6 @@ export async function getOrchestrationRun(workspaceId: string, runId: string): P
 
 export async function listOrchestrationRuns(workspaceId: string): Promise<any[]> {
   return withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.findMany({ where: { workspaceId }, orderBy: { createdAt: 'desc' }, include: { tasks: true }, omit: { leaseToken: true } }));
-}
-
-export async function resumeOrchestrationRun(workspaceId: string, runId: string): Promise<any> {
-  const run = await getOrchestrationRun(workspaceId, runId);
-  if (!run) throw new Error('RUN_NOT_FOUND');
-  if (run.status === 'cancelled') return run;
-  return runOrchestration(workspaceId, runId);
 }
 
 export const orchestrate = createOrchestrationRun;

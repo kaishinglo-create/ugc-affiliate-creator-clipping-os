@@ -521,8 +521,6 @@ app.post('/api/approvals/:id/decide', async (req, reply) => {
     } catch (error: any) {
       return reply.code(error?.statusCode === 404 ? 404 : 409).send({ error: String(error?.message ?? 'APPROVAL_DECISION_FAILED') });
     }
-    const { kickOrchestration } = await import('./engine.js');
-    void kickOrchestration(ctx.workspaceId, String(task.runId));
     const decided: any = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.approval.findUnique({ where: { id } }));
     return { approval: decided, resumed: { entityType: String(existing.entityType), runId: String(task.runId) } };
   }
@@ -1006,7 +1004,6 @@ async function engineTickHandler(ctx: any, reply: any, body: any) {
     leaseTtlMs: body?.leaseTtlMs,
     concurrency: body?.concurrency,
     workerId: body?.workerId ?? `manual-${ctx.userId}`,
-    resumeOrchestrations: true,
   });
   return { summary, jobs: summary.jobs };
 }
@@ -1086,8 +1083,7 @@ app.post('/api/orchestrations', async (req, reply) => {
   const idempotencyKey = String((req.headers as any)['x-idempotency-key'] ?? body.idempotencyKey ?? '').trim() || null;
   const mod = await import('./orchestration.js');
   const run = await mod.createOrchestrationRun(ctx.workspaceId, { goal, maxConcurrency: body.maxConcurrency, budgetUnits: body.budgetUnits, requestedBy: ctx.userId, idempotencyKey });
-  const executed = await mod.runOrchestration(ctx.workspaceId, run.id);
-  reply.code(201).send({ orchestration: executed });
+  reply.code(201).send({ orchestration: run });
   return;
 });
 
@@ -1102,7 +1098,8 @@ app.get('/api/orchestrations/:id', async (req, reply) => {
 app.post('/api/orchestrations/:id/resume', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;
-  const run = await (await import('./orchestration.js')).resumeOrchestrationRun(ctx.workspaceId, (req.params as any).id);
+  const run = await (await import('./orchestration.js')).getOrchestrationRun(ctx.workspaceId, (req.params as any).id);
+  if (!run) return reply.code(404).send({ error: 'NOT_FOUND' });
   return { orchestration: run };
 });
 
@@ -1117,11 +1114,10 @@ app.post('/api/orchestrations/:id/tasks/:taskId/approve', async (req, reply) => 
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;
   const body = (req.body ?? {}) as any;
-  const approved = body.status === 'rejected' ? false : true;
+  if (body.status !== 'approved' && body.status !== 'rejected') return reply.code(400).send({ error: 'INVALID_INPUT' });
   const mod = await import('./orchestration.js');
-  await mod.decideOrchestrationTaskApproval(ctx.workspaceId, (req.params as any).id, (req.params as any).taskId, approved, ctx.userId, body.reason ?? null);
-  const resumed = body.status === 'rejected' ? await mod.getOrchestrationRun(ctx.workspaceId, (req.params as any).id) : await mod.runOrchestration(ctx.workspaceId, (req.params as any).id);
-  return { orchestration: resumed };
+  const orchestration = await mod.decideOrchestrationTaskApproval(ctx.workspaceId, (req.params as any).id, (req.params as any).taskId, body.status === 'approved', ctx.userId, body.reason ?? null);
+  return { orchestration };
 });
 
 

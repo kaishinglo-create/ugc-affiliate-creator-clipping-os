@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { driveOrchestrationTo } from './helpers/orchestration-engine.js';
 import { buildServer } from '../src/index.js';
 import { prisma, withWorkspaceTransaction } from '../lib/db.js';
 import { isKillSwitchActive } from '../lib/security.js';
@@ -165,7 +166,7 @@ describe('phase 22 engine hardening', () => {
 
     const created = await app.inject({ method: 'POST', url: '/api/orchestrations', headers, payload: { goal: 'ship a clipping campaign' } });
     expect(created.statusCode).toBe(201);
-    const orchestration = created.json().orchestration;
+    const orchestration = await driveOrchestrationTo(workspaceId, created.json().orchestration.id, 'waiting_for_approval');
     expect(orchestration.status).toBe('waiting_for_approval');
     const waiting = (orchestration.tasks ?? []).find((task: any) => task.status === 'waiting_for_approval');
     expect(waiting?.approvalId).toBeTruthy();
@@ -174,17 +175,9 @@ describe('phase 22 engine hardening', () => {
     expect(decided.statusCode).toBe(200);
     expect(decided.json().resumed).toBeTruthy();
 
-    // Nothing drives the run inside the request anymore: the engine must pick it up.
-    await runEngineTick({ workspaceId, workerId: 'hardening-test', resumeOrchestrations: true });
-
-    let run: any = null;
-    for (let attempt = 0; attempt < 60; attempt++) {
-      run = await withWorkspaceTransaction(workspaceId, (tx: any) => tx.orchestrationRun.findUnique({ where: { id: orchestration.id }, include: { tasks: true } }));
-      if (run?.status === 'succeeded' || run?.status === 'failed') break;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      if (attempt % 5 === 4) await runEngineTick({ workspaceId, workerId: 'hardening-test', resumeOrchestrations: true });
-    }
-    expect(run?.status).toBe('succeeded');
+    const pending: any = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.findUnique({ where: { id: orchestration.id } }));
+    expect(pending.status).toBe('waiting_for_approval');
+    await driveOrchestrationTo(workspaceId, orchestration.id, 'succeeded');
     await dropWorkspace(workspaceId);
   });
 });

@@ -1,5 +1,15 @@
 # STATE
 
+## Background orchestration dispatch (2026-11-09)
+
+Creating an orchestration persists a queued run and returns HTTP 201 with its
+current state. Clients poll GET /api/orchestrations/:id for progress. Approval
+endpoints persist their decision and return immediately. The background engine
+picks up queued runs, decided approvals and expired worker leases. The legacy
+resume endpoint returns the current run state while the engine picks it up.
+Run the background engine to execute orchestrations. API-only mode records new
+runs and approval decisions for an engine process sharing the same database.
+
 ## Persistent orchestration worker leases (2026-11-09)
 
 The existing orchestration driver now claims and renews a PostgreSQL run lease.
