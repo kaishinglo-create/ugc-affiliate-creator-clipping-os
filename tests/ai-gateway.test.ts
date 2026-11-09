@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { driveOrchestrationTo } from './helpers/orchestration-engine.js';
 import { buildServer } from '../src/index.js';
 import { prisma, withWorkspaceTransaction } from '../lib/db.js';
 import { agentMode, dailyRequestLimit, generateStructured, getAIStatus, isAIConfigured } from '../src/ai/gateway.js';
@@ -297,7 +298,7 @@ describe('ai gateway', () => {
       payload: { goal: 'Create a clipping campaign' },
     });
     expect(run.statusCode).toBe(201);
-    const orchestration = run.json().orchestration;
+    const orchestration = await driveOrchestrationTo(ws, run.json().orchestration.id, 'failed');
     expect(orchestration.status).toBe('failed');
     expect(String(orchestration.error)).toContain('AI_NOT_CONFIGURED');
     const succeeded = (orchestration.tasks || []).filter((task: any) => task.status === 'succeeded');

@@ -316,46 +316,14 @@ export async function runEngineTick(opts: EngineTickOptions = {}): Promise<Engin
 
 const activeOrchestrations = new Set<string>();
 
-/**
- * True while a task of the run is still blocked on an undecided approval. Such a
- * run must not be driven; once every blocking approval is decided the run is
- * resumable again.
- */
-async function orchestrationAwaitingDecision(workspaceId: string, runId: string): Promise<boolean> {
-  return withWorkspaceTransaction(workspaceId, async (tx) => {
-    const tasks = await tx.orchestrationTask.findMany({
-      where: { workspaceId, runId, status: 'waiting_for_approval' },
-      select: { approvalId: true },
-    });
-    if (tasks.length === 0) return false;
-    for (const task of tasks) {
-      if (!task.approvalId) return true;
-      const approval = await tx.approval.findUnique({ where: { id: String(task.approvalId) }, select: { status: true } });
-      if (!approval || approval.status === 'pending') return true;
-    }
-    return false;
-  });
-}
-
-/**
- * Drive one orchestration run unless this process already drives it. Used by the
- * engine tick and by approval decisions so a granted approval makes progress
- * immediately; the tick remains the durable backstop after a restart.
- */
-export function kickOrchestration(workspaceId: string, runId: string): Promise<void> {
-  if (activeOrchestrations.has(runId)) return Promise.resolve();
+function kickOrchestration(workspaceId: string, runId: string): void {
   activeOrchestrations.add(runId);
-  return runOrchestration(workspaceId, runId)
-    .then(() => undefined)
+  void runOrchestration(workspaceId, runId)
     .catch(() => undefined)
     .finally(() => activeOrchestrations.delete(runId));
 }
 
-/**
- * Restart recovery for orchestration runs: a run left `queued`/`running` after a
- * crash has no live driver, so the engine restarts it. Runs already driven by
- * this process are skipped, so a run is never driven twice at once.
- */
+/** Pick up queued work, decided approvals, and abandoned runs on each tick. */
 export async function resumeStaleOrchestrations(opts: { workspaceId?: string | null; staleMs?: number; now?: Date } = {}): Promise<number> {
   const now = opts.now ?? new Date();
   const staleBefore = new Date(now.getTime() - clampStale(opts.staleMs));
@@ -364,10 +332,6 @@ export async function resumeStaleOrchestrations(opts: { workspaceId?: string | n
   const workspaces = opts.workspaceId ? [{ id: opts.workspaceId }] : await selectWorkspacesForTick(DEFAULT_ENGINE_MAX_WORKSPACES_PER_TICK);
   for (const workspace of workspaces) {
     try {
-      const killActive = await withWorkspaceTransaction(workspace.id, (tx) => isKillSwitchActive(workspace.id, tx));
-      if (killActive) continue;
-      // Stale runs have lost their driver; runs parked on an approval are only
-      // picked up again once the approval has actually been decided.
       const runs: any[] = await withWorkspaceTransaction(workspace.id, (tx) =>
         tx.orchestrationRun.findMany({
           where: {
@@ -375,20 +339,24 @@ export async function resumeStaleOrchestrations(opts: { workspaceId?: string | n
             AND: [
               { OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }] },
               { OR: [
-                { status: { in: ['queued', 'running'] }, updatedAt: { lt: staleBefore } },
-                { status: 'waiting_for_approval' },
+                { status: 'queued' },
+                { status: 'running', OR: [
+                  { leaseExpiresAt: { lte: now } },
+                  { leaseExpiresAt: null, updatedAt: { lt: staleBefore } },
+                ] },
+                { status: 'waiting_for_approval', tasks: { none: { status: 'waiting_for_approval' } } },
               ] },
             ],
           },
-          select: { id: true, status: true },
+          select: { id: true },
+          orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
           take: 10,
         })
       );
       for (const run of runs) {
         if (activeOrchestrations.has(run.id)) continue;
-        if (run.status === 'waiting_for_approval' && (await orchestrationAwaitingDecision(workspace.id, String(run.id)))) continue;
         resumed += 1;
-        void kickOrchestration(workspace.id, String(run.id));
+        kickOrchestration(workspace.id, String(run.id));
       }
     } catch {
       continue;

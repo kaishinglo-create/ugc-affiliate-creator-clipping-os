@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { driveOrchestrationTo } from './helpers/orchestration-engine.js';
 import { buildServer } from '../src/index.js';
 import { prisma, withWorkspaceTransaction } from '../lib/db.js';
 
@@ -22,7 +23,10 @@ describe('orchestration', () => {
     const run = await app.inject({ method: 'POST', url: '/api/orchestrations', headers: { cookie, 'x-workspace-id': ws }, payload: { goal: 'Create a clipping campaign' } });
     expect(run.statusCode).toBe(201);
     const body = run.json().orchestration;
-    expect(['succeeded', 'waiting_for_approval']).toContain(body.status);
+    expect(body.status).toBe('queued');
+    expect(body.tasks.every((task: any) => task.status === 'queued' && !task.jobId)).toBe(true);
+    const executed = await driveOrchestrationTo(ws, body.id, 'waiting_for_approval');
+    expect(executed.tasks.some((task: any) => task.status === 'succeeded')).toBe(true);
     expect(body.tasks.length).toBeGreaterThanOrEqual(10);
     expect(body.tasks.some((task: any) => task.departmentKey === 'research')).toBe(true);
     expect(body.tasks.some((task: any) => task.departmentKey === 'security')).toBe(true);
@@ -39,7 +43,9 @@ describe('orchestration', () => {
     await app.inject({ method: 'POST', url: '/api/security/kill-switch/activate', headers: { cookie, 'x-workspace-id': ws }, payload: { reason: 'test' } });
     const run = await app.inject({ method: 'POST', url: '/api/orchestrations', headers: { cookie, 'x-workspace-id': ws }, payload: { goal: 'x' } });
     expect(run.statusCode).toBe(201);
-    expect(run.json().orchestration.status).toBe('cancelled');
+    expect(run.json().orchestration.status).toBe('queued');
+    const cancelled = await driveOrchestrationTo(ws, run.json().orchestration.id, 'cancelled');
+    expect(cancelled.error).toBe('KILL_SWITCH_ACTIVE');
   });
 
   it('approves a waiting task through the API', async () => {
@@ -51,12 +57,15 @@ describe('orchestration', () => {
     const cookie = login.headers['set-cookie'];
     const run = await app.inject({ method: 'POST', url: '/api/orchestrations', headers: { cookie, 'x-workspace-id': ws }, payload: { goal: 'approval test' } });
     expect(run.statusCode).toBe(201);
-    const orchestration = run.json().orchestration;
+    const orchestration = await driveOrchestrationTo(ws, run.json().orchestration.id, 'waiting_for_approval');
     const waiting = (orchestration.tasks || []).find((task: any) => task.status === 'waiting_for_approval');
     expect(waiting).toBeTruthy();
+    const invalid = await app.inject({ method: 'POST', url: `/api/orchestrations/${orchestration.id}/tasks/${waiting.id}/approve`, headers: { cookie, 'x-workspace-id': ws }, payload: {} });
+    expect(invalid.statusCode).toBe(400);
     const approved = await app.inject({ method: 'POST', url: `/api/orchestrations/${orchestration.id}/tasks/${waiting.id}/approve`, headers: { cookie, 'x-workspace-id': ws }, payload: { status: 'approved', reason: 'test' } });
     expect(approved.statusCode).toBe(200);
-    expect(['succeeded', 'waiting_for_approval']).toContain(approved.json().orchestration.status);
+    expect(approved.json().orchestration.status).toBe('waiting_for_approval');
+    await driveOrchestrationTo(ws, orchestration.id, 'succeeded');
     await withWorkspaceTransaction(ws, (tx: any) => tx.job.deleteMany({ where: { workspaceId: ws } }));
     await withWorkspaceTransaction(ws, (tx) => tx.orchestrationRun.deleteMany({ where: { workspaceId: ws } }));
   });

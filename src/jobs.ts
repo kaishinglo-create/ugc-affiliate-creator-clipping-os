@@ -605,6 +605,7 @@ export async function markWaitingForApproval(jobId: string, opts: JobActionOptio
     workspaceId: job.workspaceId,
     runId: null,
     type: 'job_waiting_for_approval',
+    tx: transaction,
     actor: opts.actor ?? null,
     data: { workflowRunId: job.workflowRunId, jobId, status: 'WAITING_FOR_APPROVAL', ...(opts.data as any) },
   });
