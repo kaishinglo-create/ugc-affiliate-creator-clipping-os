@@ -142,8 +142,8 @@ function transitionAllowed(from: string, to: string): boolean {
   return (transitions[from] ?? []).includes(to);
 }
 
-export async function createJob(input: CreateJobInput): Promise<any> {
-  return withWorkspaceTransaction(input.workspaceId, async (tx) => {
+export async function createJob(input: CreateJobInput, transaction?: any): Promise<any> {
+  const create = async (tx: any) => {
     if (input.idempotencyKey) {
       const existing = await tx.job.findUnique({
         where: {
@@ -180,7 +180,7 @@ export async function createJob(input: CreateJobInput): Promise<any> {
         },
       });
     } catch (e: any) {
-      if (input.idempotencyKey && (e?.code === 'P2002' || String(e?.message ?? '').includes('Unique constraint'))) {
+      if (!transaction && input.idempotencyKey && (e?.code === 'P2002' || String(e?.message ?? '').includes('Unique constraint'))) {
         const existing = await withWorkspaceTransaction(input.workspaceId, (tx2) =>
           tx2.job.findUnique({
             where: {
@@ -192,7 +192,12 @@ export async function createJob(input: CreateJobInput): Promise<any> {
       }
       throw e;
     }
-  });
+  };
+  return transaction ? create(transaction) : withWorkspaceTransaction(input.workspaceId, create);
+}
+
+function withJobTransaction<T>(transaction: any, workspaceId: string, work: (tx: any) => Promise<T>): Promise<T> {
+  return transaction ? work(transaction) : withWorkspaceTransaction(workspaceId, work);
 }
 
 async function readJob(jobId: string, requestedWorkspaceId: string | null = null): Promise<any> {
@@ -344,10 +349,12 @@ async function recoverWorkspaceExpiredJobs(tx: any, workspaceId: string, now: Da
   `;
 }
 
-export async function heartbeatJob(jobId: string, leaseId: string, workerId: string, opts: HeartbeatOptions = { workspaceId: "" } as HeartbeatOptions): Promise<any> {
+export async function heartbeatJob(jobId: string, leaseId: string, workerId: string, opts: HeartbeatOptions = { workspaceId: "" } as HeartbeatOptions, transaction?: any): Promise<any> {
   const requestedWorkspaceId = opts.workspaceId ?? null;
   if (!requestedWorkspaceId) return null;
-  const job = await readJob(jobId, requestedWorkspaceId);
+  const job = transaction
+    ? await transaction.job.findFirst({ where: { id: jobId, workspaceId: requestedWorkspaceId } })
+    : await readJob(jobId, requestedWorkspaceId);
   if (!job) return null;
   if (job.status !== 'RUNNING') return job;
   if (!leaseMatches(job, leaseId, workerId)) return job;
@@ -355,7 +362,7 @@ export async function heartbeatJob(jobId: string, leaseId: string, workerId: str
   if (job.leaseExpiresAt && job.leaseExpiresAt < now) return job;
 
   const renewedUntil = new Date(now.getTime() + (opts.extendMs ?? DEFAULT_JOB_LEASE_TTL_MS));
-  const result: any = await withWorkspaceTransaction(job.workspaceId, (tx) =>
+  const result: any = await withJobTransaction(transaction, job.workspaceId, (tx) =>
     tx.job.updateMany({
       where: {
         id: jobId,
@@ -373,15 +380,17 @@ export async function heartbeatJob(jobId: string, leaseId: string, workerId: str
     })
   );
   if (result.count !== 1) {
-    return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+    return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   }
-  return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+  return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
 }
 
-export async function completeJob(jobId: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+export async function completeJob(jobId: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions, transaction?: any): Promise<any> {
   const requestedWorkspaceId = opts.workspaceId ?? null;
   if (!requestedWorkspaceId) return null;
-  const job = await readJob(jobId, requestedWorkspaceId);
+  const job = transaction
+    ? await transaction.job.findFirst({ where: { id: jobId, workspaceId: requestedWorkspaceId } })
+    : await readJob(jobId, requestedWorkspaceId);
   if (!job) return null;
   if (job.status === 'SUCCEEDED') return job;
   if (job.status !== 'RUNNING' && job.status !== 'WAITING_FOR_APPROVAL') return job;
@@ -396,7 +405,7 @@ export async function completeJob(jobId: string, opts: JobActionOptions = { work
     if (opts.workerId) where.leaseOwner = opts.workerId;
   }
 
-  const result: any = await withWorkspaceTransaction(job.workspaceId, (tx) =>
+  const result: any = await withJobTransaction(transaction, job.workspaceId, (tx) =>
     tx.job.updateMany({
       where,
       data: {
@@ -411,17 +420,19 @@ export async function completeJob(jobId: string, opts: JobActionOptions = { work
     })
   );
   if (result.count !== 1) {
-    return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+    return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   }
-  return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+  return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
 }
 
-export async function failJob(jobId: string, input: FailJobInput | string = {}, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+export async function failJob(jobId: string, input: FailJobInput | string = {}, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions, transaction?: any): Promise<any> {
   const normalizedInput: FailJobInput = typeof input === 'string' ? { error: input } : (input ?? {});
   const mergedOpts: JobActionOptions = { ...normalizedInput, ...opts } as any;
   const requestedWorkspaceId = ((String(opts.workspaceId || "").trim()) || (typeof input === 'object' && input && !(input instanceof Array) ? (input as any).workspaceId : null) || null);
 
-  const job = await readJob(jobId, requestedWorkspaceId);
+  const job = transaction
+    ? await transaction.job.findFirst({ where: { id: jobId, workspaceId: requestedWorkspaceId } })
+    : await readJob(jobId, requestedWorkspaceId);
   if (!job) return null;
   if (requestedWorkspaceId && job.workspaceId !== requestedWorkspaceId) return null;
   if (job.status === 'SUCCEEDED' || job.status === 'CANCELLED' || job.status === 'FAILED' || job.status === 'DEAD_LETTER') return job;
@@ -466,7 +477,7 @@ export async function failJob(jobId: string, input: FailJobInput | string = {}, 
       fencedWhere.leaseId = leaseId;
       if (workerId) fencedWhere.leaseOwner = workerId;
     }
-    const terminalUpdate: any = await withWorkspaceTransaction(job.workspaceId, (tx) =>
+    const terminalUpdate: any = await withJobTransaction(transaction, job.workspaceId, (tx) =>
       tx.job.updateMany({
         where: fencedWhere,
         data: {
@@ -477,9 +488,9 @@ export async function failJob(jobId: string, input: FailJobInput | string = {}, 
       })
     );
     if (terminalUpdate.count !== 1) {
-      return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+      return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
     }
-    return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+    return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   }
 
   const delay = normalizedInput.nextRunAt
@@ -494,7 +505,7 @@ export async function failJob(jobId: string, input: FailJobInput | string = {}, 
     retryWhere.leaseId = leaseId;
     if (workerId) retryWhere.leaseOwner = workerId;
   }
-  const retryUpdate: any = await withWorkspaceTransaction(job.workspaceId, (tx) =>
+  const retryUpdate: any = await withJobTransaction(transaction, job.workspaceId, (tx) =>
     tx.job.updateMany({
       where: retryWhere,
       data: {
@@ -506,9 +517,9 @@ export async function failJob(jobId: string, input: FailJobInput | string = {}, 
     })
   );
   if (retryUpdate.count !== 1) {
-    return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+    return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   }
-  return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+  return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
 }
 
 function computeBackoffMs(attempt: number): number {
@@ -516,10 +527,12 @@ function computeBackoffMs(attempt: number): number {
   return exp + Math.floor(Math.random() * 100);
 }
 
-export async function cancelJob(jobId: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+export async function cancelJob(jobId: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions, transaction?: any): Promise<any> {
   const requestedWorkspaceId = opts.workspaceId ?? null;
   if (!requestedWorkspaceId) return null;
-  const job = await readJob(jobId, requestedWorkspaceId);
+  const job = transaction
+    ? await transaction.job.findFirst({ where: { id: jobId, workspaceId: requestedWorkspaceId } })
+    : await readJob(jobId, requestedWorkspaceId);
   if (!job) return null;
   if (requestedWorkspaceId && job.workspaceId !== requestedWorkspaceId) return null;
   if (['SUCCEEDED', 'FAILED', 'DEAD_LETTER', 'CANCELLED'].includes(job.status)) return job;
@@ -531,7 +544,7 @@ export async function cancelJob(jobId: string, opts: JobActionOptions = { worksp
     cancelWhere.leaseId = opts.leaseId;
     if (opts.workerId) cancelWhere.leaseOwner = opts.workerId;
   }
-  const cancelUpdate: any = await withWorkspaceTransaction(job.workspaceId, (tx) =>
+  const cancelUpdate: any = await withJobTransaction(transaction, job.workspaceId, (tx) =>
     tx.job.updateMany({
       where: cancelWhere,
       data: {
@@ -547,15 +560,17 @@ export async function cancelJob(jobId: string, opts: JobActionOptions = { worksp
     })
   );
   if (cancelUpdate.count !== 1) {
-    return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+    return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   }
-  return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+  return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
 }
 
-export async function markWaitingForApproval(jobId: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+export async function markWaitingForApproval(jobId: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions, transaction?: any): Promise<any> {
   const requestedWorkspaceId = opts.workspaceId ?? null;
   if (!requestedWorkspaceId) return null;
-  const job = await readJob(jobId, requestedWorkspaceId);
+  const job = transaction
+    ? await transaction.job.findFirst({ where: { id: jobId, workspaceId: requestedWorkspaceId } })
+    : await readJob(jobId, requestedWorkspaceId);
   if (!job) return null;
   if (requestedWorkspaceId && job.workspaceId !== requestedWorkspaceId) return null;
   if (job.status !== 'RUNNING') return job;
@@ -568,7 +583,7 @@ export async function markWaitingForApproval(jobId: string, opts: JobActionOptio
     waitingWhere.leaseId = opts.leaseId;
     if (opts.workerId) waitingWhere.leaseOwner = opts.workerId;
   }
-  const waitingUpdate: any = await withWorkspaceTransaction(job.workspaceId, (tx) =>
+  const waitingUpdate: any = await withJobTransaction(transaction, job.workspaceId, (tx) =>
     tx.job.updateMany({
       where: waitingWhere,
       data: {
@@ -583,9 +598,9 @@ export async function markWaitingForApproval(jobId: string, opts: JobActionOptio
     })
   );
   if (waitingUpdate.count !== 1) {
-    return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+    return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   }
-  const updated = await withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+  const updated = await withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   await writeAuditEvent({
     workspaceId: job.workspaceId,
     runId: null,
@@ -964,16 +979,18 @@ export function assertTransition(from: string, to: string): void {
   if (!transitionAllowed(from, to)) throw new Error(`INVALID_TRANSITION:${from}->${to}`);
 }
 
-export async function claimJobById(jobId: string, workerId: string, opts: ClaimJobsOptions & { workspaceId: string }): Promise<any> {
+export async function claimJobById(jobId: string, workerId: string, opts: ClaimJobsOptions & { workspaceId: string }, transaction?: any): Promise<any> {
   const now = toNow(opts.now);
   const leaseTtlMs = Math.max(1, Number(opts.leaseTtlMs ?? DEFAULT_JOB_LEASE_TTL_MS) || DEFAULT_JOB_LEASE_TTL_MS);
   const requestedWorkspaceId = opts.workspaceId ?? null;
   if (!requestedWorkspaceId) return null;
-  const job = await readJob(jobId, requestedWorkspaceId);
+  const job = transaction
+    ? await transaction.job.findFirst({ where: { id: jobId, workspaceId: requestedWorkspaceId } })
+    : await readJob(jobId, requestedWorkspaceId);
   if (!job) return null;
   if (requestedWorkspaceId && job.workspaceId !== requestedWorkspaceId) return null;
 
-  const killActive = await withWorkspaceTransaction(job.workspaceId, async (tx) => {
+  const killActive = await withJobTransaction(transaction, job.workspaceId, async (tx) => {
     await recoverWorkspaceExpiredJobs(tx, job.workspaceId, now);
     return isKillSwitchActive(job.workspaceId, tx);
   });
@@ -981,7 +998,7 @@ export async function claimJobById(jobId: string, workerId: string, opts: ClaimJ
 
   const leaseId = randomUUID();
   const leaseExpiresAt = new Date(now.getTime() + leaseTtlMs);
-  const result: any = await withWorkspaceTransaction(job.workspaceId, async (tx) => {
+  const result: any = await withJobTransaction(transaction, job.workspaceId, async (tx) => {
     return tx.job.updateMany({
       where: {
         id: jobId,
@@ -1002,9 +1019,9 @@ export async function claimJobById(jobId: string, workerId: string, opts: ClaimJ
     });
   });
   if (result.count !== 1) {
-    return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+    return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   }
-  return withWorkspaceTransaction(job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+  return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
 }
 
 export { claimJobById as claimJobByTask };

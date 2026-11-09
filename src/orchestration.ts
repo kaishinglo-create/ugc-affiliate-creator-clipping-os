@@ -1,9 +1,16 @@
 import 'node:crypto';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { withWorkspaceTransaction } from '../lib/db.js';
 import { writeAuditEvent } from '../lib/audit.js';
 import { isKillSwitchActive } from '../lib/security.js';
 import { runAgentTask } from './ai/agent-runtime.js';
+import {
+  assertOrchestrationLease,
+  claimOrchestrationLease,
+  heartbeatOrchestrationLease,
+  releaseOrchestrationLease,
+  type OrchestrationLease,
+} from './orchestration-lease.js';
 import { isAIGatewayError } from './ai/errors.js';
 import {
   createJob,
@@ -153,7 +160,7 @@ export async function listDepartments(workspaceId: string): Promise<any[]> {
 }
 
 async function getRun(workspaceId: string, runId: string): Promise<any> {
-  return withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true } }));
+  return withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true }, omit: { leaseToken: true } }));
 }
 
 function validateDependencyGraph(tasks: { id: string; dependsOn: string[] }[]): boolean {
@@ -206,32 +213,24 @@ function departmentProduces(departmentKey: string, action: string, goal: string)
   }
 }
 
-async function reserveBudget(workspaceId: string, runId: string, amount: number): Promise<boolean> {
-  const result: any = await withWorkspaceTransaction(workspaceId, async (tx) => {
-    return tx.$executeRaw`
-      UPDATE "OrchestrationRun"
-      SET "spentUnits" = "spentUnits" + ${amount},
-          "updatedAt" = NOW()
-      WHERE "id" = ${runId}
-        AND "workspaceId" = ${workspaceId}
-        AND ("spentUnits" + ${amount} <= "budgetUnits")
-    `;
-  });
-  return Number(result) === 1;
-}
-
-async function releaseBudget(workspaceId: string, runId: string, amount: number): Promise<void> {
-  await withWorkspaceTransaction(workspaceId, async (tx) => {
-    await tx.$executeRaw`
-      UPDATE "OrchestrationRun"
-      SET "spentUnits" = GREATEST("spentUnits" - ${amount}, 0),
-          "updatedAt" = NOW()
-      WHERE "id" = ${runId}
-        AND "workspaceId" = ${workspaceId}
-    `;
+function withRunLease<T>(lease: OrchestrationLease, work: (tx: any) => Promise<T>): Promise<T> {
+  return withWorkspaceTransaction(lease.workspaceId, async (tx) => {
+    await assertOrchestrationLease(lease, tx);
+    return work(tx);
   });
 }
 
+async function reserveBudget(tx: any, workspaceId: string, runId: string, amount: number): Promise<boolean> {
+  const count = await tx.$executeRaw`
+    UPDATE "OrchestrationRun"
+    SET "spentUnits" = "spentUnits" + ${amount},
+        "updatedAt" = NOW()
+    WHERE "id" = ${runId}
+      AND "workspaceId" = ${workspaceId}
+      AND ("spentUnits" + ${amount} <= "budgetUnits")
+  `;
+  return Number(count) === 1;
+}
 
 export async function createOrchestrationRun(workspaceId: string, input: any): Promise<any> {
   await ensureDepartments(workspaceId);
@@ -251,7 +250,7 @@ export async function createOrchestrationRun(workspaceId: string, input: any): P
   try {
     return await withWorkspaceTransaction(workspaceId, async (tx) => {
       if (idempotencyKey) {
-        const existing = await tx.orchestrationRun.findUnique({ where: { workspaceId_idempotencyKey: { workspaceId, idempotencyKey } }, include: { tasks: true } });
+        const existing = await tx.orchestrationRun.findUnique({ where: { workspaceId_idempotencyKey: { workspaceId, idempotencyKey } }, include: { tasks: true }, omit: { leaseToken: true } });
         if (existing) {
           if ((existing as any).requestHash && (existing as any).requestHash !== requestHash) {
             throw Object.assign(new Error('IDEMPOTENCY_KEY_PAYLOAD_MISMATCH'), { statusCode: 409 });
@@ -340,11 +339,11 @@ export async function createOrchestrationRun(workspaceId: string, input: any): P
         data: { goal, maxConcurrency, budgetUnits, taskCount: taskDefs.length, delegationId: delegation.id, idempotencyKey },
         tx,
       });
-      return tx.orchestrationRun.findUnique({ where: { id: run.id }, include: { tasks: true } });
+      return tx.orchestrationRun.findUnique({ where: { id: run.id }, include: { tasks: true }, omit: { leaseToken: true } });
     });
   } catch (e: any) {
     if (idempotencyKey && (e?.code === 'P2002' || String(e?.message ?? '').includes('Unique constraint'))) {
-      const existing = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.findUnique({ where: { workspaceId_idempotencyKey: { workspaceId, idempotencyKey } }, include: { tasks: true } }));
+      const existing = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.findUnique({ where: { workspaceId_idempotencyKey: { workspaceId, idempotencyKey } }, include: { tasks: true }, omit: { leaseToken: true } }));
       if (existing) {
         if ((existing as any).requestHash && (existing as any).requestHash !== requestHash) throw Object.assign(new Error('IDEMPOTENCY_KEY_PAYLOAD_MISMATCH'), { statusCode: 409 });
         return existing;
@@ -355,7 +354,7 @@ export async function createOrchestrationRun(workspaceId: string, input: any): P
   }
 }
 
-async function ensureTaskJob(workspaceId: string, runId: string, task: any): Promise<string> {
+async function ensureTaskJob(tx: any, workspaceId: string, runId: string, task: any): Promise<string> {
   if (task.jobId) return task.jobId;
   const job = await createJob({
     workspaceId,
@@ -374,44 +373,43 @@ async function ensureTaskJob(workspaceId: string, runId: string, task: any): Pro
     timeoutMs: Number(task.timeoutMs ?? 30000),
     workflowRunId: null,
     agentTaskId: null,
-  });
-  await withWorkspaceTransaction(workspaceId, async (tx) => {
-    await tx.orchestrationTask.update({ where: { id: task.id }, data: { jobId: job.id } });
-  });
+  }, tx);
+  await tx.orchestrationTask.update({ where: { id: task.id }, data: { jobId: job.id } });
   return job.id;
 }
 
 
-async function processOrchestrationJob(workspaceId: string, runId: string, jobId: string, workerId: string, leaseId: string, _leaseExpires: Date): Promise<void> {
-  await heartbeatJob(jobId, leaseId, workerId, { now: now(), extendMs: 30000, workspaceId });
-  const task: any = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.findFirst({ where: { jobId } }));
-  const run: any = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.findUnique({ where: { id: runId } }));
+async function processOrchestrationJob(workspaceId: string, runId: string, jobId: string, lease: OrchestrationLease, leaseId: string): Promise<void> {
+  const workerId = lease.owner;
+  await withRunLease(lease, (tx) => heartbeatJob(jobId, leaseId, workerId, { now: now(), extendMs: 30000, workspaceId }, tx));
+  const task: any = await withRunLease(lease, (tx) => tx.orchestrationTask.findFirst({ where: { jobId } }));
+  const run: any = await withRunLease(lease, (tx) => tx.orchestrationRun.findUnique({ where: { id: runId } }));
   if (!task || !run) {
-    await failJob(jobId, { error: 'ORCHESTRATION_TASK_MISSING', retryable: false }, { leaseId, workerId, workspaceId });
+    await withRunLease(lease, (tx) => failJob(jobId, { error: 'ORCHESTRATION_TASK_MISSING', retryable: false }, { leaseId, workerId, workspaceId }, tx));
     return;
   }
   const action = String(task.action ?? '');
   if (!departmentAllowed(String(task.departmentKey), action)) {
-    await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'failed', error: `ACTION_NOT_ALLOWED:${task.departmentKey}:${action}`, finishedAt: now() } }));
-    await failJob(jobId, { error: `ACTION_NOT_ALLOWED:${task.departmentKey}:${action}`, retryable: false }, { leaseId, workerId, workspaceId });
+    await withRunLease(lease, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'failed', error: `ACTION_NOT_ALLOWED:${task.departmentKey}:${action}`, finishedAt: now() } }));
+    await withRunLease(lease, (tx) => failJob(jobId, { error: `ACTION_NOT_ALLOWED:${task.departmentKey}:${action}`, retryable: false }, { leaseId, workerId, workspaceId }, tx));
     return;
   }
   const taskRunGoal = String((task.input as any)?.goal ?? run.goal ?? '');
 
-  if (await withWorkspaceTransaction(workspaceId, (tx) => isKillSwitchActive(workspaceId, tx))) {
-    await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'cancelled', error: 'KILL_SWITCH_ACTIVE', finishedAt: now() } }));
-    await cancelJob(jobId, { reason: 'KILL_SWITCH_ACTIVE', leaseId, workerId, workspaceId });
+  if (await withRunLease(lease, (tx) => isKillSwitchActive(workspaceId, tx))) {
+    await withRunLease(lease, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'cancelled', error: 'KILL_SWITCH_ACTIVE', finishedAt: now() } }));
+    await withRunLease(lease, (tx) => cancelJob(jobId, { reason: 'KILL_SWITCH_ACTIVE', leaseId, workerId, workspaceId }, tx));
     return;
   }
 
-  await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'running', startedAt: now(), attemptCount: { increment: 1 } } }));
-  const updatedTask: any = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.findUnique({ where: { id: task.id } }));
+  await withRunLease(lease, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'running', startedAt: now(), attemptCount: { increment: 1 } } }));
+  const updatedTask: any = await withRunLease(lease, (tx) => tx.orchestrationTask.findUnique({ where: { id: task.id } }));
 
   if (task.requiresApproval) {
     // An approval is a decision about the task, not about one attempt: reuse the
     // existing row so a granted approval lets the retried task run and a
     // rejection stops it, instead of asking for approval again on every attempt.
-    const existing: any = await withWorkspaceTransaction(workspaceId, async (tx) => {
+    const existing: any = await withRunLease(lease, async (tx) => {
       if (task.approvalId) {
         const row = await tx.approval.findUnique({ where: { id: String(task.approvalId) } });
         if (row) return row;
@@ -423,19 +421,23 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
     });
 
     if (existing && existing.status === 'rejected') {
-      await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({
+      await withRunLease(lease, (tx) => tx.orchestrationTask.update({
         where: { id: task.id },
         data: { status: 'failed', error: 'APPROVAL_REJECTED', approvalId: existing.id, finishedAt: now() },
       }));
-      await failJob(jobId, { error: 'APPROVAL_REJECTED', retryable: false }, { leaseId, workerId, workspaceId });
+      await withRunLease(lease, (tx) => failJob(jobId, { error: 'APPROVAL_REJECTED', retryable: false }, { leaseId, workerId, workspaceId }, tx));
       return;
     }
 
     if (!existing || existing.status === 'pending') {
-      const approval: any = existing ?? await withWorkspaceTransaction(workspaceId, (tx) => tx.approval.create({ data: { workspaceId, entityType: 'orchestration_task', entityId: String(task.id), requestedBy: null } }));
-      await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'waiting_for_approval', approvalId: approval.id } }));
-      await markWaitingForApproval(jobId, { leaseId, workerId, workspaceId });
-      await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_task_approval_requested', actor: null, data: { jobId, taskId: task.id, approvalId: approval.id } });
+      await withRunLease(lease, async (tx) => {
+        const approval = existing ?? await tx.approval.create({
+          data: { workspaceId, entityType: 'orchestration_task', entityId: String(task.id), requestedBy: null },
+        });
+        await tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'waiting_for_approval', approvalId: approval.id } });
+        await markWaitingForApproval(jobId, { leaseId, workerId, workspaceId }, tx);
+        await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_task_approval_requested', actor: null, data: { jobId, taskId: task.id, approvalId: approval.id }, tx });
+      });
       return;
     }
     // Approved: fall through and execute the task.
@@ -453,23 +455,25 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
       deterministic: () => departmentProduces(String(task.departmentKey), action, taskRunGoal),
     });
 
-    await withWorkspaceTransaction(workspaceId, async (tx) => {
+    await withRunLease(lease, async (tx) => {
+      const job = await completeJob(jobId, { leaseId, workerId, workspaceId }, tx);
+      if (job?.status !== 'SUCCEEDED') throw new Error('ORCHESTRATION_JOB_LEASE_LOST');
       await tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'succeeded', output, finishedAt: now(), actualUnits: Number(task.estimatedUnits ?? 1) } });
       await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_task_succeeded', actor: null, data: { jobId, taskId: task.id, department: task.departmentKey } , tx });
     });
-    await completeJob(jobId, { leaseId, workerId, workspaceId });
   } catch (error) {
+    if (error instanceof Error && ['ORCHESTRATION_LEASE_LOST', 'ORCHESTRATION_JOB_LEASE_LOST'].includes(error.message)) throw error;
     const message = sanitizeError(error);
     // AI configuration and budget failures are not retryable; upstream timeouts are.
     const retryable = !isAIGatewayError(error) || error.retryable;
-    const jobAfter = await failJob(jobId, { error: message, retryable }, { leaseId, workerId, workspaceId });
+    const jobAfter = await withRunLease(lease, (tx) => failJob(jobId, { error: message, retryable }, { leaseId, workerId, workspaceId }, tx));
     const attempts = Number(updatedTask?.attemptCount ?? 0);
     const maxAttempts = Number(task.maxAttempts ?? 2);
     if (retryable && attempts < maxAttempts && jobAfter?.status === 'RETRY_WAIT') {
-      await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'queued', error: message, startedAt: null, finishedAt: null } }));
+      await withRunLease(lease, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'queued', error: message, startedAt: null, finishedAt: null } }));
     } else {
       const finalStatus = jobAfter?.status === 'DEAD_LETTER' ? 'dead_letter' : 'failed';
-      await withWorkspaceTransaction(workspaceId, async (tx) => {
+      await withRunLease(lease, async (tx) => {
         await tx.orchestrationTask.update({ where: { id: task.id }, data: { status: finalStatus, error: message, finishedAt: now() } });
         await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_task_failed', actor: null, data: { jobId, taskId: task.id, department: task.departmentKey, error: message }, tx });
       });
@@ -481,22 +485,44 @@ export async function runOrchestration(workspaceId: string, runId: string): Prom
   await ensureDepartments(workspaceId);
   await ensureCompanyAgents(workspaceId);
 
-  if (await withWorkspaceTransaction(workspaceId, (tx) => isKillSwitchActive(workspaceId, tx))) {
-    return cancelOrchestrationRun(workspaceId, runId, 'KILL_SWITCH_ACTIVE');
+  const lease = await claimOrchestrationLease(workspaceId, runId, randomUUID());
+  if (!lease) {
+    const run = await getRun(workspaceId, runId);
+    if (!run) throw new Error('RUN_NOT_FOUND');
+    return run;
   }
 
-  const workerId = `orchestration-${runId}`;
+  const heartbeat = setInterval(() => {
+    void heartbeatOrchestrationLease(lease).catch(() => undefined);
+  }, 10_000);
+  heartbeat.unref();
+  try {
+    return await driveOrchestration(lease);
+  } catch (error) {
+    if (!(error instanceof Error) || !['ORCHESTRATION_LEASE_LOST', 'ORCHESTRATION_JOB_LEASE_LOST'].includes(error.message)) throw error;
+    return getRun(workspaceId, runId);
+  } finally {
+    clearInterval(heartbeat);
+    await releaseOrchestrationLease(lease);
+  }
+}
+
+async function driveOrchestration(lease: OrchestrationLease): Promise<any> {
+  const { workspaceId, runId, owner: workerId } = lease;
   let guard = 0;
   while (guard < 10000) {
     guard += 1;
+    if (await withRunLease(lease, (tx) => isKillSwitchActive(workspaceId, tx))) {
+      return cancelOrchestrationRun(workspaceId, runId, 'KILL_SWITCH_ACTIVE', lease);
+    }
     const run: any = await getRun(workspaceId, runId);
     if (!run) throw new Error('RUN_NOT_FOUND');
     if (run.status === 'succeeded' || run.status === 'failed' || run.status === 'cancelled') return run;
     if (run.status === 'queued') {
-      await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'running', startedAt: now(), currentStage: 'executing' } }));
+      await withRunLease(lease, (tx) => tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'running', startedAt: now(), currentStage: 'executing' } }));
     }
 
-    const tasks: any[] = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.findMany({ where: { workspaceId, runId }, orderBy: { priority: 'desc' } }));
+    const tasks: any[] = await withRunLease(lease, (tx) => tx.orchestrationTask.findMany({ where: { workspaceId, runId }, orderBy: { priority: 'desc' } }));
     // Synchronize from job runtime.
     const succeededIds = new Set(tasks.filter((task) => task.status === 'succeeded').map((task) => task.id));
     await recoverExpiredJobs(workspaceId);
@@ -505,26 +531,26 @@ export async function runOrchestration(workspaceId: string, runId: string): Prom
       const job: any = await getJob(String(task.jobId), workspaceId);
       if (!job) continue;
       if (job.status === 'SUCCEEDED' && task.status !== 'succeeded') {
-        await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'succeeded', finishedAt: now(), actualUnits: Number(task.estimatedUnits ?? 1) } }));
+        await withRunLease(lease, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'succeeded', finishedAt: now(), actualUnits: Number(task.estimatedUnits ?? 1) } }));
         task.status = 'succeeded';
       } else if ((job.status === 'FAILED' || job.status === 'DEAD_LETTER') && task.status !== 'failed' && task.status !== 'dead_letter') {
-        await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: job.status === 'DEAD_LETTER' ? 'dead_letter' : 'failed', error: job.lastError ?? null, finishedAt: now() } }));
+        await withRunLease(lease, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: job.status === 'DEAD_LETTER' ? 'dead_letter' : 'failed', error: job.lastError ?? null, finishedAt: now() } }));
         task.status = job.status === 'DEAD_LETTER' ? 'dead_letter' : 'failed';
       } else if (job.status === 'CANCELLED' && task.status !== 'cancelled') {
-        await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'cancelled', finishedAt: now(), error: 'RUN_CANCELLED' } }));
+        await withRunLease(lease, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'cancelled', finishedAt: now(), error: 'RUN_CANCELLED' } }));
         task.status = 'cancelled';
       } else if (job.status === 'WAITING_FOR_APPROVAL' && task.status !== 'waiting_for_approval') {
-        await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'waiting_for_approval' } }));
+        await withRunLease(lease, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'waiting_for_approval' } }));
         task.status = 'waiting_for_approval';
       } else if ((job.status === 'QUEUED' || job.status === 'RETRY_WAIT' || job.status === 'RUNNING') && (task.status === 'running' || task.status === 'waiting_for_approval')) {
         if (job.status === 'QUEUED' || job.status === 'RETRY_WAIT') {
-          await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'queued', startedAt: null } }));
+          await withRunLease(lease, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'queued', startedAt: null } }));
           task.status = 'queued';
         }
       }
     }
     if (tasks.length > 0 && tasks.every((task) => task.status === 'succeeded')) {
-      await withWorkspaceTransaction(workspaceId, async (tx) => {
+      await withRunLease(lease, async (tx) => {
         await tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'succeeded', result: { tasks: tasks.map((task) => ({ id: task.id, output: task.output })) }, finishedAt: now(), currentStage: 'completed' } });
         await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_succeeded', actor: null, data: { taskCount: tasks.length } , tx });
       });
@@ -532,15 +558,15 @@ export async function runOrchestration(workspaceId: string, runId: string): Prom
     }
     if (tasks.some((task) => task.status === 'failed' || task.status === 'dead_letter')) {
       const first = tasks.find((task) => task.status === 'failed' || task.status === 'dead_letter');
-      await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'failed', error: first?.error ?? 'TASK_FAILED', finishedAt: now(), currentStage: first?.departmentKey ?? 'failed' } }));
+      await withRunLease(lease, (tx) => tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'failed', error: first?.error ?? 'TASK_FAILED', finishedAt: now(), currentStage: first?.departmentKey ?? 'failed' } }));
       return getRun(workspaceId, runId);
     }
     if (tasks.some((task) => task.status === 'waiting_for_approval')) {
-      await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'waiting_for_approval', currentStage: tasks.find((task) => task.status === 'waiting_for_approval')?.departmentKey } }));
+      await withRunLease(lease, (tx) => tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'waiting_for_approval', currentStage: tasks.find((task) => task.status === 'waiting_for_approval')?.departmentKey } }));
       return getRun(workspaceId, runId);
     }
     if (tasks.some((task) => task.status === 'cancelled')) {
-      await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'cancelled', finishedAt: now(), currentStage: 'cancelled' } }));
+      await withRunLease(lease, (tx) => tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'cancelled', finishedAt: now(), currentStage: 'cancelled' } }));
       return getRun(workspaceId, runId);
     }
 
@@ -558,60 +584,61 @@ export async function runOrchestration(workspaceId: string, runId: string): Prom
     // Reserve budget atomically before any job creation.
     let batchStarted = 0;
     for (const task of readyTasks) {
-      const estimated = Number(task.estimatedUnits ?? 1);
-      let jobId = task.jobId;
-      if (!jobId) {
-        const reserved = await reserveBudget(workspaceId, runId, estimated);
-        if (!reserved) {
-          await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'failed', error: 'BUDGET_EXCEEDED', finishedAt: now() } }));
-          continue;
-        }
-        try {
-          jobId = await ensureTaskJob(workspaceId, runId, task);
-        } catch (error) {
-          await releaseBudget(workspaceId, runId, estimated);
-          await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'failed', error: sanitizeError(error), finishedAt: now() } }));
-          continue;
-        }
+      if (!task.jobId) {
+        const prepared = await withRunLease(lease, async (tx) => {
+          const estimated = Number(task.estimatedUnits ?? 1);
+          if (!(await reserveBudget(tx, workspaceId, runId, estimated))) {
+            await tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'failed', error: 'BUDGET_EXCEEDED', finishedAt: now() } });
+            return false;
+          }
+          await ensureTaskJob(tx, workspaceId, runId, task);
+          return true;
+        });
+        if (!prepared) continue;
       }
       batchStarted += 1;
       if (batchStarted >= Number(run.maxConcurrency ?? 2)) break;
     }
 
-    const refreshedTasks: any[] = await withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationTask.findMany({ where: { workspaceId, runId }, orderBy: { priority: 'desc' } }));
+    const refreshedTasks: any[] = await withRunLease(lease, (tx) => tx.orchestrationTask.findMany({ where: { workspaceId, runId }, orderBy: { priority: 'desc' } }));
     const prepared = refreshedTasks.filter((task) => task.status === 'queued' && (task.dependsOn ?? []).every((dep: string) => succeededIds.has(dep)) && task.jobId).slice(0, Number(run.maxConcurrency ?? 2));
     if (prepared.length === 0) continue;
 
+    let claimed = false;
     for (const task of prepared) {
-      const claimedJob: any = await claimJobById(String(task.jobId), workerId, { leaseTtlMs: 30000, now: now(), workspaceId });
-      if (!claimedJob || claimedJob.status !== 'RUNNING') continue;
-      await processOrchestrationJob(workspaceId, runId, String(task.jobId), workerId, String(claimedJob.leaseId), new Date(claimedJob.leaseExpiresAt));
+      const claimedJob: any = await withRunLease(lease, (tx) => claimJobById(String(task.jobId), workerId, { leaseTtlMs: 30000, now: now(), workspaceId }, tx));
+      if (!claimedJob || claimedJob.status !== 'RUNNING' || claimedJob.leaseOwner !== workerId) continue;
+      claimed = true;
+      await processOrchestrationJob(workspaceId, runId, String(task.jobId), lease, String(claimedJob.leaseId));
     }
+    if (!claimed) await new Promise((resolve) => setTimeout(resolve, 100));
   }
   return getRun(workspaceId, runId);
 }
 
-export async function cancelOrchestrationRun(workspaceId: string, runId: string, reason = 'MANUAL_CANCEL'): Promise<any> {
-  const run = await getRun(workspaceId, runId);
-  if (!run) throw new Error('RUN_NOT_FOUND');
-  if (['succeeded', 'failed', 'cancelled'].includes(String(run.status))) return run;
-
-  const tasks = run.tasks ?? [];
-  const cancelErrors: any[] = [];
-  for (const task of tasks) {
-    if (!task.jobId) continue;
-    try {
-      await cancelJob(String(task.jobId), { reason: String(reason), workspaceId });
-    } catch (error) {
-      cancelErrors.push({ jobId: task.jobId, error: sanitizeError(error) });
-    }
-  }
+export async function cancelOrchestrationRun(workspaceId: string, runId: string, reason = 'MANUAL_CANCEL', lease?: OrchestrationLease): Promise<any> {
   return withWorkspaceTransaction(workspaceId, async (tx) => {
-    await tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'cancelled', error: reason, finishedAt: now(), currentStage: 'cancelled' } });
+    if (lease) await assertOrchestrationLease(lease, tx);
+    const changed = await tx.orchestrationRun.updateMany({
+      where: { id: runId, workspaceId, status: { notIn: ['succeeded', 'failed', 'cancelled'] } },
+      data: { status: 'cancelled', error: reason, finishedAt: now(), currentStage: 'cancelled', leaseOwner: null, leaseToken: null, leaseExpiresAt: null },
+    });
+    const run = await tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true }, omit: { leaseToken: true } });
+    if (!run) throw new Error('RUN_NOT_FOUND');
+    if (changed.count === 0) return run;
+    const tasks = run.tasks;
+    const cancelErrors: { jobId: string; error: string }[] = [];
+    for (const task of tasks) {
+      if (!task.jobId) continue;
+      const job = await cancelJob(String(task.jobId), { reason: String(reason), workspaceId }, tx);
+      if (job && !['CANCELLED', 'SUCCEEDED', 'FAILED', 'DEAD_LETTER'].includes(job.status)) {
+        cancelErrors.push({ jobId: task.jobId, error: 'JOB_NOT_CANCELLED' });
+      }
+    }
     await tx.orchestrationTask.updateMany({ where: { workspaceId, runId, status: { in: ['queued', 'running', 'waiting_for_approval'] } }, data: { status: 'cancelled', finishedAt: now(), error: reason } });
     await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_cancel_requested', actor: null, data: { reason, requestedJobs: tasks.map((t: any) => t.jobId).filter(Boolean) } , tx });
     await writeAuditEvent({ workspaceId, runId: null, type: cancelErrors.length ? 'orchestration_cancel_failed' : 'orchestration_cancel_succeeded', actor: null, data: { reason, cancelErrors } , tx });
-    return tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true } });
+    return tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true }, omit: { leaseToken: true } });
   });
 }
 
@@ -639,16 +666,16 @@ export async function decideOrchestrationTaskApproval(workspaceId: string, runId
       }
     }
     await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_approval_decided', actor: actor ?? null, data: { taskId, approved, reason } , tx });
-    return tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true } });
+    return tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true }, omit: { leaseToken: true } });
   });
 }
 
 export async function getOrchestrationRun(workspaceId: string, runId: string): Promise<any> {
-  return withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true } }));
+  return withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true }, omit: { leaseToken: true } }));
 }
 
 export async function listOrchestrationRuns(workspaceId: string): Promise<any[]> {
-  return withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.findMany({ where: { workspaceId }, orderBy: { createdAt: 'desc' }, include: { tasks: true } }));
+  return withWorkspaceTransaction(workspaceId, (tx) => tx.orchestrationRun.findMany({ where: { workspaceId }, orderBy: { createdAt: 'desc' }, include: { tasks: true }, omit: { leaseToken: true } }));
 }
 
 export async function resumeOrchestrationRun(workspaceId: string, runId: string): Promise<any> {
