@@ -372,9 +372,12 @@ export async function resumeStaleOrchestrations(opts: { workspaceId?: string | n
         tx.orchestrationRun.findMany({
           where: {
             workspaceId: workspace.id,
-            OR: [
-              { status: { in: ['queued', 'running'] }, updatedAt: { lt: staleBefore } },
-              { status: 'waiting_for_approval' },
+            AND: [
+              { OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }] },
+              { OR: [
+                { status: { in: ['queued', 'running'] }, updatedAt: { lt: staleBefore } },
+                { status: 'waiting_for_approval' },
+              ] },
             ],
           },
           select: { id: true, status: true },

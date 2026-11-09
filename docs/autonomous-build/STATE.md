@@ -1,5 +1,15 @@
 # STATE
 
+## Persistent orchestration worker leases (2026-11-09)
+
+The existing orchestration driver now claims and renews a PostgreSQL run lease.
+Run and task writes check the lease under a row lock. Budget reservation and job
+creation commit together, as do successful task output, job completion and audit.
+The recovery regression expires an active lease, takes over the run, and verifies
+that a delayed result from the old worker cannot overwrite the recovered output.
+The HTTP orchestration routes retain their synchronous response behavior. Moving
+execution fully out of the request path is a separate follow-up.
+
 ## Phase 23 — AI gateway and Ollama-connected agents (2026-11-04)
 
 Phase: provider-independent AI gateway built on `multi-agent-system`; departmental agent tasks now
