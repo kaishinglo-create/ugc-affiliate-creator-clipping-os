@@ -86,3 +86,11 @@ Details: .mece/eslint-audit/
 Phase: Partial implementation; backend gateway + MCP adapter + UI + docs.
 Runtime: BLOCKED (no Chromium/Playwright or BROWSER_RUNTIME_URL).
 Tests: browser-gateway 5/5 PASS; typecheck/build/lint PASS.
+
+## API Anything discovery pilot (2026-11-09)
+
+The isolated pilot exposes one public YouTube search via MCP stdio, capped
+at Tier 1 with the shared catalog disabled. See
+[pilot setup](../../pilots/api-anything/README.md).
+VPS verification, scheduler integration and workspace candidate persistence
+are separate follow-up steps.

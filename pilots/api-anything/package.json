@@ -1,0 +1,12 @@
+{
+  "name": "ugc-api-anything-pilot",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.23.4" },
+  "scripts": { "smoke": "node smoke.mjs" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "api-anything": "0.4.0",
+    "zod": "4.6.7"
+  }
+}
