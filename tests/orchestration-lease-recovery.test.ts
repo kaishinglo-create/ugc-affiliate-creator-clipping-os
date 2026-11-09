@@ -25,6 +25,11 @@ describe('persistent orchestration lease recovery', () => {
     let first: Promise<unknown> | undefined;
     try {
       const run = await createOrchestrationRun(workspaceId, { goal: 'Lease recovery' });
+      // Exercise the normal driver on one task so the takeover reaches a
+      // terminal state without needing to arrange a publishing approval.
+      await withWorkspaceTransaction(workspaceId, (tx) =>
+        tx.orchestrationTask.deleteMany({ where: { runId: run.id, departmentKey: { not: 'ceo' } } })
+      );
       first = runOrchestration(workspaceId, run.id);
       await Promise.race([started, first.then(() => { throw new Error('First worker exited before starting its task'); })]);
       expect(await claimOrchestrationLease(workspaceId, run.id, 'concurrent-worker')).toBeNull();
@@ -41,13 +46,15 @@ describe('persistent orchestration lease recovery', () => {
       });
 
       const recovered = await runOrchestration(workspaceId, run.id);
+      expect(recovered.status).toBe('succeeded');
       expect(recovered.leaseEpoch).toBe(active.leaseEpoch + 1);
       const recoveredTask = recovered.tasks.find((entry: { id: string }) => entry.id === task.id);
       expect(recoveredTask.output).toEqual({ worker: 'new' });
       finishOldTask({ worker: 'old' });
       await first;
       const final = await getOrchestrationRun(workspaceId, run.id);
-      expect(final.status).toBe(recovered.status);
+      expect(final.status).toBe('succeeded');
+      expect(final.result).toEqual(recovered.result);
       expect(final.tasks.find((entry: { id: string }) => entry.id === task.id).output).toEqual({ worker: 'new' });
     } finally {
       finishOldTask({ worker: 'old' });
