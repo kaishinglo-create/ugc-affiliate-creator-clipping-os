@@ -112,5 +112,6 @@ Tests: browser-gateway 5/5 PASS; typecheck/build/lint PASS.
 The isolated pilot exposes one public YouTube search via MCP stdio, capped
 at Tier 1 with the shared catalog disabled. See
 [pilot setup](../../pilots/api-anything/README.md).
-VPS verification, scheduler integration and workspace candidate persistence
-are separate follow-up steps.
+The worker accepts manual and one-time scheduled searches, applies a workspace
+request budget, and stores candidates under workspace RLS. Recurring schedules
+and verification on the target device are follow-up steps.

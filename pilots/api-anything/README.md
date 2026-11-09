@@ -3,8 +3,8 @@
 This standalone MCP server is the first provider for the API Integration
 Department. Its only operation is a public YouTube video search. It runs over
 stdio and returns up to 20 normalized, deduplicated candidates. Duplicates are
-removed within a response. The pilot does not persist candidates or schedule
-searches.
+removed within a response. The standalone process returns its result to the caller. The UGC worker can
+queue individual searches and persist their results.
 
 ## Run
 
@@ -33,7 +33,20 @@ process, disables the shared catalog and caps execution at Tier 1. Its fetch
 policy permits public GET requests to the YouTube search endpoint only,
 including redirect hops. It does not need browser setup or a signed-in session.
 
-The smoke test needs outbound HTTPS to YouTube and is run manually. Use it on
-the Oracle VPS before enabling any scheduled calls. Queue integration,
-workspace budgets and database deduplication belong in the UGC worker
-integration, after the target environment has passed the smoke test.
+The smoke test needs outbound HTTPS to YouTube and is run manually. Run it
+on your target machine before enabling the worker integration.
+
+## Connect to the UGC worker
+
+Set `DISCOVERY_MCP_CLIENT` to the absolute path to this directory's
+`smoke.mjs` in the UGC server environment and run the engine. Use
+`POST /api/discovery/searches` as a workspace owner or admin with
+`{"query":"creator video clipping workflow"}`. An optional ISO 8601 `runAt`
+schedules a single run. The response contains the queued job. Use
+`GET /api/jobs/:id` for the result status and `GET /api/discovery/candidates`
+for the latest saved candidates. Both use the existing workspace session.
+
+The worker limits search attempts to ten per workspace per UTC day.
+Identical queries deduplicate within the requested scheduling hour.
+Candidate IDs deduplicate across all runs within the workspace.
+Recurring search schedules are separate from this pilot.

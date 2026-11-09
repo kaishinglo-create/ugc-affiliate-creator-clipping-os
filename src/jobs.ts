@@ -19,7 +19,7 @@ export type JobStatusValue =
   | 'DEAD_LETTER'
   | 'WAITING_FOR_APPROVAL';
 
-export type JobTypeValue = 'WORKFLOW_RUN' | 'AGENT_TASK';
+export type JobTypeValue = 'WORKFLOW_RUN' | 'AGENT_TASK' | 'CONTENT_DISCOVERY';
 
 export interface CreateJobInput {
   workspaceId: string;
@@ -256,8 +256,8 @@ export async function claimDueJobs(workspaceId: string, workerId: string, opts: 
 
   const leaseId = randomUUID();
   const leaseExpiresAt = new Date(now.getTime() + leaseTtlMs);
-  // Empty string means "no type filter"; otherwise a comma separated allowlist.
-  const typeFilter = Array.isArray(opts.types) && opts.types.length > 0 ? opts.types.map(String).join(',') : '';
+  // Discovery jobs are reserved for the engine, which opts in explicitly.
+  const typeFilter = (opts.types?.length ? opts.types : ['WORKFLOW_RUN', 'AGENT_TASK']).join(',');
 
   const rows = await withWorkspaceTransaction(workspaceId, async (tx) => {
     return tx.$queryRaw`
@@ -890,6 +890,7 @@ export const JobStatus = {
 export const JobType = {
   WORKFLOW_RUN: 'WORKFLOW_RUN',
   AGENT_TASK: 'AGENT_TASK',
+  CONTENT_DISCOVERY: 'CONTENT_DISCOVERY',
 };
 
 export {

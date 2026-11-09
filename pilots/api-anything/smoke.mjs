@@ -24,11 +24,15 @@ try {
     { timeout: 30_000 },
   );
   const response = result.structuredContent;
-  if (result.isError || response?.ok !== true || response.tier !== 1 ||
+  if (process.argv[3] === '--worker') {
+    if (result.isError || !response) throw new Error('Invalid MCP response');
+    console.log(JSON.stringify(response));
+  } else if (result.isError || response?.ok !== true || response.tier !== 1 ||
       !Array.isArray(response.candidates) || response.candidates.length === 0) {
     throw new Error(`Search did not return Tier 1 candidates (${response?.reason ?? response?.class ?? 'empty_or_invalid'})`);
+  } else {
+    console.log(JSON.stringify(response, null, 2));
   }
-  console.log(JSON.stringify(response, null, 2));
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;
