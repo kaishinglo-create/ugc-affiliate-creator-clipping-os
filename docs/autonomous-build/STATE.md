@@ -1,5 +1,83 @@
 # STATE
 
+## Phase C: Transcription, media API and Playwright E2E (2026-11-25)
+
+- `src/transcription.ts` implements a real local whisper.cpp contract with
+  explicit `NOT_CONFIGURED` when binary/model are absent, plus deterministic,
+  explainable highlight detection over real transcripts. `tests/transcription.test.ts`
+  passes 4/4 (named test double only, never presented as speech recognition).
+- Workspace-scoped media endpoints were added: `/api/media/subtitles`,
+  `/api/media/export`, `/api/media/transcription/highlights`,
+  `/api/media/transcription/audio`. All paths are basenames confined to a
+  workspace temp root. `tests/media-api.test.ts` passes 3/3, including a 503
+  `NOT_CONFIGURED` export result and traversal rejection.
+- Repo Playwright suite `playwright.config.ts` + `tests/e2e/mece.spec.ts` passes
+  **8/8** against live :3031/:3000 servers; token never appears in output or
+  DOM. Existing browser smoke remains 27/27.
+- All newly added source and test files pass ESLint; full TypeScript typecheck
+  is clean.
+
+## Phase C: Discovery cursor/retry and video pipeline (2026-11-25)
+
+- YouTube discovery now persists a per-query pagination cursor in the
+  RLS-protected `OperationalPolicy` table, sends it on subsequent searches and
+  retries transport/rate-limit failures with bounded exponential backoff while
+  every attempt still consumes the existing daily budget (no limit bypass).
+  `tests/discovery-cursor-retry.test.ts` (2 tests) and the existing MCP schedule
+  tests pass 4/4; the fake MCP server is explicitly a test double, never a
+  production data source. No live source is configured (`EXTERNAL_BLOCKERS.txt`).
+- `src/video/clipping.ts` and `src/video/subtitles.ts` implement real
+  ffprobe/ffmpeg invocations with argument arrays, vertical scale/crop export,
+  SRT generation/burn-in and explicit `NOT_CONFIGURED` errors when binaries are
+  absent. `tests/video-pipeline.test.ts` passes 12/12 using named test doubles;
+  no fabricated media is presented as a result. ffmpeg/ffprobe remain externally
+  unavailable on this host.
+
+## Phase C: CEO/COO, Department, Self-Improving (2026-11-25)
+
+- CEO/COO are now persistent operational agents, not decorative labels. `src/company-agents.ts`
+  derives a real CEO synthesis validation from task rows and stores COO routing,
+  retry/escalation and approval-gate decisions in RLS-protected `DelegationRecord`,
+  `OperationalPolicy`, `Insight` and `AuditEvent` tables. Wired into
+  `src/orchestration.ts` and exposed through `GET /api/orchestrations/:id/company-agents`.
+  `tests/company-agents.test.ts` verifies pure validation, persisted decisions,
+  the mandatory approval gate and the validated terminal state (2/2 PASS).
+- Department outputs stay honest: deterministic planner results carry
+  `_meta.source = 'deterministic_planner'`, QA/publishing/security never claim
+  approval, publication or enforcement. Feature matrix now marks this complete.
+- `src/self-improving.ts` derives advisory suggestions only from real stored
+  `AuditEvent` rows; no fake success, no model calls, no paid fallback, and
+  deliberately no automatic policy application (no enforced policy key exists).
+  `tests/self-improving.test.ts` passes 5/5; `GET /api/self-improving` added and
+  covered by an API test (6/6 total after wiring).
+- Feature matrix updated for all three completed items. Remaining external
+  blockers unchanged in `docs/completion/EXTERNAL_BLOCKERS.txt`.
+
+## Phase A/B: checkpoint, RLS and live free model (2026-11-25)
+
+- Phase A: reviewed all uncommitted paths; secret scan over 360 tracked and
+  untracked files found only two false positives (code reading secrets from
+  `process.env`, no values). Staged-diff scan: 0 findings. Created local commit
+  `f77dd81` (`chore: local checkpoint ...`, 31 files). No push, merge or deploy.
+  Runtime artifacts, the empty scratch file `3` and the machine-specific
+  `.mece-control/config.json` remain intentionally uncommitted.
+- Phase B/RLS: `DATABASE_URL` connects as `ugc_os_app`, a dedicated role with
+  `rolsuper=f` and `rolbypassrls=f`; FORCE RLS is enabled on the workspace
+  tables. `tests/workspace-isolation.test.ts` passes **5/5** (own item readable,
+  foreign workspace 403, other member sees no foreign item, invalid id 400,
+  direct wrong-context RLS query returns 0 rows). The former "superuser
+  bypasses RLS" blocker is resolved for this database connection.
+- Phase B/provider: `opencode models` lists exactly the ten allowlisted
+  `opencode/*` models; no paid model is in the allowlist. A real bounded call
+  `opencode run --auto --standalone --model opencode/beam-free` returned `OK.`
+  (exit 0) without any API key. Free quota was available; no limit was bypassed
+  and no fallback model was used.
+- Remaining external blockers are recorded in
+  `docs/completion/EXTERNAL_BLOCKERS.txt`: no discovery MCP server/client, no
+  YouTube source, no ffmpeg/whisper/yt-dlp binaries, no platform credentials,
+  no external analytics, no deployment credentials. Local feature work
+  continues with explicit `NOT_CONFIGURED` contracts instead of fake results.
+
 ## Control Center, unified services and autonomous controller (2026-11-24)
 
 - MECE Control Center: `MECE_DASHBOARD_TOKEN` crypto-generated in `.env` only

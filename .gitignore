@@ -4,3 +4,5 @@ dist/
 src/generated/
 docs/autonomous-build/logs/
 docs/completion/controller/
+test-results/
+playwright-report/

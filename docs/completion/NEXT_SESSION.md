@@ -3,12 +3,12 @@
 ## Einstieg
 
 - Repo: `/home/kaishinglo/ugc-affiliate-creator-clipping-os`
-- Branch: `main`, HEAD `ef0e4347bd344389866f10ba7623eff33d1a56de`
-- Arbeitsbaum: alle Änderungen dieser Sitzung sind **uncommitted**; keine Pushes,
-  Merges oder Deployments. Vorhandene Benutzeränderungen wurden bewahrt.
-- Node 22.23.5, npm 10.9.9, Debian 13, 2 CPUs, 4 GB RAM
-- Gesamt-QA (2026-11-24): Typecheck PASS, ESLint PASS, Build PASS,
-  Vitest 41 Dateien / 143 Tests PASS, MECE-Browsercheck 27/27 PASS.
+- Branch: `main`, letzter lokaler Checkpoint `f77dd81` (Phase A/B) plus Phase-C
+  Änderungen; keine Pushes, Merges oder Deployments. Vorhandene
+  Benutzeränderungen wurden bewahrt.
+- Node 22, TypeScript strict, Fastify/Prisma 7/PostgreSQL, Vitest.
+- QA-Baseline vor Phase C: Typecheck/ESLint/Build PASS, Vitest 143/143,
+  Browsercheck 27/27. Phase-C-Ziel: alle neuen Tests grün, Baseline unverändert.
 
 ## Startbefehle
 
@@ -48,12 +48,31 @@ bash scripts/controller-supervisor.sh               # Watchdog, nur explizit
   historische `Next:`-Tasks aus `docs/autonomous-build/*.md` wurden im
   Journal als `obsolete` markiert (keine Code-Fehler).
 
+## Phase C erledigt (2026-11-25)
+
+- CEO/COO persistente Entscheidungen + CEO-Synthesis-Validierung
+  (`src/company-agents.ts`, `tests/company-agents.test.ts`).
+- YouTube-Discovery mit Cursor in `OperationalPolicy` und begrenztem
+  Exponential-Backoff (`src/discovery.ts`, `tests/discovery-cursor-retry.test.ts`).
+- FFmpeg/FFprobe-Pipeline, Untertitel, Hochformat, Transkription und
+  Highlight-Erkennung mit explizitem `NOT_CONFIGURED`
+  (`src/video/*`, `src/transcription.ts`, `tests/video-pipeline.test.ts`,
+  `tests/transcription.test.ts`) plus workspace-scoped Media-API.
+- Self-Improving als deterministischer Audit-Event-Rules-Learner ohne
+  automatische Richtlinienänderung (`src/self-improving.ts`).
+- Repo-Playwright-Suite `playwright.config.ts` + `tests/e2e/mece.spec.ts`: 8/8.
+
 ## Nächste sinnvolle Aufgaben
 
-1. Repo-basierte Playwright-Suite `tests/mece-browser.test.ts` ergänzen, die den bestehenden Smoke-Flow (Login, 401, Tabs, Modellwahl) gegen :3031 ausführt.
-2. `scripts/services.sh` um einen `doctor`-Modus erweitern, der Ports, Auth-Fail-Closed und Controller-Heartbeat prüft.
-3. Legacy-Archive `docs/completion/TASK_QUEUE.txt`, `COMPLETED_TASKS.txt` und `FAILED_TASKS.txt` nach der Journal-Migration als reines Archiv kennzeichnen; nichts löschen.
-4. `Self-Improving` aus der Feature-Matrix mit einem lokalen, kostenlosen Rules-Learner umsetzen und mit Unit-Tests absichern.
+1. Externe Blockaden auflösen (ffmpeg/whisper, Discovery-MCP/YouTube,
+   Plattform-Credentials, Analytics-Quellen, Deployment) und die bestehenden
+   `NOT_CONFIGURED`-Verträge mit echten Läufen verifizieren.
+2. `scripts/services.sh` um einen `doctor`-Modus erweitern (Ports, Auth,
+   Controller-Heartbeat, Medien-Binaries).
+3. Legacy-Archive `docs/completion/TASK_QUEUE.txt`, `COMPLETED_TASKS.txt` und
+   `FAILED_TASKS.txt` als reines Archiv kennzeichnen; nichts löschen.
+4. Autonomen Controller mit persistentem Fortschritt erst nach vollständiger
+   grüner QA und ohne extern limitierte Modelle wieder starten.
 
 ## Extern blockiert (nicht mit freien Ressourcen lösbar)
 
@@ -63,5 +82,5 @@ bash scripts/controller-supervisor.sh               # Watchdog, nur explizit
   Fallback-Modell zurück.
 - `DISCOVERY_MCP_SERVER` / `DISCOVERY_MCP_CLIENT`, YouTube-Zugang,
   Plattform-Credentials (Publishing), externe Analytics, Deployment-Credentials.
-- `tests/workspace-isolation.test.ts` benötigt einen lokalen Non-Superuser;
-  der `u0_a304`-Superuser umgeht FORCE RLS.
+- RLS-Blocker gelöst: `DATABASE_URL` nutzt `ugc_os_app` (`rolsuper=f`,
+  `rolbypassrls=f`), `tests/workspace-isolation.test.ts` 5/5 PASS.

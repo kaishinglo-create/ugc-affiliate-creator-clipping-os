@@ -13,6 +13,11 @@ import {
 } from './orchestration-lease.js';
 import { isAIGatewayError } from './ai/errors.js';
 import {
+  recordCooDecisionInTx,
+  persistCeoSynthesisInTx,
+  validateCeoSynthesis,
+} from './company-agents.js';
+import {
   createJob,
   claimJobById,
   getJob,
@@ -332,6 +337,13 @@ export async function createOrchestrationRun(workspaceId: string, input: any): P
           reason: 'initial persistently queued orchestration decomposition',
         },
       });
+      await recordCooDecisionInTx(tx, workspaceId, run.id, {
+        kind: 'route',
+        taskIds: taskDefs.filter((task) => task.departmentKey !== 'ceo').map((task) => task.id),
+        reason: `initial routing plan for ${taskDefs.length} tasks`,
+        evidence: { maxConcurrency, budgetUnits, taskCount: taskDefs.length },
+        decidedAt: now().toISOString(),
+      });
       await writeAuditEvent({
         workspaceId,
         runId: null,
@@ -437,6 +449,13 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
         });
         await tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'waiting_for_approval', approvalId: approval.id } });
         await markWaitingForApproval(jobId, { leaseId, workerId, workspaceId }, tx);
+        await recordCooDecisionInTx(tx, workspaceId, runId, {
+          kind: 'approval_gate',
+          taskIds: [String(task.id)],
+          reason: 'publishing task requires mandatory manual approval before execution',
+          evidence: { jobId, approvalId: approval.id, department: task.departmentKey },
+          decidedAt: now().toISOString(),
+        });
         await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_task_approval_requested', actor: null, data: { jobId, taskId: task.id, approvalId: approval.id }, tx });
       });
       return;
@@ -471,11 +490,27 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
     const attempts = Number(updatedTask?.attemptCount ?? 0);
     const maxAttempts = Number(task.maxAttempts ?? 2);
     if (retryable && attempts < maxAttempts && jobAfter?.status === 'RETRY_WAIT') {
-      await withRunLease(lease, (tx) => tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'queued', error: message, startedAt: null, finishedAt: null } }));
+      await withRunLease(lease, async (tx) => {
+        await tx.orchestrationTask.update({ where: { id: task.id }, data: { status: 'queued', error: message, startedAt: null, finishedAt: null } });
+        await recordCooDecisionInTx(tx, workspaceId, runId, {
+          kind: 'retry',
+          taskIds: [String(task.id)],
+          reason: 'retryable task failure scheduled within attempt budget',
+          evidence: { attempts, maxAttempts, jobStatus: jobAfter?.status ?? null, errorClass: message.slice(0, 200) },
+          decidedAt: now().toISOString(),
+        });
+      });
     } else {
       const finalStatus = jobAfter?.status === 'DEAD_LETTER' ? 'dead_letter' : 'failed';
       await withRunLease(lease, async (tx) => {
         await tx.orchestrationTask.update({ where: { id: task.id }, data: { status: finalStatus, error: message, finishedAt: now() } });
+        await recordCooDecisionInTx(tx, workspaceId, runId, {
+          kind: 'escalate',
+          taskIds: [String(task.id)],
+          reason: 'task exhausted retries or hit a non-retryable failure; escalated for manual review',
+          evidence: { attempts, maxAttempts, jobStatus: jobAfter?.status ?? null, errorClass: message.slice(0, 200), finalStatus },
+          decidedAt: now().toISOString(),
+        });
         await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_task_failed', actor: null, data: { jobId, taskId: task.id, department: task.departmentKey, error: message }, tx });
       });
     }
@@ -551,9 +586,12 @@ async function driveOrchestration(lease: OrchestrationLease): Promise<any> {
       }
     }
     if (tasks.length > 0 && tasks.every((task) => task.status === 'succeeded')) {
+      const validation = validateCeoSynthesis(run, tasks);
       await withRunLease(lease, async (tx) => {
-        await tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'succeeded', result: { tasks: tasks.map((task) => ({ id: task.id, output: task.output })) }, finishedAt: now(), currentStage: 'completed' } });
-        await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_succeeded', actor: null, data: { taskCount: tasks.length } , tx });
+        if (validation.status !== 'valid') throw new Error('CEO_SYNTHESIS_VALIDATION_FAILED');
+        await persistCeoSynthesisInTx(tx, workspaceId, validation);
+        await tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'succeeded', result: { tasks: tasks.map((task) => ({ id: task.id, output: task.output })), ceoValidation: validation }, finishedAt: now(), currentStage: 'completed' } });
+        await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_succeeded', actor: null, data: { taskCount: tasks.length, ceoValidation: validation.status } , tx });
       });
       return getRun(workspaceId, runId);
     }
@@ -583,6 +621,7 @@ async function driveOrchestration(lease: OrchestrationLease): Promise<any> {
     }
 
     // Reserve budget atomically before any job creation.
+    const dispatchedTaskIds: string[] = [];
     let batchStarted = 0;
     for (const task of readyTasks) {
       if (!task.jobId) {
@@ -597,8 +636,18 @@ async function driveOrchestration(lease: OrchestrationLease): Promise<any> {
         });
         if (!prepared) continue;
       }
+      dispatchedTaskIds.push(String(task.id));
       batchStarted += 1;
       if (batchStarted >= Number(run.maxConcurrency ?? 2)) break;
+    }
+    if (dispatchedTaskIds.length > 0) {
+      await withRunLease(lease, (tx) => recordCooDecisionInTx(tx, workspaceId, runId, {
+        kind: 'route',
+        taskIds: dispatchedTaskIds,
+        reason: 'dependency-aware dispatch within concurrency and budget limits',
+        evidence: { dispatched: dispatchedTaskIds.length, ready: readyTasks.length, maxConcurrency: Number(run.maxConcurrency ?? 2), spentUnits: Number(run.spentUnits ?? 0) },
+        decidedAt: now().toISOString(),
+      }));
     }
 
     const refreshedTasks: any[] = await withRunLease(lease, (tx) => tx.orchestrationTask.findMany({ where: { workspaceId, runId }, orderBy: { priority: 'desc' } }));
@@ -686,3 +735,4 @@ export const runOrchestrationRun = runOrchestration;
 export const getOrchestration = getOrchestrationRun;
 export const listOrchestrations = listOrchestrationRuns;
 export const decideTaskApproval = decideOrchestrationTaskApproval;
+export { getCompanyAgentRecord } from './company-agents.js';

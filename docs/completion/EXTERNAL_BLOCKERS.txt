@@ -1,5 +1,26 @@
-4449b6b2507e|Complete feature: Deployment (blocked) - criteria: Credentials
-64f262fbabcf|Roadmap: /home/kaishinglo/ugc-affiliate-creator-clipping-os/docs/autonomous-build/STATE.md:150:Blockers for the next phases: `OLLAMA_API_KEY` absent (Phase 23 cannot be verified live),
-9d67dc7dd181|Roadmap: /home/kaishinglo/ugc-affiliate-creator-clipping-os/docs/autonomous-build/STATE.md:175:Blockers: Ollama HTTP 402 external credits; optional helper workspace identifiers remain backward compatible.
-c8c86c22585f|Complete feature: Creator Discovery (partial) - criteria: DISCOVERY_MCP_CLIENT set
-f36c3e566ff4|Complete feature: Analytics (partial) - criteria: External sources
+# EXTERNE BLOCKADEN (Stand 2026-11-25)
+
+Gelöst / verifiziert:
+- RLS: `DATABASE_URL` verwendet die Nicht-Superuser-Rolle `ugc_os_app`
+  (`rolsuper=f`, `rolbypassrls=f`). `tests/workspace-isolation.test.ts` 5/5 PASS.
+- KI: `opencode/beam-free` ist im Katalog als kostenlos geführt und lieferte
+  einen echten Antworttext (`OK.`). Kein `OLLAMA_API_KEY` nötig.
+- MECE-Token, Browsercheck, Fastify-Bridge, 143/143 Vitest: unverändert grün.
+
+Weiterhin extern blockiert (lokale Entwicklung läuft weiter):
+- `DISCOVERY_MCP_SERVER` / `DISCOVERY_MCP_CLIENT` nicht gesetzt: kein
+  konfigurierter MCP-Datenanbieter für Creator-/Produktdiscovery.
+- YouTube-Suche ohne API-Zugang/Cursor-Quelle nicht live prüfbar; Retry- und
+  Budgetlogik kann lokal gegen einen Fake-MCP-Server getestet werden.
+- `ffmpeg` / `ffprobe` nicht installiert: Clipping-Pipeline wird mit
+  expliziter `NOT_CONFIGURED`-Rückmeldung implementiert und mit einem
+  Test-Dummy verifiziert; echte Medienausgabe bleibt offen bis Installation.
+- Kein lokales Whisper-Modell: Transkription/Highlight-Erkennung bleibt ohne
+  kostenloses lokales Modell nicht echt ausführbar.
+- Keine Plattform-Credentials: Publishing bleibt freigabepflichtig und ohne
+  echten Upload; keine Veröffentlichung ohne manuelle Freigabe.
+- Keine externen Analytics-Quellen; Analytics bleibt auf gespeicherte
+workspace-eigene Daten beschränkt.
+- Keine Deployment-Credentials: kein Push/Merge/Deploy.
+- Ollama-Cloud-spezifischer Live-Call ohne `OLLAMA_API_KEY` nicht prüfbar;
+  OpenCode-Free-Modelle sind davon unabhängig und funktionieren.

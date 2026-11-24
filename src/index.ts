@@ -1342,6 +1342,95 @@ app.get('/api/company/agents', async (req, reply) => {
   return { agents: rows };
 });
 
+app.get('/api/self-improving', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const q = (req.query ?? {}) as any;
+  const rawWindow = Number(q.windowMs);
+  const mod = await import('./self-improving.js');
+  const report = await mod.collectSelfImprovement(ctx.workspaceId, Number.isFinite(rawWindow) ? { windowMs: rawWindow } : {});
+  return { selfImprovement: report };
+});
+
+// Workspace-scoped media pipeline (video, subtitles, transcription)
+function mediaResultStatus(errorInfo: any): number {
+  if (errorInfo?.code === 'NOT_CONFIGURED') return 503;
+  if (errorInfo?.code === 'INVALID_INPUT' || errorInfo?.code === 'MEDIA_NOT_FOUND') return 400;
+  return 502;
+}
+
+app.post('/api/media/subtitles', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  try {
+    const { writeSrt } = await import('./video/subtitles.js');
+    const { workspaceMediaPath } = await import('./media-workspace.js');
+    const target = workspaceMediaPath(ctx.workspaceId, body.name ?? `captions-${Date.now()}.srt`);
+    const path = await writeSrt(Array.isArray(body.cues) ? body.cues : [], target);
+    reply.code(201).send({ subtitles: { path, cues: Array.isArray(body.cues) ? body.cues.length : 0 } });
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
+app.post('/api/media/export', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  try {
+    const { exportVideo } = await import('./video/clipping.js');
+    const { workspaceMediaPath } = await import('./media-workspace.js');
+    const result = await exportVideo({
+      input: workspaceMediaPath(ctx.workspaceId, body.inputName),
+      output: workspaceMediaPath(ctx.workspaceId, body.outputName),
+      start: Number(body.start ?? 0),
+      duration: Number(body.duration),
+      vertical: body.vertical === true,
+      width: body.width === undefined ? undefined : Number(body.width),
+      height: body.height === undefined ? undefined : Number(body.height),
+      subtitles: body.subtitlesName ? workspaceMediaPath(ctx.workspaceId, body.subtitlesName) : undefined,
+      allowedTempDir: (await import('./media-workspace.js')).workspaceMediaRoot(ctx.workspaceId),
+    });
+    if (!result.ok) return reply.code(mediaResultStatus(result.error)).send({ error: result.error, result });
+    return { export: result };
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
+app.post('/api/media/transcription/highlights', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const { detectHighlights } = await import('./transcription.js');
+  return { highlights: detectHighlights(String(body.text ?? ''), { keywords: Array.isArray(body.keywords) ? body.keywords : [], limit: Number(body.limit) || undefined }) };
+});
+
+app.post('/api/media/transcription/audio', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  try {
+    const { transcribeAndHighlight } = await import('./transcription.js');
+    const { workspaceMediaPath, workspaceMediaRoot } = await import('./media-workspace.js');
+    const result = await transcribeAndHighlight({
+      audioPath: workspaceMediaPath(ctx.workspaceId, body.audioName),
+      outputDir: workspaceMediaRoot(ctx.workspaceId),
+      modelPath: body.modelPath ? String(body.modelPath) : undefined,
+      language: body.language ? String(body.language) : undefined,
+      keywords: Array.isArray(body.keywords) ? body.keywords : [],
+      minScore: Number(body.minScore) || undefined,
+    });
+    return { transcription: result };
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
 app.get('/api/orchestrations', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;
@@ -1368,6 +1457,16 @@ app.get('/api/orchestrations/:id', async (req, reply) => {
   const run = await (await import('./orchestration.js')).getOrchestrationRun(ctx.workspaceId, (req.params as any).id);
   if (!run) return reply.code(404).send({ error: 'NOT_FOUND' });
   return { orchestration: run };
+});
+
+app.get('/api/orchestrations/:id/company-agents', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const mod = await import('./orchestration.js');
+  const run = await mod.getOrchestrationRun(ctx.workspaceId, (req.params as any).id);
+  if (!run) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const record = await mod.getCompanyAgentRecord(ctx.workspaceId, (req.params as any).id);
+  return { companyAgents: record };
 });
 
 app.post('/api/orchestrations/:id/resume', async (req, reply) => {

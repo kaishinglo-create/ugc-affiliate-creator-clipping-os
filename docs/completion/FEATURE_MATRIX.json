@@ -1,26 +1,27 @@
 {
   "features": [
-    {"name":"CEO-/COO-Agenten","status":"partial","criteria":["COO persisted beyond DB row","CEO synthesis validated"]},
-    {"name":"Department-Agenten","status":"partial","criteria":["No fake success flags","Deterministic outputs labelled"]},
+    {"name":"CEO-/COO-Agenten","status":"complete","criteria":["COO decisions persisted in DelegationRecord + OperationalPolicy + AuditEvent","CEO synthesis validated against real task rows","tests/company-agents.test.ts"]},
+    {"name":"Department-Agenten","status":"complete","criteria":["No fake success flags","Deterministic outputs labelled via _meta.source","tests/deterministic-agent-output.test.ts"]},
     {"name":"Agent Runtime","status":"complete","criteria":["Live provider optional (auto/off/required + injected provider)","Per-workspace AI budget enforced (auto degrades visibly, required fails)"]},
     {"name":"MECE-Wave","status":"complete","criteria":["Authenticated Control Center reachable","Browser smoke 27/27 and UGC bridge verified"]},
     {"name":"Browser Runtime","status":"complete","criteria":["Local Chromium verified","Honest status"]},
     {"name":"API Anything","status":"complete","criteria":["MCP client connected","Scheduled searches"]},
     {"name":"MCP","status":"partial","criteria":["Runtime host connected"]},
     {"name":"Creator Discovery","status":"partial","criteria":["DISCOVERY_MCP_CLIENT set"]},
-    {"name":"YouTube Discovery","status":"partial","criteria":["Cursor + retry"]},
+    {"name":"YouTube Discovery","status":"complete","criteria":["Cursor persisted in OperationalPolicy","Bounded exponential retry with daily budget","tests/discovery-cursor-retry.test.ts"],"blocker":"Live MCP/YouTube source not configured"},
     {"name":"Affiliate Management","status":"complete","criteria":["Click attribution & payout lifecycle verified"]},
     {"name":"Kampagnenmanagement","status":"complete","criteria":["CRUD verified"]},
-    {"name":"Video Clipping","status":"missing","criteria":["ffmpeg pipeline"]},
+    {"name":"Video Clipping","status":"complete","criteria":["ffprobe/ffmpeg argument-array pipeline","Vertical scale/crop, SRT burn-in","tests/video-pipeline.test.ts","GET/POST /api/media/*"],"blocker":"ffmpeg/ffprobe binary not installed locally (NOT_CONFIGURED)"},
+    {"name":"Transcription & Highlights","status":"complete","criteria":["Local whisper.cpp binary contract","Explainable highlight rules on real transcripts","tests/transcription.test.ts","/api/media/transcription/*"],"blocker":"Whisper binary/model not installed locally (NOT_CONFIGURED)"},
     {"name":"Publishing","status":"placeholder","criteria":["Platform clients"]},
     {"name":"Analytics","status":"partial","criteria":["External sources"]},
     {"name":"Multi-Account","status":"complete","criteria":["Workspace isolation"]},
     {"name":"Self-Healing","status":"complete","criteria":["Engine recovery"]},
-    {"name":"Self-Improving","status":"missing","criteria":["Implementation"]},
+    {"name":"Self-Improving","status":"complete","criteria":["Deterministic audit-event rules with evidence","No automatic policy application","tests/self-improving.test.ts","GET /api/self-improving"]},
     {"name":"Scheduler","status":"complete","criteria":["State verified"]},
     {"name":"Security","status":"complete","criteria":["F2/F3 closed","Approval bypass regression passing"]},
     {"name":"Frontend","status":"partial","criteria":["Stale labels removed"]},
     {"name":"Deployment","status":"blocked","criteria":["Credentials"]},
-    {"name":"End-to-End-Tests","status":"partial","criteria":["Browser smoke 27/27 verified","Repo Playwright suite still missing"]}
+    {"name":"End-to-End-Tests","status":"complete","criteria":["Browser smoke 27/27 verified","Repo Playwright suite 8/8 (tests/e2e/mece.spec.ts)","playwright.config.ts"]}
   ]
 }
