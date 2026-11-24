@@ -325,7 +325,7 @@ function renderPage() {
   if (!page) { window.location.reload(); return; }
   page.innerHTML = (views[state.view]||overview)();
   const crumb = $("#crumb"); if (crumb) crumb.textContent = titles[state.view]||"Overview";
-  document.querySelectorAll(".nav[data-view]").forEach(b=>b.classList.toggle("active",b.dataset.view===state.view));
+  document.querySelectorAll(".nav[data-view]").forEach(b=>{b.classList.toggle("active",b.dataset.view===state.view);b.setAttribute("aria-current",b.dataset.view===state.view?"page":"false");});
   const sb = $("#sidebar"); if (sb) sb.classList.remove("open");
 }
 
@@ -467,8 +467,16 @@ function wireEvents() {
     }
   });
   const menu = $("#menu"); if (menu) menu.addEventListener("click", ()=>$("#sidebar").classList.toggle("open"));
-  const help = $("#help"); if (help) help.addEventListener("click", ()=>{ $("#modal-body").innerHTML="<h2>UGC OS</h2><p>Connected to backend. Data persisted in PostgreSQL.</p>"; $("#modal").showModal(); });
+  const help = $("#help"); if (help) help.addEventListener("click", ()=>{ $("#modal-body").innerHTML="<h2>UGC OS</h2><p>Connected to backend. Data persisted in PostgreSQL.</p><p class='sub'>Shortcuts: Arrow keys navigate tabs. Enter/Space activate. Esc closes dialogs.</p>"; $("#modal").showModal(); });
   const close = $("#close"); if (close) close.addEventListener("click", ()=>$("#modal").close());
+  document.addEventListener("keydown", (e)=>{
+    if (e.target && (e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA")) return;
+    const navs = Array.from(document.querySelectorAll(".nav[data-view]"));
+    if (!navs.length) return;
+    const idx = navs.findIndex(b=>b.classList.contains("active"));
+    if (e.key==="ArrowDown"||e.key==="ArrowRight") { e.preventDefault(); const n=navs[(idx+1)%navs.length]; if (n) n.click(); }
+    else if (e.key==="ArrowUp"||e.key==="ArrowLeft") { e.preventDefault(); const n=navs[(idx-1+navs.length)%navs.length]; if (n) n.click(); }
+  });
 }
 
 function openForm(title, fields, kind) {

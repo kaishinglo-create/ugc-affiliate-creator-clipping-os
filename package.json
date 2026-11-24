@@ -5,6 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "services": "bash scripts/services.sh",
+    "dev:stop": "bash scripts/services.sh stop ugc",
+    "dev:status": "bash scripts/services.sh status",
     "build": "tsc -p tsconfig.json && rm -rf dist/src/generated && cp -r src/generated dist/src/generated",
     "start": "node dist/src/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",

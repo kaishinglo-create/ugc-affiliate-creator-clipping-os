@@ -1,5 +1,70 @@
 # STATE
 
+## Control Center, unified services and autonomous controller (2026-11-24)
+
+- MECE Control Center: `MECE_DASHBOARD_TOKEN` crypto-generated in `.env` only
+  (never printed, logged or committed; file mode 600; gitignored). Server has
+  SHA-256/timing-safe token comparison, origin gate, fail-closed 401, no MCP
+  secret values in API responses and an allowlisted log path. Verified: `GET /`
+  200, `/api/status` 401 without token, 401 with wrong token, 200 with valid
+  token (`authEnabled true`, `ugcReachable true`, 10 free models).
+- UI/auth: token lives only in browser `sessionStorage`, sent as
+  `X-Control-Token`; never present in HTML/JS/logs. Chat uses the local
+  `opencode serve` REST API (lazily started), not a non-existent SDK path.
+  Real Chromium browser check: **27/27 PASS** (login, 401, wrong-token clear,
+  all tabs, model persistence/reset, no token in HTML, dashboard link).
+- UGC bridge: `public/index.html` links `http://127.0.0.1:3031/`; Fastify
+  `/api/control/status` returns authenticated MECE/UGC/controller status
+  (unauth 401, auth 200, `reachable true`, `ugc.reachable true`).
+- One server: `scripts/serve.mjs` (:4173) removed after confirming no
+  dependants. `scripts/services.sh start|stop|status|restart [ugc|control|browser|all]`
+  plus `npm run services|dev:stop|dev:status` now own all processes; reported
+  `ugc :3000 200`, `control :3031 200`, `browser :3200 200`.
+- Test stability: 100-call AI-gateway stress test batched to 8 concurrent
+  transactions; orchestration helper fails fast on a foreign terminal state;
+  `src/engine.ts` records workspace/tick and driver errors explicitly;
+  Vitest bounded to `maxWorkers: 2`, `minWorkers: 1`.
+- Autonomous controller replaced by Node ESM: `scripts/controller-core.mjs`
+  (pure classification, backoff, journal replay, free-model eligibility,
+  checkpoint allowlist), `scripts/autonomous-controller.mjs` (flock, atomic
+  state/heartbeat, journal, cooldowns, resource gate, verification tiers,
+  secret-safe local checkpoints), thin shell shim + supervisor. Legacy runtime
+  is migration-only; new runtime is gitignored under
+  `docs/completion/controller/`. Free models come solely from the verified
+  `scripts/free-models.json` allowlist; no paid fallback exists.
+- MECE now reads controller status/tasks from the new runtime journal
+  (`controller.source runtime`, `tasks.source journal`) instead of legacy text
+  files, with a legacy fallback. Stale `Next:` tasks from
+  `docs/autonomous-build/*.md` were retired as `obsolete` events; executable
+  discovery now uses `docs/completion/NEXT_SESSION.md` and real matrix gaps.
+- Verified: typecheck PASS, ESLint PASS, build PASS, **Vitest 41 files /
+  143 tests PASS** (final re-run after all changes), targeted 4-file suite
+  39/39 PASS, controller-core 7/7 PASS,
+  MECE browser check 27/27 PASS, bridge auth 401/200. Syntax checks:
+  `node --check` on all `.mjs`, `bash -n` on both shell scripts.
+- Still unverified: a live free-model run (`OLLAMA_API_KEY` absent; historical
+  `Free usage limit reached` is treated as quota, not a code failure), and the
+  local RLS superuser assertion. No commit, push, merge or deploy was created.
+
+## F2/F3 honesty and approval-bypass regression (2026-11-24)
+
+- Integrations: `/api/integrations` now reports only `NOT_CONFIGURED` or
+  `CREDENTIALS_ONLY` with `liveAdapter: false`; no API response claims a live
+  provider connection, and the UI labels stored credentials accordingly. The
+  configure endpoint maps its internal DB status through
+  `resolveIntegrationStatus`, so it returns `CREDENTIALS_ONLY`, never
+  `CONFIGURED` (`tests/integrations.test.ts`).
+- Agents: the legacy `/api/agent-tasks/:id/run` route no longer echoes input as
+  agent output or marks work completed; it returns `AGENT_RUNTIME_NOT_CONNECTED`
+  and leaves the task queued. Deterministic planner outputs no longer assert QA
+  approval, publishing counts, kill-switch verification, or CEO readiness
+  (`tests/deterministic-agent-output.test.ts`).
+- Regression: `tests/jobs-approval-regression.test.ts` verifies that neither a
+  helper caller nor an operator can complete a `WAITING_FOR_APPROVAL` job, that
+  plain members cannot use operator-only job routes, and that an approval
+  decision resumes the job to `QUEUED`.
+- Verified: typecheck PASS, ESLint PASS, 4 targeted test files / 7 tests PASS.
+
 ## Uncommitted working-tree review (2026-11-24)
 
 The roadmap entry `STATE.md:176` offered "review and commit the uncommitted
@@ -185,6 +250,16 @@ Later the same day both dev processes disappeared; an external supervisor
 restarted `npm run dev` automatically (PID 13618, server PID 13651). Health and
 ready checks returned HTTP 200 again. Manual duplicate `tsx watch` starts fail
 with `EADDRINUSE` — check `ss -ltnp | grep ':3000'` before starting one.
+
+"Starte alles" (23:17): PostgreSQL 17 running; UGC app/API/UI on `:3000`
+(`/health` ok, `/ready` 200, automation engine `on` in `.env`); browser runtime
+host started with `node --env-file=../.env server.mjs` on `127.0.0.1:3200`,
+`/status` reports Chromium available. `scripts/controller-supervisor.sh` plus
+`autonomous-controller.sh` were already running from another session (controller
+state `running`, but the log shows free-model usage-limit errors — not fixed
+here). Not started: MECE control center (`:3031`) because
+`MECE_DASHBOARD_TOKEN` is empty, and `scripts/serve.mjs` (`:4173`) because the
+UI is already served by Fastify on `:3000`. No commits or deploys.
 
 Vitest full run: 117/122 tests passed. Five failures remain in
 `ai-gateway.test.ts`, `orchestration.test.ts`, `engine-hardening.test.ts` and

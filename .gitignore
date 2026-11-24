@@ -3,3 +3,4 @@ dist/
 .env
 src/generated/
 docs/autonomous-build/logs/
+docs/completion/controller/

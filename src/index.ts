@@ -662,6 +662,35 @@ app.get('/api/system/status', async (req, reply) => {
   return { status: dbOk ? 'ok' : 'degraded', db: dbOk, version: '0.1.0', time: new Date().toISOString() };
 });
 
+// Sanitized bridge to the MECE control center. The dashboard token is used
+// server-side only and is never exposed to the browser.
+app.get('/api/control/status', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  if (!requireOperatorRole(ctx, reply)) return;
+  const token = String(process.env.MECE_DASHBOARD_TOKEN || '').trim();
+  if (token.length < 32) return { reachable: false, reason: 'CONTROL_TOKEN_NOT_CONFIGURED' };
+  try {
+    const response = await fetch('http://127.0.0.1:3031/api/status', {
+      headers: { 'x-control-token': token },
+      signal: AbortSignal.timeout(2500),
+    });
+    if (!response.ok) return { reachable: false, reason: 'CONTROL_AUTH_FAILED' };
+    const upstream = await response.json() as any;
+    return {
+      reachable: true,
+      url: 'http://127.0.0.1:3031/',
+      version: upstream.version ?? null,
+      job: upstream.job ? { state: upstream.job.state, name: upstream.job.name, started: upstream.job.started, exitCode: upstream.job.exitCode } : null,
+      controller: upstream.controller ? { status: upstream.controller.status, currentTask: upstream.controller.currentTask ?? null, queueDepth: upstream.controller.queueDepth ?? null } : null,
+      oc: upstream.oc ? { url: upstream.oc.url, startupError: upstream.oc.startupError ?? null } : null,
+      ugc: upstream.ugc ? { reachable: upstream.ugc.reachable, status: upstream.ugc.status } : null,
+    };
+  } catch {
+    return { reachable: false, reason: 'CONTROL_UNAVAILABLE' };
+  }
+});
+
 
 // Autonomous orchestrator
 app.get('/api/approvals', async (req, reply) => {

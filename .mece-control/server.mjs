@@ -2,8 +2,8 @@ import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
+import { replayQueue } from "../scripts/controller-core.mjs";
 
 const ROOT = process.cwd();
 const BASE = path.join(ROOT, ".mece-control");
@@ -17,11 +17,119 @@ const STATUS_FILE = path.join(BASE, "runs.json");
 const PORT = 3031;
 const OC_PORT = 4096;
 const ALLOWED_AUTOMATIONS = ["mece-audit", "mece-repair", "mece-regression", "mece-wave"];
-const DEFAULT_MODEL = "ollama-cloud/beam";
+const DEFAULT_MODEL = "opencode/big-pickle";
 const DEFAULT_MAX_REPAIR_ROUNDS = 2;
 const DEFAULT_RUN_TIMEOUT_MS = 300000;
 const MCP_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const DASHBOARD_TOKEN = String(process.env.MECE_DASHBOARD_TOKEN || "").trim();
+const FREE_MODELS_FILE = path.join(ROOT, "scripts", "free-models.json");
+const CONTROLLER_RUNTIME_DIR = path.join(ROOT, "docs", "completion", "controller");
+const CONTROLLER_STATE_FILE = path.join(CONTROLLER_RUNTIME_DIR, "state.json");
+const CONTROLLER_JOURNAL_FILE = path.join(CONTROLLER_RUNTIME_DIR, "journal.jsonl");
+const LEGACY_CONTROLLER_STATE_FILE = path.join(ROOT, "docs", "completion", "AUTONOMOUS_STATE.json");
+const TASK_QUEUE_FILE = path.join(ROOT, "docs", "completion", "TASK_QUEUE.txt");
+const COMPLETED_TASKS_FILE = path.join(ROOT, "docs", "completion", "COMPLETED_TASKS.txt");
+const FAILED_TASKS_FILE = path.join(ROOT, "docs", "completion", "FAILED_TASKS.txt");
+
+function freeModels() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(FREE_MODELS_FILE, "utf8"));
+    const models = Array.isArray(parsed.models) ? parsed.models.filter((m) => typeof m === "string" && m.startsWith("opencode/")) : [];
+    return models.length ? models : ["opencode/big-pickle"];
+  } catch {
+    return ["opencode/big-pickle"];
+  }
+}
+
+function isFreeModel(value) {
+  return freeModels().includes(String(value || "").trim());
+}
+
+function isAllowedAgent(value) {
+  const name = String(value || "").trim();
+  return name === "orchestrator" || CHAT_AGENTS.includes(name);
+}
+
+function readJsonFile(file, fallback) {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return fallback; }
+}
+
+function readTaskLines(file) {
+  try {
+    return fs.readFileSync(file, "utf8").split("\n").map((line) => line.trim()).filter(Boolean).slice(0, 100);
+  } catch { return []; }
+}
+
+function controllerState() {
+  const runtime = readJsonFile(CONTROLLER_STATE_FILE, null);
+  if (runtime) {
+    return {
+      status: runtime.status || "unknown",
+      pauseReason: runtime.pauseReason || null,
+      resumeAt: runtime.resumeAt || null,
+      currentTask: runtime.currentTask || null,
+      queueDepth: runtime.queueDepth ?? null,
+      updatedAt: runtime.updatedAt || null,
+      uptimeSeconds: runtime.uptimeSeconds ?? null,
+      heartbeatAgeSeconds: runtime.heartbeatAgeSeconds ?? null,
+      model: runtime.model || null,
+      resources: runtime.resources || null,
+      verification: runtime.verification || null,
+      lastCheckpoint: runtime.lastCheckpoint ?? null,
+      source: "runtime"
+    };
+  }
+  const legacy = readJsonFile(LEGACY_CONTROLLER_STATE_FILE, {});
+  return {
+    status: legacy.status || "unknown",
+    currentTask: legacy.currentTask || null,
+    queueDepth: null,
+    updatedAt: legacy.stoppedAt || legacy.startedAt || null,
+    uptimeSeconds: null,
+    heartbeatAgeSeconds: null,
+    model: null,
+    resources: null,
+    verification: null,
+    lastCheckpoint: legacy.lastCheckpoint ?? null,
+    source: "legacy"
+  };
+}
+
+function controllerTasks() {
+  if (fs.existsSync(CONTROLLER_JOURNAL_FILE)) {
+    const events = readTaskLines(CONTROLLER_JOURNAL_FILE).map((line) => {
+      try { return JSON.parse(line); } catch { return null; }
+    }).filter(Boolean);
+    const replay = replayQueue(events);
+    return {
+      queued: replay.pending.map((task) => task.text).slice(0, 100),
+      completed: replay.completed.map((task) => task.text).slice(0, 100),
+      failed: [
+        ...replay.failed.map((task) => task.text),
+        ...replay.quarantined.map((task) => `${task.text} [quarantined: ${task.reason || "unknown"}]`)
+      ].slice(0, 100),
+      source: "journal"
+    };
+  }
+  return {
+    queued: readTaskLines(TASK_QUEUE_FILE),
+    completed: readTaskLines(COMPLETED_TASKS_FILE),
+    failed: readTaskLines(FAILED_TASKS_FILE),
+    source: "legacy"
+  };
+}
+
+function safeUrlDisplay(value) {
+  try {
+    const url = new URL(String(value || ""));
+    url.username = "";
+    url.password = "";
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (/token|key|secret|password|auth/i.test(key)) url.searchParams.delete(key);
+    }
+    return url.toString();
+  } catch { return ""; }
+}
 
 const AGENT_TASKS = {
   "frontend-auditor": "Frontend-Komponenten, Formulare, Accessibility, Responsive-Verhalten, Fehlerzustande und Smoke-Tests pruefen.",
@@ -50,7 +158,7 @@ function defaultConfig() {
   return {
     projectPath: ROOT,
     appServerUrl: "http://127.0.0.1:3000",
-    logPath: "/data/data/com.termux/files/usr/tmp/ugc-dev.log",
+    logPath: path.join(ROOT, ".run", "dev.log"),
     agent: "orchestrator",
     model: DEFAULT_MODEL,
     maxRepairRounds: DEFAULT_MAX_REPAIR_ROUNDS,
@@ -63,7 +171,12 @@ function defaultConfig() {
 function loadConfig() {
   try {
     const stored = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
-    return { ...defaultConfig(), ...stored };
+    const loaded = { ...defaultConfig(), ...stored };
+    // Never keep a non-free model in active configuration.
+    if (!isFreeModel(loaded.model)) loaded.model = DEFAULT_MODEL;
+    if (!isAllowedAgent(loaded.agent)) loaded.agent = "orchestrator";
+    if (!isAllowedLogPath(loaded.logPath)) loaded.logPath = defaultConfig().logPath;
+    return loaded;
   } catch {
     return defaultConfig();
   }
@@ -97,9 +210,8 @@ function readDashboardToken(req) {
 }
 
 function constantEqualText(a, b) {
-  const left = Buffer.from(String(a), "utf8");
-  const right = Buffer.from(String(b), "utf8");
-  if (left.length !== right.length) return false;
+  const left = crypto.createHash("sha256").update(String(a), "utf8").digest();
+  const right = crypto.createHash("sha256").update(String(b), "utf8").digest();
   return crypto.timingSafeEqual(left, right);
 }
 
@@ -193,6 +305,10 @@ function readMcpConfig() {
     for (const [name, value] of Object.entries(mcp)) {
       const entry = value && typeof value === "object" ? value : {};
       const command = Array.isArray(entry.command) ? entry.command : [];
+      const env = entry.environment || entry.env || {};
+      const headers = entry.headers || {};
+      // Values are never returned to the browser: only keys/counts are useful
+      // for editing, and raw secrets must not be readable via the API.
       output.push({
         name,
         source: item.source,
@@ -200,13 +316,13 @@ function readMcpConfig() {
         transport: entry.type === "remote" ? "remote" : "local",
         type: entry.type || "local",
         enabled: entry.enabled !== false,
-        url: entry.url || "",
+        url: safeUrlDisplay(entry.url || ""),
         command: command.length ? command[0] : "",
         args: command.slice(1),
         cwd: entry.cwd || "",
-        env: entry.environment || entry.env || {},
-        headers: entry.headers || {},
-        hasSecrets: Boolean(Object.keys(entry.environment || entry.env || {}).length || Object.keys(entry.headers || {}).length)
+        envKeys: Object.keys(env),
+        headerKeys: Object.keys(headers),
+        hasSecrets: Boolean(Object.keys(env).length || Object.keys(headers).length)
       });
     }
   }
@@ -300,12 +416,35 @@ function mergeMcpProject(input, deleting = false) {
   }
 }
 
+function isAllowedLogPath(pathName) {
+  const target = String(pathName || "").trim();
+  if (!target) return false;
+  const resolved = path.resolve(target);
+  const allowedRoots = [RUNS, path.join(ROOT, ".run")].map((p) => path.resolve(p) + path.sep);
+  return allowedRoots.some((root) => resolved.startsWith(root));
+}
+
 function currentLog() {
-  const config = loadConfig();
-  const pathName = config.logPath;
-  if (!pathName || !fs.existsSync(pathName)) return "";
+  const pathName = loadConfig().logPath;
+  if (!isAllowedLogPath(pathName) || !fs.existsSync(pathName)) return "";
   const buffer = fs.readFileSync(pathName);
   return buffer.subarray(Math.max(0, buffer.length - 24000)).toString("utf8");
+}
+
+let ugcHealthCache = { at: 0, data: { reachable: false, status: "unknown" } };
+async function ugcHealth() {
+  if (Date.now() - ugcHealthCache.at < 10000) return ugcHealthCache.data;
+  const url = String(loadConfig().appServerUrl || "http://127.0.0.1:3000").trim();
+  let data = { reachable: false, status: "unknown", url };
+  try {
+    const response = await fetch(new URL("/health", url), { signal: AbortSignal.timeout(1500) });
+    if (response.ok) {
+      const body = await response.json().catch(() => ({}));
+      data = { reachable: true, status: String(body.status || "ok"), url };
+    }
+  } catch {}
+  ugcHealthCache = { at: Date.now(), data };
+  return data;
 }
 
 function appendRun(record) {
@@ -389,23 +528,32 @@ async function startOpenCodeServer() {
   return oc.url;
 }
 
-async function createOcClient(directory) {
+function parseModelId(value) {
+  const text = String(value || "").trim();
+  const index = text.indexOf("/");
+  return index < 0 ? { providerID: "opencode", modelID: text } : { providerID: text.slice(0, index), modelID: text.slice(index + 1) };
+}
+
+// Direct HTTP calls to the local `opencode serve` REST API. This avoids a
+// hard-coded SDK path and makes model selection per chat request possible.
+async function ocFetch(route, { method = "GET", body, timeout = 20000 } = {}) {
   await startOpenCodeServer();
-  if (!oc.url) throw new Error(oc.startupError || "OpenCode server not available");
-  const sdk = await import(pathToFileURL("/data/data/com.termux/files/home/.config/opencode/node_modules/@opencode-ai/sdk/dist/client.js").href);
-  return sdk.createOpencodeClient({ baseUrl: oc.url, directory: directory || loadConfig().projectPath });
-}
-
-function ocResult(result) {
-  if (result && typeof result === "object" && "error" in result && result.error) {
-    throw new Error(String(result.error?.message || result.error || "OpenCode request failed"));
-  }
-  return (result && typeof result === "object" && "data" in result) ? result.data : result;
-}
-
-async function withTimeout(promise, ms) {
-  const timer = setTimeout(() => {}, ms);
-  try { return await promise; } finally { clearTimeout(timer); }
+  if (!oc.url) throw new Error(oc.startupError || "OpenCode server nicht verfügbar");
+  const headers = { accept: "application/json" };
+  if (body !== undefined) headers["content-type"] = "application/json";
+  const password = process.env.OPENCODE_SERVER_PASSWORD || process.env.OPENCODE_PASSWORD;
+  if (password) headers.authorization = "Basic " + Buffer.from("opencode:" + password).toString("base64");
+  const response = await fetch(new URL(route, oc.url), {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(timeout)
+  });
+  const text = await response.text();
+  let data = {};
+  try { data = JSON.parse(text); } catch { data = { raw: text.slice(0, 1000) }; }
+  if (!response.ok) throw new Error(redact(String(data?.error?.message || data?.message || `HTTP ${response.status}`)));
+  return data;
 }
 
 const HTML = `<!doctype html>
@@ -444,9 +592,16 @@ button:focus-visible{outline:2px solid #8bb9ff}
 <button class="tab" data-tab="automations">Automations</button>
 <button class="tab" data-tab="mcp">MCP</button>
 <button class="tab" data-tab="chat">Chat</button>
+<button class="tab" data-tab="tasks">Tasks</button>
 <button class="tab" data-tab="runs">Runs</button>
 <button class="tab" data-tab="settings">Settings</button>
 </nav>
+<div id="login" class="card" style="max-width:560px;margin:24px auto">
+<h2>Control Center freischalten</h2>
+<p class="muted">Bitte den lokal gesetzten <code>MECE_DASHBOARD_TOKEN</code> eingeben. Er wird nur in dieser Browser-Session (<code>sessionStorage</code>) gehalten, nie an die Seite ausgeliefert und nicht protokolliert.</p>
+<input id="tokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="MECE_DASHBOARD_TOKEN">
+<p class="row"><button id="tokenSave" class="run">Freischalten</button><span id="tokenStatus" class="muted"></span></p>
+</div>
 <main>
 <section id="agents" class="panel active">
 <h2>Agenten</h2><p class="muted">Vorkonfigurierte OpenCode-Subagenten aus .opencode/agents/.</p>
@@ -480,6 +635,7 @@ button:focus-visible{outline:2px solid #8bb9ff}
 <h2>KI Chat</h2><p class="muted">Chat mit OpenCode-Server 127.0.0.1:4096. Modell wird automatisch erkannt, keine stillen kostenpflichtigen Wechsel.</p>
 <div class="card row">
 <label style="flex:1">Agent</label><select id="chatAgent"></select>
+<label style="flex:1">Modell (kostenlos)</label><select id="chatModel"></select>
 <label style="flex:1">Session</label><select id="chatSession"></select>
 <button id="chatNewSession">Neue Session</button>
 <button id="chatAbort" class="warn">Abbrechen</button>
@@ -490,6 +646,13 @@ button:focus-visible{outline:2px solid #8bb9ff}
 <div class="row"><button id="chatSend" class="run">Senden</button><span id="chatStatus" class="muted"></span></div>
 <p id="chatModelError" class="muted"></p>
 </div></section>
+
+<section id="tasks" class="panel">
+<h2>Aufgabenwarteschlange</h2><p class="muted">Echte Daten aus dem Controller-Status und den Queuedateien. Der Controller steuert Ausführung, Cooldowns und Wiederaufnahme.</p>
+<div id="controllerState" class="card">Lade Controller-Status…</div>
+<h3>Warteschlange</h3><div id="taskQueue"></div>
+<h3>Abgeschlossen</h3><div id="taskCompleted"></div>
+<h3>Fehlgeschlagen / blockiert</h3><div id="taskFailed"></div></section>
 
 <section id="runs" class="panel">
 <h2>Runs</h2><div class="card"><div class="row">
@@ -521,14 +684,31 @@ let APP={};
 let agents=[];
 let automations=[];
 let mcpServers=[];
-async function api(url,opts={}){const r=await fetch(url,opts);const d=await r.json().catch(()=> ({}));if(!r.ok)throw new Error(d.error||("HTTP "+r.status));return d;}
+let CONTROL_TOKEN=sessionStorage.getItem("mece_control_token")||"";
+async function api(url,opts={}){
+  const headers=new Headers(opts.headers||{});
+  if(CONTROL_TOKEN)headers.set("X-Control-Token",CONTROL_TOKEN);
+  const r=await fetch(url,{...opts,headers});
+  const d=await r.json().catch(()=> ({}));
+  if(r.status===401){CONTROL_TOKEN="";sessionStorage.removeItem("mece_control_token");showLogin("Token ungueltig oder abgelaufen.");}
+  if(!r.ok)throw new Error(d.error||("HTTP "+r.status));
+  return d;
+}
+function showLogin(message){
+  $("login").style.display="block";
+  $("tokenStatus").textContent=message||"";
+  $("tokenInput").focus();
+}
 function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function jsonText(value){if(typeof value==="string")return value;try{return JSON.stringify(value||{},null,2);}catch{return "{}";}}
 async function init(){
+  if(!CONTROL_TOKEN){showLogin("Token erforderlich (fail-closed).");return;}
+  $("login").style.display="none";
   const d=await api("/api/bootstrap");
   APP=d.config; agents=d.agents; automations=d.automations; mcpServers=d.mcp||[];
-  $("projectHead").textContent=APP.projectPath+" · OpenCode "+d.version;
-  renderAgents(); renderAutomations(); renderMcp(); fillSettings(); fillChatAgents(); refreshRuns(); refreshMcpStatus();
+  $("projectHead").textContent=APP.projectPath+" · OpenCode "+d.version+(d.ugc&&d.ugc.reachable?" · UGC online":" · UGC offline");
+  $("state").textContent=d.controller&&d.controller.status?("Controller: "+d.controller.status):"Bereit";
+  renderAgents(); renderAutomations(); renderMcp(); fillSettings(); fillChatAgents(); fillChatModel(); refreshRuns(); refreshTasks();
   await loadChatSessions();
 }
 function renderAgents(){
@@ -560,8 +740,8 @@ function fillMcpForm(name){
   f.command.value=s.command||"";
   f.args.value=(s.args||[]).join("\\n");
   f.cwd.value=s.cwd||"";
-  f.env.value=s.hasSecrets?"":jsonText(s.env||{});
-  f.headers.value=s.hasSecrets?"":jsonText(s.headers||{});
+  f.env.value=jsonText(Object.fromEntries((s.envKeys||[]).map(k=>[k,""])));
+  f.headers.value=jsonText(Object.fromEntries((s.headerKeys||[]).map(k=>[k,""])));
   f.enabled.checked=Boolean(s.enabled);
   f.confirmEnable.checked=false;
   $("mcpStatus").textContent="Geladen: "+s.name+" ("+s.source+"). Secret-Felder bleiben leer und werden bei Eingabe ersetzt.";
@@ -659,13 +839,36 @@ async function refreshRuns(){
   $("runName").textContent=d.job.name||"Kein Lauf gestartet";
   $("runState").textContent=d.job.state||"Idle";
   $("runMeta").textContent=d.job.started?("Start: "+d.job.started+" · PID: "+(d.job.pid||"-")+" · Exit: "+(d.job.exitCode??"-")):"";
-  $("log").textContent=d.log||"Noch keine Ausgabe.";
+  const logData=await api("/api/log").catch(()=>({log:""}));
+  $("log").textContent=logData.log||"Noch keine Ausgabe.";
   $("runHistory").innerHTML=(d.runs||[]).map(r=>'<div class="card"><strong>'+esc(r.name)+'</strong><br><small>'+esc(r.started||"")+' · Exit '+esc(r.exitCode??"-")+'</small></div>').join("")||'Noch keine Historie.';
+}
+async function refreshTasks(){
+  try{
+    const d=await api("/api/tasks");
+    const c=d.controller||{};
+    $("controllerState").innerHTML='<div class="row"><strong>Status: '+esc(c.status||"unknown")+'</strong><span class="muted">Queue: '+(c.queueDepth??"-")+' · Stand: '+esc(c.updatedAt||"-")+'</span></div>'+
+      '<p class="muted">Aktuelle Aufgabe: '+esc(c.currentTask?(c.currentTask.text||c.currentTask.taskId||c.currentTask.id):"keine")+
+      (c.model&&c.model.activeModel?" · Modell: "+esc(c.model.activeModel):"")+
+      (c.heartbeatAgeSeconds!==null&&c.heartbeatAgeSeconds!==undefined?" · Heartbeat: "+esc(c.heartbeatAgeSeconds)+"s":"")+'</p>';
+    const list=items=>items.map(t=>'<div class="msg">'+esc(String(t).split("|").pop())+'</div>').join("")||'<p class="muted">Keine Eintraege.</p>';
+    $("taskQueue").innerHTML=list(d.queued||[]);
+    $("taskCompleted").innerHTML=list(d.completed||[]);
+    $("taskFailed").innerHTML=list(d.failed||[]);
+  }catch(e){$("controllerState").textContent="Controller-Status nicht verfuegbar: "+e.message;}
 }
 function fillChatAgents(){
   const select=$("chatAgent");
   select.innerHTML=((APP.chatAgents)||${JSON.stringify(CHAT_AGENTS)}).map(a=>'<option value="'+esc(a)+'">'+esc(a)+'</option>').join("");
   select.value=APP.agent||"orchestrator";
+}
+async function fillChatModel(){
+  try{
+    const d=await api("/api/chat/model");
+    const options=d.available||[];
+    $("chatModel").innerHTML=options.map(m=>'<option value="'+esc(m)+'">'+esc(m)+'</option>').join("");
+    $("chatModel").value=d.model||options[0]||"";
+  }catch(e){$("chatModelError").textContent="Modelle nicht geladen: "+e.message;}
 }
 async function loadChatSessions(){
   try{
@@ -704,7 +907,7 @@ async function sendChat(){
   if(!sid||!text) return;
   $("chatStatus").textContent="Sende…";
   try{
-    await api("/api/chat/message",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionID:sid,text,agent:$("chatAgent").value})});
+    await api("/api/chat/message",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sessionID:sid,text,agent:$("chatAgent").value,model:$("chatModel").value})});
     $("chatInput").value="";
     await refreshChatMessages();
     $("chatStatus").textContent="Antwort empfangen.";
@@ -721,12 +924,26 @@ async function abortChat(){
 }
 async function refreshChatModel(){
   try{
-    const d=await api("/api/chat/model");
-    if(d.model) $("chatModelError").textContent="Aktuelles Modell: "+d.model;
+    const d=await api("/api/chat/state");
+    $("chatModelError").textContent="OpenCode "+(d.version||"?")+" · "+(d.url?"Server aktiv":"Server nicht gestartet")+" · Modell "+esc(d.model||"-");
   }catch(e){
-    $("chatModelError").textContent="Modell nicht erkannt: "+e.message;
+    $("chatModelError").textContent="Runtime nicht erkannt: "+e.message;
   }
 }
+$("tokenSave").onclick=()=>{
+  const value=$("tokenInput").value.trim();
+  if(!value){$("tokenStatus").textContent="Token darf nicht leer sein.";return;}
+  CONTROL_TOKEN=value;
+  sessionStorage.setItem("mece_control_token",value);
+  $("tokenInput").value="";
+  $("tokenStatus").textContent="";
+  init().catch(err=>{$("tokenStatus").textContent="Freischaltung fehlgeschlagen: "+err.message;});
+};
+$("chatModel").onchange=()=>{
+  api("/api/chat/model",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:$("chatModel").value})})
+    .then(()=>{$("chatModelError").textContent="Modell gespeichert: "+$("chatModel").value;})
+    .catch(err=>{$("chatModelError").textContent="Modell nicht gespeichert: "+err.message;});
+};
 $("settingsForm").onsubmit=e=>{e.preventDefault();saveSettings().catch(err=>alert("Speichern fehlgeschlagen: "+err));};
 $("startBtn").onclick=()=>startAutomation().catch(err=>alert("Start fehlgeschlagen: "+err));
 $("refreshLog").onclick=()=>refreshRuns().catch(err=>alert(err));
@@ -737,8 +954,13 @@ $("chatSend").onclick=sendChat;
 $("chatNewSession").onclick=()=>newChatSession().catch(err=>alert(err));
 $("chatAbort").onclick=()=>abortChat().catch(err=>alert(err));
 $("chatSession").onchange=refreshChatMessages;
-init().catch(err=>{alert("Initialisierung fehlgeschlagen: "+err);$("log").textContent=String(err);});
-setInterval(()=>{if($("runs").classList.contains("active"))refreshRuns().catch(()=>{});if($("chat").classList.contains("active"))refreshChatMessages().catch(()=>{});},2500);
+init().catch(err=>{if(err.message&&/HTTP 401|Zugriff|Token/.test(err.message))showLogin(err.message);else $("log").textContent=String(err);});
+setInterval(()=>{
+  if(!CONTROL_TOKEN)return;
+  if($("runs").classList.contains("active"))refreshRuns().catch(()=>{});
+  if($("tasks").classList.contains("active"))refreshTasks().catch(()=>{});
+  if($("chat").classList.contains("active"))refreshChatMessages().catch(()=>{});
+},5000);
 </script></body></html>`;
 
 const server = http.createServer(async (req, res) => {
@@ -765,10 +987,12 @@ const server = http.createServer(async (req, res) => {
       automations: listAutomations(),
       mcp: readMcpConfig(),
       chatAgents: CHAT_AGENTS,
+      freeModels: freeModels(),
       dashboardAuthEnabled: dashboardTokenValid(),
       job,
-      log: currentLog(),
       runs: readRuns(),
+      ugc: await ugcHealth(),
+      controller: controllerState(),
       oc: { url: oc.url, startupError: oc.startupError, starting: oc.starting }
     };
     return json(res, 200, data);
@@ -786,18 +1010,21 @@ const server = http.createServer(async (req, res) => {
     const next = {
       ...current,
       ...input,
-      projectPath: String(input.projectPath || current.projectPath || ROOT),
-      appServerUrl: String(input.appServerUrl || current.appServerUrl),
+      projectPath: ROOT,
+      appServerUrl: String(input.appServerUrl || current.appServerUrl || "http://127.0.0.1:3000"),
       logPath: String(input.logPath || current.logPath),
       agent: String(input.agent || current.agent),
       model: String(input.model || current.model),
       maxRepairRounds: Math.max(0, Math.min(10, Number(input.maxRepairRounds ?? current.maxRepairRounds))),
       workflow: String(input.workflow || current.workflow),
       automation: String(input.automation || current.automation),
-      prompt: String(input.prompt || current.prompt)
+      prompt: String(input.prompt || current.prompt).slice(0, 20000)
     };
     if (!ALLOWED_AUTOMATIONS.includes(next.automation)) return json(res, 400, { error: "Automation nicht freigegeben" });
-    if (!fs.existsSync(next.projectPath) || !fs.statSync(next.projectPath).isDirectory()) return json(res, 400, { error: "Projektverzeichnis nicht gefunden" });
+    if (!isAllowedAgent(next.agent)) return json(res, 400, { error: "Agent nicht erlaubt" });
+    if (!isFreeModel(next.model)) return json(res, 400, { error: "Nur verifiziert kostenlose OpenCode-Modelle sind erlaubt" });
+    if (!isAllowedLogPath(next.logPath)) return json(res, 400, { error: "Logpfad nicht erlaubt" });
+    if (!Number.isFinite(next.maxRepairRounds)) return json(res, 400, { error: "Ungueltige Reparaturrunden" });
     saveConfig(next);
     return json(res, 200, { config: next });
   }
@@ -815,9 +1042,12 @@ const server = http.createServer(async (req, res) => {
     const projectPath = String(requestConfig.projectPath || "").trim();
     if (!projectPath || !fs.existsSync(projectPath) || !fs.statSync(projectPath).isDirectory()) return json(res, 400, { error: "Projektverzeichnis nicht gefunden" });
     const prompt = String(requestConfig.prompt || commandPrompt(automationName)).trim();
-    if (!prompt) return json(res, 400, { error: "Prompt darf nicht leer sein" });
+    if (!prompt || prompt.length > 20000) return json(res, 400, { error: "Prompt ungueltig" });
     const agent = String(requestConfig.agent || "orchestrator").trim();
     const model = String(requestConfig.model || DEFAULT_MODEL).trim();
+    if (!isAllowedAgent(agent)) return json(res, 400, { error: "Agent nicht erlaubt" });
+    if (!isFreeModel(model)) return json(res, 400, { error: "Nur verifiziert kostenlose OpenCode-Modelle sind erlaubt" });
+    if (!isAllowedLogPath(requestConfig.logPath || "")) return json(res, 400, { error: "Logpfad nicht erlaubt" });
     const log = path.join(RUNS, automationName + "-" + Date.now() + ".log");
     const out = fs.createWriteStream(log, { flags: "wx" });
     out.write(`MECE Control Center · ${automationName}\nProject: ${projectPath}\nAgent: ${agent}\nModel: ${model}\nMax repair rounds: ${requestConfig.maxRepairRounds}\nLog source: ${requestConfig.logPath || ""}\n\n`);
@@ -893,24 +1123,48 @@ const server = http.createServer(async (req, res) => {
     const result = describeMcpStatus();
     return json(res, 200, { ok: result.code === 0, code: result.code, output: result.output });
   }
+  if (req.method === "GET" && url.pathname === "/api/tasks") {
+    const tasks = controllerTasks();
+    return json(res, 200, {
+      controller: controllerState(),
+      queued: tasks.queued,
+      completed: tasks.completed,
+      failed: tasks.failed,
+      source: tasks.source
+    });
+  }
+  if (req.method === "GET" && url.pathname === "/api/chat/model") {
+    return json(res, 200, { model: loadConfig().model, available: freeModels() });
+  }
+  if (req.method === "POST" && url.pathname === "/api/chat/model") {
+    if (!isAllowedOrigin(req.headers.origin)) return json(res, 403, { error: "Origin nicht erlaubt" });
+    let body = "";
+    try { body = await readBody(req); } catch { return json(res, 413, { error: "Request zu gross" }); }
+    let input = {};
+    try { input = JSON.parse(body); } catch { return json(res, 400, { error: "Ungueltiges JSON" }); }
+    const model = String(input.model || "").trim();
+    if (!isFreeModel(model)) return json(res, 400, { error: "Nur verifiziert kostenlose OpenCode-Modelle sind erlaubt" });
+    const config = loadConfig();
+    config.model = model;
+    saveConfig(config);
+    return json(res, 200, { model, available: freeModels() });
+  }
   if (req.method === "GET" && url.pathname === "/api/chat/state") {
-    let startupError = oc.startupError;
-    if (!oc.url && !oc.starting) await startOpenCodeServer();
-    if (!oc.url) startupError = oc.startupError;
-    let model = loadConfig().model;
-    try {
-      const client = await createOcClient(loadConfig().projectPath);
-      const config = ocResult(await client.config.get());
-      if (config && config.model) model = config.model;
-    } catch {}
-    return json(res, 200, { url: oc.url, startupError: startupError || null, model, agents: CHAT_AGENTS, version: "1.19.5" });
+    const versionResult = spawnSync("opencode", ["--version"], { encoding: "utf8", timeout: 5000 });
+    return json(res, 200, {
+      url: oc.url,
+      startupError: oc.startupError || null,
+      starting: oc.starting,
+      model: loadConfig().model,
+      agents: CHAT_AGENTS,
+      version: (versionResult.stdout || versionResult.stderr || "nicht erkannt").trim(),
+      sdkMode: "http-api"
+    });
   }
   if (req.method === "GET" && url.pathname === "/api/chat/sessions") {
     try {
-      const client = await createOcClient(loadConfig().projectPath);
-      const result = await client.session.list();
-      const sessions = ocResult(result);
-      return json(res, 200, { sessions: Array.isArray(sessions) ? sessions : (sessions && sessions.data ? sessions.data : []) });
+      const sessions = await ocFetch("/session");
+      return json(res, 200, { sessions: Array.isArray(sessions) ? sessions : [] });
     } catch (error) {
       return json(res, 500, { error: redact(error.message) });
     }
@@ -923,22 +1177,17 @@ const server = http.createServer(async (req, res) => {
     try { input = JSON.parse(body); } catch { return json(res, 400, { error: "Ungueltiges JSON" }); }
     const title = String(input.title || "MECE Chat").trim().slice(0, 120);
     try {
-      const client = await createOcClient(loadConfig().projectPath);
-      const result = await client.session.create({ body: { title } });
-      const session = ocResult(result);
-      return json(res, 200, { session });
+      return json(res, 200, { session: await ocFetch("/session", { method: "POST", body: { title } }) });
     } catch (error) {
       return json(res, 500, { error: redact(error.message) });
     }
   }
   if (req.method === "GET" && url.pathname === "/api/chat/messages") {
     const sessionID = String(url.searchParams.get("session") || "").trim();
-    if (!sessionID) return json(res, 400, { error: "session erforderlich" });
+    if (!sessionID || !/^[A-Za-z0-9_-]{1,128}$/.test(sessionID)) return json(res, 400, { error: "session erforderlich" });
     try {
-      const client = await createOcClient(loadConfig().projectPath);
-      const result = await client.session.messages({ path: { id: sessionID } });
-      const messages = ocResult(result);
-      return json(res, 200, { messages: Array.isArray(messages) ? messages : (messages && messages.data ? messages.data : []) });
+      const messages = await ocFetch(`/session/${encodeURIComponent(sessionID)}/message`);
+      return json(res, 200, { messages: Array.isArray(messages) ? messages : [] });
     } catch (error) {
       return json(res, 500, { error: redact(error.message) });
     }
@@ -952,13 +1201,17 @@ const server = http.createServer(async (req, res) => {
     const sessionID = String(input.sessionID || "").trim();
     const text = String(input.text || "").trim();
     const agent = String(input.agent || loadConfig().agent || "orchestrator").trim();
-    if (!sessionID) return json(res, 400, { error: "sessionID erforderlich" });
+    const model = String(input.model || loadConfig().model).trim();
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionID)) return json(res, 400, { error: "sessionID erforderlich" });
     if (!text || text.length > 10000) return json(res, 400, { error: "Nachricht ungueltig" });
-    if (!CHAT_AGENTS.includes(agent)) return json(res, 400, { error: "Agent nicht erlaubt" });
+    if (!isAllowedAgent(agent)) return json(res, 400, { error: "Agent nicht erlaubt" });
+    if (!isFreeModel(model)) return json(res, 400, { error: "Nur verifiziert kostenlose OpenCode-Modelle sind erlaubt" });
     try {
-      const client = await createOcClient(loadConfig().projectPath);
-      const result = await client.session.prompt({ path: { id: sessionID }, body: { agent, parts: [{ type: "text", text }] } });
-      const response = ocResult(result);
+      const response = await ocFetch(`/session/${encodeURIComponent(sessionID)}/message`, {
+        method: "POST",
+        body: { model: parseModelId(model), agent, parts: [{ type: "text", text }] },
+        timeout: 120000
+      });
       return json(res, 200, { response });
     } catch (error) {
       return json(res, 500, { error: redact(error.message) });
@@ -971,11 +1224,9 @@ const server = http.createServer(async (req, res) => {
     let input = {};
     try { input = JSON.parse(body); } catch { return json(res, 400, { error: "Ungueltiges JSON" }); }
     const sessionID = String(input.sessionID || "").trim();
-    if (!sessionID) return json(res, 400, { error: "sessionID erforderlich" });
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionID)) return json(res, 400, { error: "sessionID erforderlich" });
     try {
-      const client = await createOcClient(loadConfig().projectPath);
-      const result = await client.session.abort({ path: { id: sessionID } });
-      return json(res, 200, { result: ocResult(result) });
+      return json(res, 200, { result: await ocFetch(`/session/${encodeURIComponent(sessionID)}/abort`, { method: "POST" }) });
     } catch (error) {
       return json(res, 500, { error: redact(error.message) });
     }
@@ -985,5 +1236,19 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`MECE Control Center: http://127.0.0.1:${PORT}`);
-  startOpenCodeServer().then((url) => console.log(`OpenCode server: ${url || "unavailable"}`)).catch((error) => console.error(redact(String(error))));
+  // The OpenCode server is started lazily by chat endpoints to keep the
+  // Chromebook-sized host lightweight. Status reports it as not started.
 });
+
+function shutdown() {
+  try { server.close(); } catch {}
+  if (oc.process && !oc.process.killed) {
+    try { process.kill(-oc.process.pid, "SIGTERM"); } catch { try { oc.process.kill("SIGTERM"); } catch {} }
+  }
+  if (job.state === "running" && job.pid) {
+    try { process.kill(-job.pid, "SIGTERM"); } catch { try { process.kill(job.pid, "SIGTERM"); } catch {} }
+  }
+  process.exit(0);
+}
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);

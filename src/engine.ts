@@ -74,6 +74,8 @@ export interface EngineTickSummary {
   workflowRunsRecovered: number;
   orchestrationsResumed: number;
   scheduledSearchesQueued: number;
+  /** Workspace-level failures that would otherwise be silently swallowed. */
+  errors: string[];
   jobs: { id: string; type: string; outcome: EngineOutcome; runId: string | null; error?: string }[];
 }
 
@@ -263,6 +265,7 @@ export async function runEngineTick(opts: EngineTickOptions = {}): Promise<Engin
     workflowRunsRecovered: 0,
     orchestrationsResumed: 0,
     scheduledSearchesQueued: 0,
+    errors: [],
     jobs: [],
   };
 
@@ -307,18 +310,28 @@ export async function runEngineTick(opts: EngineTickOptions = {}): Promise<Engin
           else summary.skipped += 1;
         }
       }
-    } catch {
-      // A single broken workspace must not stall the whole engine.
+    } catch (error) {
+      // Background ticks must not let one broken workspace stall the others,
+      // but an explicitly requested workspace tick must report its real error
+      // instead of looking like a silent no-op.
+      const message = `${workspace.id}: ${sanitizeError(error)}`;
+      summary.errors.push(message);
+      if (opts.workspaceId) throw error;
       continue;
     }
   }
 
   if (opts.resumeOrchestrations) {
-    summary.orchestrationsResumed = await resumeStaleOrchestrations({
-      workspaceId: opts.workspaceId ?? null,
-      staleMs: opts.staleMs ?? DEFAULT_ORCHESTRATION_STALE_MS,
-      now,
-    });
+    try {
+      summary.orchestrationsResumed = await resumeStaleOrchestrations({
+        workspaceId: opts.workspaceId ?? null,
+        staleMs: opts.staleMs ?? DEFAULT_ORCHESTRATION_STALE_MS,
+        now,
+      });
+    } catch (error) {
+      summary.errors.push(`orchestration resume: ${sanitizeError(error)}`);
+      if (opts.workspaceId) throw error;
+    }
   }
 
   summary.finishedAt = new Date().toISOString();
@@ -330,7 +343,33 @@ const activeOrchestrations = new Set<string>();
 function kickOrchestration(workspaceId: string, runId: string): void {
   activeOrchestrations.add(runId);
   void runOrchestration(workspaceId, runId)
-    .catch(() => undefined)
+    .catch(async (error) => {
+      // A driver failure used to be swallowed, leaving the run stuck at
+      // `running` until a test timed out. Record a terminal, honest state.
+      const message = sanitizeError(error);
+      try {
+        await withWorkspaceTransaction(workspaceId, async (tx) => {
+          await tx.orchestrationRun.updateMany({
+            where: { workspaceId, id: runId, status: { in: ['queued', 'running'] } },
+            data: {
+              status: 'failed',
+              error: `ENGINE_DRIVER_ERROR: ${message}`,
+              leaseOwner: null,
+              leaseExpiresAt: null,
+              updatedAt: new Date(),
+            },
+          });
+        });
+        await writeAuditEvent({
+          workspaceId,
+          runId,
+          type: 'orchestration_engine_error',
+          data: { error: message },
+        });
+      } catch {
+        // The next tick will recover the run if no terminal state was persisted.
+      }
+    })
     .finally(() => activeOrchestrations.delete(runId));
 }
 
@@ -369,7 +408,8 @@ export async function resumeStaleOrchestrations(opts: { workspaceId?: string | n
         resumed += 1;
         kickOrchestration(workspace.id, String(run.id));
       }
-    } catch {
+    } catch (error) {
+      if (opts.workspaceId) throw error;
       continue;
     }
   }
