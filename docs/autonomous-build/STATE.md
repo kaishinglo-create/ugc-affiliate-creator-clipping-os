@@ -1,5 +1,17 @@
 # STATE
 
+## Controller status (2026-11-24T23:53Z)
+
+- Full local QA is green (Vitest 172/172, browser 27/27, Playwright 8/8,
+  Typecheck/ESLint/Build PASS), but the autonomous controller remains **stopped**
+  with `pauseReason: GLOBAL_FREE_QUOTA`. Its cooldown lasts until
+  `2026-11-25T04:59:00.966Z` for both `opencode/big-pickle` and provider
+  `opencode`. Starting it now would immediately pause again and would risk
+  working around a provider limit, which is forbidden. It will be restarted with
+  persistent progress after the cooldown expires and a fresh bounded free
+  model call succeeds. A separate bounded `opencode/beam-free` call did succeed,
+  confirming free quota exists in principle; no paid fallback was used.
+
 ## Phase C: Transcription, media API and Playwright E2E (2026-11-25)
 
 - `src/transcription.ts` implements a real local whisper.cpp contract with

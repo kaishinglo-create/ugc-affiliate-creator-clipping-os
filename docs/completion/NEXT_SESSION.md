@@ -71,8 +71,10 @@ bash scripts/controller-supervisor.sh               # Watchdog, nur explizit
    Controller-Heartbeat, Medien-Binaries).
 3. Legacy-Archive `docs/completion/TASK_QUEUE.txt`, `COMPLETED_TASKS.txt` und
    `FAILED_TASKS.txt` als reines Archiv kennzeichnen; nichts löschen.
-4. Autonomen Controller mit persistentem Fortschritt erst nach vollständiger
-   grüner QA und ohne extern limitierte Modelle wieder starten.
+4. Autonomen Controller mit persistentem Fortschritt wieder starten, sobald die
+   `GLOBAL_FREE_QUOTA`-Cooldowns abgelaufen sind (bis
+   `2026-11-25T04:59:00.966Z`) und ein erneuter begrenzter Free-Model-Call
+   erfolgreich war. Aktuell: bewusst gestoppt.
 
 ## Extern blockiert (nicht mit freien Ressourcen lösbar)
 
