@@ -38,15 +38,26 @@ on your target machine before enabling the worker integration.
 
 ## Connect to the UGC worker
 
-Set `DISCOVERY_MCP_CLIENT` to the absolute path to this directory's
-`smoke.mjs` in the UGC server environment and run the engine. Use
-`POST /api/discovery/searches` as a workspace owner or admin with
+Set `DISCOVERY_MCP_SERVER` to the absolute path to this directory's `server.mjs`
+in the UGC server environment and run the engine. The worker connects to it as
+an MCP client: `initialize` handshake, `tools/list`, then `tools/call` on
+`youtube_search`. The legacy `DISCOVERY_MCP_CLIENT` variable (absolute path to
+`smoke.mjs`) is still accepted for one-shot client deployments; when both are
+set, `DISCOVERY_MCP_SERVER` wins.
+
+Use `POST /api/discovery/searches` as a workspace owner or admin with
 `{"query":"creator video clipping workflow"}`. An optional ISO 8601 `runAt`
 schedules a single run. The response contains the queued job. Use
 `GET /api/jobs/:id` for the result status and `GET /api/discovery/candidates`
 for the latest saved candidates. Both use the existing workspace session.
 
+Recurring searches use `POST /api/discovery/schedules` with
+`{"query":"...","intervalMinutes":60}` (15 to 10080 minutes) and an optional
+ISO 8601 `runAt` for the first run. `GET /api/discovery/schedules` lists them and
+`DELETE /api/discovery/schedules/:id` removes one. The engine queues each due
+schedule once and advances `nextRunAt` in the same transaction, so concurrent
+workers do not double-queue a run.
+
 The worker limits search attempts to ten per workspace per UTC day.
 Identical queries deduplicate within the requested scheduling hour.
 Candidate IDs deduplicate across all runs within the workspace.
-Recurring search schedules are separate from this pilot.

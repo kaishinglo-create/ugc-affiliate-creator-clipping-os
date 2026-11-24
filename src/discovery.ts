@@ -7,9 +7,15 @@ import { writeAuditEvent } from '../lib/audit.js';
 import { withWorkspaceTransaction } from '../lib/db.js';
 import { isKillSwitchActive } from '../lib/security.js';
 import { cancelJob, completeJob, createJob, failJob, heartbeatJob } from './jobs.js';
+import { McpStdioClient } from './mcp-client.js';
 
 const querySchema = z.string().trim().min(1).max(200).refine((query) => !query.includes('\0'));
 export const discoveryInput = z.object({ query: querySchema, runAt: z.iso.datetime({ offset: true }).optional() });
+export const discoveryScheduleInput = z.object({
+  query: querySchema,
+  intervalMinutes: z.number().int().min(15).max(10_080),
+  runAt: z.iso.datetime({ offset: true }).optional(),
+});
 
 const providerResponse = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(false), class: z.string().regex(/^[a-z_]{1,40}$/) }),
@@ -23,9 +29,50 @@ const providerResponse = z.discriminatedUnion('ok', [
 const runClient = promisify(execFile);
 const dailyLimit = 10;
 const reservationType = 'content_discovery_request_reserved';
+const MCP_TOOL = 'youtube_search';
+const childEnv = () => Object.fromEntries(Object.entries(process.env).filter(([name]) =>
+  ['PATH', 'HOME', 'TMPDIR', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'NODE_USE_ENV_PROXY', 'NODE_EXTRA_CA_CERTS'].includes(name)));
+
+/** Absolute path of the MCP server to connect to over stdio. */
+export function discoveryServerPath() {
+  const server = process.env.DISCOVERY_MCP_SERVER ?? '';
+  return isAbsolute(server) ? server : null;
+}
+
+/** Legacy one-shot client script; still supported for existing deployments. */
+function discoveryClientPath() {
+  const client = process.env.DISCOVERY_MCP_CLIENT ?? '';
+  return isAbsolute(client) ? client : null;
+}
 
 export function discoveryEnabled() {
-  return isAbsolute(process.env.DISCOVERY_MCP_CLIENT ?? '');
+  return discoveryServerPath() !== null || discoveryClientPath() !== null;
+}
+
+/**
+ * Connect to the API Anything pilot as a real MCP client, verify the search
+ * tool is exposed, and invoke it. Throws on transport or tool failures; the
+ * caller maps those to the provider failure classes.
+ */
+async function searchViaMcp(serverPath: string, query: string): Promise<unknown> {
+  const client = await McpStdioClient.connect({
+    command: process.execPath,
+    args: [serverPath],
+    env: childEnv(),
+    connectTimeoutMs: 10_000,
+  });
+  try {
+    const tools = await client.listTools();
+    if (!tools.some((tool) => tool.name === MCP_TOOL)) throw new Error('MCP_TOOL_MISSING');
+    const result = await client.callTool(MCP_TOOL, { query }, 30_000);
+    if (result.isError) throw new Error('MCP_TOOL_ERROR');
+    if (result.structuredContent !== undefined) return result.structuredContent;
+    const text = result.content.find((block) => block.type === 'text')?.text;
+    if (!text) throw new Error('MCP_EMPTY_RESULT');
+    return JSON.parse(text);
+  } finally {
+    client.close();
+  }
 }
 
 export async function enqueueDiscovery(workspaceId: string, input: z.infer<typeof discoveryInput>) {
@@ -47,17 +94,80 @@ export async function listDiscoveryCandidates(workspaceId: string) {
   }));
 }
 
+export async function createDiscoverySchedule(workspaceId: string, input: z.infer<typeof discoveryScheduleInput>): Promise<any> {
+  const firstRunAt = input.runAt ? new Date(input.runAt) : new Date(Date.now() + input.intervalMinutes * 60_000);
+  return withWorkspaceTransaction<any>(workspaceId, (tx) => tx.discoverySchedule.create({
+    data: { workspaceId, query: input.query, intervalMinutes: input.intervalMinutes, nextRunAt: firstRunAt },
+  }));
+}
+
+export async function listDiscoverySchedules(workspaceId: string): Promise<any[]> {
+  return withWorkspaceTransaction<any[]>(workspaceId, (tx) => tx.discoverySchedule.findMany({
+    where: { workspaceId }, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }], take: 100,
+  }));
+}
+
+export async function deleteDiscoverySchedule(workspaceId: string, id: string): Promise<boolean> {
+  const result: any = await withWorkspaceTransaction<any>(workspaceId, (tx) =>
+    tx.discoverySchedule.deleteMany({ where: { id, workspaceId } })
+  );
+  return result?.count === 1;
+}
+
+/** Advance a missed schedule past `now` while keeping its interval cadence. */
+function nextScheduleRun(from: Date, intervalMinutes: number, now: Date): Date {
+  const step = Math.max(1, intervalMinutes) * 60_000;
+  let next = new Date(from.getTime() + step);
+  for (let guard = 0; next <= now && guard < 1_000; guard += 1) {
+    next = new Date(next.getTime() + step);
+  }
+  return next;
+}
+
+/**
+ * Queue one job per due recurring schedule and advance its `nextRunAt` in the
+ * same transaction. The advisory lock serialises concurrent engine ticks, so a
+ * due schedule is queued exactly once even with several workers.
+ */
+export async function enqueueDueDiscoverySchedules(workspaceId: string, now = new Date()): Promise<number> {
+  return withWorkspaceTransaction(workspaceId, async (tx) => {
+    await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtextextended(${`discovery_schedules:${workspaceId}`}, 0))`;
+    const due = await tx.discoverySchedule.findMany({
+      where: { workspaceId, enabled: true, nextRunAt: { lte: now } },
+      orderBy: [{ nextRunAt: 'asc' }, { id: 'asc' }],
+      take: 20,
+    });
+    let queued = 0;
+    for (const schedule of due) {
+      const advanced = await tx.discoverySchedule.updateMany({
+        where: { id: schedule.id, workspaceId, nextRunAt: schedule.nextRunAt },
+        data: { lastRunAt: schedule.nextRunAt, nextRunAt: nextScheduleRun(schedule.nextRunAt, schedule.intervalMinutes, now) },
+      });
+      if (advanced.count !== 1) continue;
+      await createJob({
+        workspaceId, type: 'CONTENT_DISCOVERY', category: 'youtube_search',
+        payload: { query: schedule.query, scheduleId: schedule.id },
+        idempotencyKey: `discovery:schedule:${schedule.id}:${schedule.nextRunAt.getTime()}`,
+        runAt: now, maxAttempts: 2,
+      }, tx);
+      queued += 1;
+    }
+    return queued;
+  });
+}
+
 export async function executeDiscovery(workspaceId: string, job: { id: string; leaseId: string; payload: unknown }, workerId: string, leaseTtlMs: number): Promise<{ outcome: 'succeeded' | 'failed' | 'retry' | 'skipped'; error?: string }> {
   const lease = { workspaceId, leaseId: job.leaseId, workerId };
   const query = z.object({ query: querySchema }).safeParse(job.payload);
-  const client = process.env.DISCOVERY_MCP_CLIENT ?? '';
+  const server = discoveryServerPath();
+  const client = discoveryClientPath();
   const fail = async (error: string, retryable = false) => {
     const updated = await failJob(job.id, { error, retryable }, lease);
     const outcome = updated?.status === 'RETRY_WAIT' ? 'retry' as const :
       ['FAILED', 'DEAD_LETTER'].includes(updated?.status) ? 'failed' as const : 'skipped' as const;
     return { outcome, error };
   };
-  if (!query.success || !isAbsolute(client)) return fail('DISCOVERY_INVALID_CONFIGURATION');
+  if (!query.success || (!server && !client)) return fail('DISCOVERY_INVALID_CONFIGURATION');
 
   const fence = async (tx: any) => {
     const rows: { id: string }[] = await tx.$queryRaw`
@@ -89,24 +199,25 @@ export async function executeDiscovery(workspaceId: string, job: { id: string; l
   }, Math.max(1000, Math.floor(leaseTtlMs / 3)));
   timer.unref();
   try {
-    let raw: string;
+    let result: unknown;
     try {
-      const { stdout } = await runClient(process.execPath, [client, query.data.query, '--worker'], {
-        timeout: 38_000, maxBuffer: 128 * 1024,
-        env: Object.fromEntries(Object.entries(process.env).filter(([name]) =>
-          ['PATH', 'HOME', 'TMPDIR', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'NODE_USE_ENV_PROXY', 'NODE_EXTRA_CA_CERTS'].includes(name))),
-      });
-      raw = stdout;
+      if (server) {
+        result = await searchViaMcp(server, query.data.query);
+      } else {
+        const { stdout } = await runClient(process.execPath, [client!, query.data.query, '--worker'], {
+          timeout: 38_000, maxBuffer: 128 * 1024, env: childEnv(),
+        });
+        try {
+          result = JSON.parse(stdout);
+        } catch {
+          return await fail('DISCOVERY_INVALID_RESULT');
+        }
+      }
     } catch {
       return await fail('DISCOVERY_MCP_UNAVAILABLE', true);
     }
 
-    let parsed: ReturnType<typeof providerResponse.safeParse>;
-    try {
-      parsed = providerResponse.safeParse(JSON.parse(raw));
-    } catch {
-      return await fail('DISCOVERY_INVALID_RESULT');
-    }
+    const parsed = providerResponse.safeParse(result);
     if (!parsed.success) return await fail('DISCOVERY_INVALID_RESULT');
     if (!parsed.data.ok) return await fail(`DISCOVERY_PROVIDER_${parsed.data.class.toUpperCase()}`);
     const candidates = parsed.data.candidates;

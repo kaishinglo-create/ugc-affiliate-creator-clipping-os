@@ -185,7 +185,7 @@ function departmentAllowed(departmentKey: string, action: string): boolean {
   return Boolean(DEPARTMENT_ALLOWED_ACTIONS[departmentKey]?.has(action));
 }
 
-function departmentProduces(departmentKey: string, action: string, goal: string): any {
+export function departmentProduces(departmentKey: string, action: string, goal: string): any {
   switch (departmentKey) {
     case 'research':
       return { summary: `Research plan for: ${goal}`, questions: ['market trend', 'competitor angle', 'audience pain point'], tools: DEPARTMENT_ALLOWED_TOOLS.research };
@@ -200,13 +200,14 @@ function departmentProduces(departmentKey: string, action: string, goal: string)
     case 'growth':
       return { ctaVariants: ['link-in-bio', 'pinned comment', 'description CTA'], hypotheses: ['proof reduces friction', 'shorter CTA increases clicks'], tools: DEPARTMENT_ALLOWED_TOOLS.growth };
     case 'qa':
-      return { passed: true, checks: ['required fields present', 'brand safety', 'format validity'], approvedFor: 'publishing' };
+      return { passed: null, checks: ['required fields present', 'brand safety', 'format validity'], approvedFor: 'manual_review_required' };
     case 'publishing':
-      return { status: 'planned_only', platforms: ['tiktok', 'instagram', 'youtube'], requiresExternalIntegration: true, plannedPosts: 3 };
+      return { status: 'planned_only', platforms: ['tiktok', 'instagram', 'youtube'], requiresExternalIntegration: true, plannedPosts: null };
     case 'security':
-      return { riskClass: 'medium', checks: ['approval gate present', 'allowed tools only', 'no secret exposure'], killSwitchRespected: true };
+      // A planner cannot verify runtime enforcement; only report heuristics.
+      return { riskClass: 'medium', checks: ['approval gate present', 'allowed tools only', 'no secret exposure'], killSwitchRespected: null, verification: 'not_verified_by_planner' };
     case 'ceo':
-      if (action === 'synthesize') return { summary: `CEO synthesis for: ${goal}`, dependenciesResolved: true, status: 'ready_for_review' };
+      if (action === 'synthesize') return { summary: `CEO synthesis for: ${goal}`, dependenciesResolved: null, status: 'awaiting_validation' };
       return { summary: `CEO orchestration for: ${goal}`, stage: 'coordination' };
     default:
       throw new Error(`UNKNOWN_DEPARTMENT:${departmentKey}`);

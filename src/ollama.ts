@@ -16,7 +16,7 @@ export async function ollamaChat(input: OllamaChatInput): Promise<OllamaChatResu
     throw new Error('OLLAMA_NOT_CONFIGURED');
   }
 
-  const model = input.model ?? 'glm-5.3-flash';
+  const model = input.model ?? process.env.OLLAMA_MODEL?.trim() ?? 'Base 1-flash';
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
 

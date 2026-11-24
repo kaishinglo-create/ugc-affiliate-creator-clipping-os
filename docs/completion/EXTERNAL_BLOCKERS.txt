@@ -1,0 +1,5 @@
+4449b6b2507e|Complete feature: Deployment (blocked) - criteria: Credentials
+64f262fbabcf|Roadmap: /home/kaishinglo/ugc-affiliate-creator-clipping-os/docs/autonomous-build/STATE.md:150:Blockers for the next phases: `OLLAMA_API_KEY` absent (Phase 23 cannot be verified live),
+9d67dc7dd181|Roadmap: /home/kaishinglo/ugc-affiliate-creator-clipping-os/docs/autonomous-build/STATE.md:175:Blockers: Ollama HTTP 402 external credits; optional helper workspace identifiers remain backward compatible.
+c8c86c22585f|Complete feature: Creator Discovery (partial) - criteria: DISCOVERY_MCP_CLIENT set
+f36c3e566ff4|Complete feature: Analytics (partial) - criteria: External sources

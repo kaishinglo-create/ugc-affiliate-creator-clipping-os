@@ -5,6 +5,8 @@ import { chromium } from "playwright";
 const PORT = Number(process.env.BROWSER_RUNTIME_PORT || process.env.PORT || 3200);
 const TOKEN = (process.env.BROWSER_RUNTIME_TOKEN || "").trim();
 const HOST = process.env.BROWSER_RUNTIME_HOST || "127.0.0.1";
+const EXECUTABLE_PATH = (process.env.BROWSER_EXECUTABLE_PATH || process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || "").trim();
+const SETUP_HINT = "Chromium-Abhaengigkeiten fehlen. Auf Debian/Ubuntu: sudo apt install -y libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2 libx11-6 libx11-xcb1";
 const PRIVATE_PATTERNS = [
   /^localhost$/i, /^127\./, /^10\./, /^192\.168\./, /^172\.(1[6-9]|2[0-9]|3[0-1])\./, /^169\.254\./, /^0\./, /^\[::1\]$/i,
 ];
@@ -34,7 +36,8 @@ function safeUrl(raw) {
   return parsed.toString();
 }
 
-let browser;
+let browser = null;
+let browserError = null;
 const sessions = new Map();
 
 async function newSession(workspaceId, url) {
@@ -69,9 +72,10 @@ async function closeSession(id) {
 const server = http.createServer(async (req, res) => {
   try {
     if (req.url === "/status" && req.method === "GET") {
-      return json(res, 200, { available: true, mode: "external", endpoint: `http://${HOST}:${PORT}`, message: "Chromium Playwright host ready." });
+      return json(res, 200, { available: !!browser, mode: "external", endpoint: `http://${HOST}:${PORT}`, message: browser ? "Chromium Playwright host ready." : (browserError || "Chromium is not available."), setup: browser ? undefined : SETUP_HINT });
     }
     if (!tokenValid(req)) return json(res, 401, { error: "UNAUTHORIZED" });
+  if (!browser) return json(res, 503, { error: "BROWSER_RUNTIME_UNAVAILABLE", message: browserError || "Chromium is not available.", setup: SETUP_HINT });
     const body = await new Promise((resolve, reject) => {
       let data = "";
       req.on("data", (chunk) => { data += chunk; });
@@ -183,9 +187,17 @@ const server = http.createServer(async (req, res) => {
 });
 
 (async () => {
-  browser = await chromium.launch({ headless: true });
-  server.listen(PORT, HOST, () => {
+  try {
+    browser = await chromium.launch({ headless: true, executablePath: EXECUTABLE_PATH || undefined, args: ["--no-sandbox"] });
     console.log(`ugc browser runtime host listening on http://${HOST}:${PORT}`);
+  } catch (err) {
+    browser = null;
+    browserError = err instanceof Error ? err.message : String(err);
+    console.error("Chromium konnte nicht gestartet werden:", browserError);
+    console.error(SETUP_HINT);
+  }
+  server.listen(PORT, HOST, () => {
+    console.log(`ugc browser runtime host listening on http://${HOST}:${PORT} (browser ${browser ? "available" : "unavailable"})`);
   });
 })();
 

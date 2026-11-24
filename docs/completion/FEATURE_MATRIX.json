@@ -1,0 +1,26 @@
+{
+  "features": [
+    {"name":"CEO-/COO-Agenten","status":"partial","criteria":["COO persisted beyond DB row","CEO synthesis validated"]},
+    {"name":"Department-Agenten","status":"partial","criteria":["No fake success flags","Deterministic outputs labelled"]},
+    {"name":"Agent Runtime","status":"complete","criteria":["Live provider optional (auto/off/required + injected provider)","Per-workspace AI budget enforced (auto degrades visibly, required fails)"]},
+    {"name":"MECE-Wave","status":"partial","criteria":["Phase docs present","Verified execution"]},
+    {"name":"Browser Runtime","status":"complete","criteria":["Local Chromium verified","Honest status"]},
+    {"name":"API Anything","status":"complete","criteria":["MCP client connected","Scheduled searches"]},
+    {"name":"MCP","status":"partial","criteria":["Runtime host connected"]},
+    {"name":"Creator Discovery","status":"partial","criteria":["DISCOVERY_MCP_CLIENT set"]},
+    {"name":"YouTube Discovery","status":"partial","criteria":["Cursor + retry"]},
+    {"name":"Affiliate Management","status":"complete","criteria":["Click attribution & payout lifecycle verified"]},
+    {"name":"Kampagnenmanagement","status":"complete","criteria":["CRUD verified"]},
+    {"name":"Video Clipping","status":"missing","criteria":["ffmpeg pipeline"]},
+    {"name":"Publishing","status":"placeholder","criteria":["Platform clients"]},
+    {"name":"Analytics","status":"partial","criteria":["External sources"]},
+    {"name":"Multi-Account","status":"complete","criteria":["Workspace isolation"]},
+    {"name":"Self-Healing","status":"complete","criteria":["Engine recovery"]},
+    {"name":"Self-Improving","status":"missing","criteria":["Implementation"]},
+    {"name":"Scheduler","status":"complete","criteria":["State verified"]},
+    {"name":"Security","status":"partial","criteria":["F2/F3 closed"]},
+    {"name":"Frontend","status":"partial","criteria":["Stale labels removed"]},
+    {"name":"Deployment","status":"blocked","criteria":["Credentials"]},
+    {"name":"End-to-End-Tests","status":"missing","criteria":["Playwright suite"]}
+  ]
+}

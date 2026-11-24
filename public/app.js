@@ -263,7 +263,7 @@ function agents() {
 
 function integrations() {
   const rows = state.data.integrations || [];
-  const cards = rows.length ? rows.map(i=>'<article class="card">'+tag(i.status==="CONFIGURED"?"CONFIGURED":"NOT CONFIGURED", i.status==="CONFIGURED"?"green":"orange")+'<h3>'+esc(i.name)+'</h3><p>'+esc(i.description)+'</p><p class="sub">env: '+esc(i.envKey)+'</p></article>').join("") : '<div class="panel">No integrations.</div>';
+  const cards = rows.length ? rows.map(i=>'<article class="card">'+tag(i.status==="CREDENTIALS_ONLY"?"CREDENTIALS ONLY":"NOT CONFIGURED","orange")+'<h3>'+esc(i.name)+'</h3><p>'+esc(i.description)+'</p><p class="sub">env: '+esc(i.envKey)+'</p><p class="sub">No live adapter connected; status reflects stored credentials only.</p></article>').join("") : '<div class="panel">No integrations.</div>';
   return heading("Integrations","Honest status from /api/integrations. No secrets stored in browser.") + '<div class="notice">Credentials are never stored in browser code. Set API keys server-side via env or POST /api/integrations/:provider.</div><div class="cards">'+cards+'</div>' + loadingBlock();
 }
 

@@ -11,6 +11,7 @@ import { createReadStream } from 'node:fs';
 import { prisma, withWorkspaceTransaction } from '../lib/db.js';
 import { writeAuditEvent } from '../lib/audit.js';
 import { hashPassword, verifyPassword, createSession, verifySession, sessionCookieHeader, readSessionCookie, revokeSession } from '../lib/auth.js';
+import { isAffiliatePayoutAction, resolvePayoutTransition, summarizeAttribution, summarizePayouts } from './affiliate.js';
 import { getBrowserGateway, validateBrowserUrl } from './browser-gateway.js';
 
 const trustedProxySetting = String(process.env.TRUST_PROXY || "").trim().toLowerCase();
@@ -239,14 +240,13 @@ app.post('/api/ideas', async (req, reply) => {
 app.get('/api/integrations', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;
-  const { PROVIDERS, providerStatus } = await import('./integrations.js');
+  const { PROVIDERS, resolveIntegrationStatus } = await import('./integrations.js');
   const rows = await withWorkspaceTransaction(ctx.workspaceId, (tx) => tx.integration.findMany({ where: { workspaceId: ctx.workspaceId } })) as any;
   const byProvider = Object.fromEntries(rows.map((r: any) => [r.provider, r]));
   const list = PROVIDERS.map((p) => {
-    const storedStatus = byProvider[p.provider]?.status ?? providerStatus(p.provider);
-    const envStatus = providerStatus(p.provider);
-    const status = storedStatus === 'CONFIGURED' && envStatus !== 'CONFIGURED' ? 'NOT_CONFIGURED' : storedStatus;
-    return { ...p, status, lastError: byProvider[p.provider]?.lastError ?? null };
+    const status = resolveIntegrationStatus(p.provider, byProvider[p.provider]?.status ?? null);
+    // No provider has a live adapter in this build. Never report a connection.
+    return { ...p, status, liveAdapter: false, lastError: byProvider[p.provider]?.lastError ?? null };
   });
   return { integrations: list };
 });
@@ -254,9 +254,10 @@ app.get('/api/integrations', async (req, reply) => {
 app.post('/api/integrations/:provider', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;
+  const { PROVIDERS, resolveIntegrationStatus } = await import('./integrations.js');
   const provider = (req.params as any).provider;
-  const valid = ['yaps','clippingmini','klap','opusclip'];
-  if (!valid.includes(provider)) return reply.code(400).send({ error: 'UNKNOWN_PROVIDER' });
+  const providerInfo = PROVIDERS.find((p) => p.provider === provider);
+  if (!providerInfo) return reply.code(400).send({ error: 'UNKNOWN_PROVIDER' });
   const body = (req.body ?? {}) as any;
   const apiKey = String(body.apiKey ?? '').trim();
   const configured = apiKey.length > 0;
@@ -266,8 +267,10 @@ app.post('/api/integrations/:provider', async (req, reply) => {
     where: { workspaceId_provider: { workspaceId: ctx.workspaceId, provider } },
     create: { workspaceId: ctx.workspaceId, provider, status: status as any, config: configured ? { hint: '***' } : null },
     update: { status: status as any, config: configured ? { hint: '***' } : null, lastError: null },
-  }));
-  reply.code(200).send({ integration: row });
+  })) as any;
+  // DB status records credential storage only; the public status must not
+  // imply a live provider adapter.
+  reply.code(200).send({ integration: { ...row, status: resolveIntegrationStatus(providerInfo.provider, status), liveAdapter: false } });
   return;
 });
 
@@ -353,6 +356,192 @@ app.post('/api/analytics/clicks', async (req, reply) => {
   const click = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.affiliateClick.create({ data: { workspaceId: ctx.workspaceId, contentId: body.contentId ?? null, offerId: body.offerId ?? null, idempotencyKey: key ?? null } }));
   reply.code(201).send({ click });
   return;
+});
+
+// Affiliate attribution and payouts. Attribution is always derived from
+// stored clicks/conversions; no conversion is attributed to a click unless
+// that click belongs to the same workspace.
+function affiliateAttribution(click: any, conversion: any) {
+  return {
+    clickId: conversion?.clickId ?? null,
+    contentId: click?.contentId ?? null,
+    offerId: click?.offerId ?? null,
+    attributed: Boolean(click),
+  };
+}
+
+function parseAffiliateAmount(value: unknown): number | null {
+  const amount = Number(value);
+  if (!Number.isInteger(amount) || amount <= 0 || amount > 2_147_483_647) return null;
+  return amount;
+}
+
+function parseAffiliateId(value: unknown): string | null {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const id = String(value).trim();
+  return /^[A-Za-z0-9_-]{1,64}$/.test(id) ? id : null;
+}
+
+app.post('/api/affiliate/conversions', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const amountCents = parseAffiliateAmount(body.amountCents);
+  if (amountCents === null) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const clickId = parseAffiliateId(body.clickId);
+  if (body.clickId !== undefined && body.clickId !== null && String(body.clickId).trim() !== '' && !clickId) {
+    return reply.code(400).send({ error: 'INVALID_CLICK_ID' });
+  }
+  const idempotencyKey = body.idempotencyKey === undefined || body.idempotencyKey === null || String(body.idempotencyKey).trim() === ''
+    ? null
+    : String(body.idempotencyKey).trim();
+  if (idempotencyKey && idempotencyKey.length > 200) return reply.code(400).send({ error: 'INVALID_INPUT' });
+
+  if (idempotencyKey) {
+    const existing: any = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) =>
+      tx.affiliateConversion.findUnique({ where: { workspaceId_idempotencyKey: { workspaceId: ctx.workspaceId, idempotencyKey } } })
+    );
+    if (existing) {
+      const click = existing.clickId
+        ? await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.affiliateClick.findFirst({ where: { id: String(existing.clickId), workspaceId: ctx.workspaceId } }))
+        : null;
+      reply.code(200).send({ conversion: existing, attribution: affiliateAttribution(click, existing), duplicate: true });
+      return;
+    }
+  }
+
+  try {
+    const result: any = await withWorkspaceTransaction(ctx.workspaceId, async (tx: any) => {
+      const click = clickId
+        ? await tx.affiliateClick.findFirst({ where: { id: clickId, workspaceId: ctx.workspaceId } })
+        : null;
+      if (clickId && !click) return { error: 'INVALID_CLICK_ID' };
+      const conversion = await tx.affiliateConversion.create({
+        data: { workspaceId: ctx.workspaceId, clickId: click?.id ?? null, amountCents, status: 'pending', idempotencyKey },
+      });
+      await writeAuditEvent({
+        tx,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.userId,
+        runId: null,
+        type: 'affiliate_conversion_recorded',
+        actor: ctx.userId,
+        data: { conversionId: conversion.id, clickId: click?.id ?? null, amountCents },
+      });
+      return { conversion, click };
+    });
+    if (result.error) return reply.code(400).send({ error: result.error });
+    reply.code(201).send({ conversion: result.conversion, attribution: affiliateAttribution(result.click, result.conversion), duplicate: false });
+    return;
+  } catch (error: any) {
+    if (error?.code === 'P2002' && idempotencyKey) {
+      const existing: any = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) =>
+        tx.affiliateConversion.findUnique({ where: { workspaceId_idempotencyKey: { workspaceId: ctx.workspaceId, idempotencyKey } } })
+      );
+      if (existing) {
+        const click = existing.clickId
+          ? await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.affiliateClick.findFirst({ where: { id: String(existing.clickId), workspaceId: ctx.workspaceId } }))
+          : null;
+        reply.code(200).send({ conversion: existing, attribution: affiliateAttribution(click, existing), duplicate: true });
+        return;
+      }
+    }
+    throw error;
+  }
+});
+
+app.get('/api/affiliate/conversions', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const q = (req.query ?? {}) as any;
+  const limit = Number(q.limit ?? 50);
+  const offset = Number(q.offset ?? 0);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) return reply.code(400).send({ error: 'INVALID_LIMIT' });
+  if (!Number.isInteger(offset) || offset < 0) return reply.code(400).send({ error: 'INVALID_OFFSET' });
+  const status = q.status === undefined ? undefined : String(q.status);
+  const conversions = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) =>
+    tx.affiliateConversion.findMany({
+      where: { workspaceId: ctx.workspaceId, ...(status ? { status } : {}) },
+      orderBy: { convertedAt: 'desc' },
+      take: limit,
+      skip: offset,
+    })
+  );
+  return { conversions, limit, offset };
+});
+
+app.get('/api/affiliate/attribution', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const [clicks, conversions]: [any[], any[]] = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => Promise.all([
+    tx.affiliateClick.findMany({ where: { workspaceId: ctx.workspaceId } }),
+    tx.affiliateConversion.findMany({ where: { workspaceId: ctx.workspaceId } }),
+  ]));
+  return { attribution: summarizeAttribution(clicks, conversions), dataAvailable: clicks.length + conversions.length > 0 };
+});
+
+app.get('/api/affiliate/payouts', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const q = (req.query ?? {}) as any;
+  const limit = Number(q.limit ?? 50);
+  const offset = Number(q.offset ?? 0);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) return reply.code(400).send({ error: 'INVALID_LIMIT' });
+  if (!Number.isInteger(offset) || offset < 0) return reply.code(400).send({ error: 'INVALID_OFFSET' });
+  const [clicks, conversions]: [any[], any[]] = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => Promise.all([
+    tx.affiliateClick.findMany({ where: { workspaceId: ctx.workspaceId } }),
+    tx.affiliateConversion.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { convertedAt: 'desc' } }),
+  ]));
+  const clickById = new Map(clicks.map((click: any) => [click.id, click]));
+  const payouts = conversions.slice(offset, offset + limit).map((conversion: any) => {
+    const click = conversion.clickId ? clickById.get(conversion.clickId) : undefined;
+    return { ...conversion, attribution: affiliateAttribution(click, conversion) };
+  });
+  return { payouts, totals: summarizePayouts(conversions), limit, offset, dataAvailable: conversions.length > 0 };
+});
+
+app.post('/api/affiliate/conversions/:id/payout', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const id = parseAffiliateId((req.params as any).id);
+  if (!id) return reply.code(400).send({ error: 'INVALID_CONVERSION_ID' });
+  const body = (req.body ?? {}) as any;
+  if (!isAffiliatePayoutAction(body.action)) return reply.code(400).send({ error: 'INVALID_PAYOUT_ACTION' });
+  const reference = body.reference === undefined || body.reference === null ? null : String(body.reference).trim().slice(0, 200);
+
+  const result: any = await withWorkspaceTransaction(ctx.workspaceId, async (tx: any) => {
+    const existing = await tx.affiliateConversion.findFirst({ where: { id, workspaceId: ctx.workspaceId } });
+    if (!existing) return { kind: 'not_found' };
+    const transition = resolvePayoutTransition(String(existing.status), body.action);
+    if (!transition.ok) return { kind: 'conflict', error: transition.error };
+    const updated = await tx.affiliateConversion.updateMany({
+      where: { id, workspaceId: ctx.workspaceId, status: existing.status },
+      data: { status: transition.status },
+    });
+    if (updated.count !== 1) return { kind: 'conflict', error: 'INVALID_PAYOUT_TRANSITION' };
+    const conversion = await tx.affiliateConversion.findUnique({ where: { id } });
+    await writeAuditEvent({
+      tx,
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      runId: null,
+      type: 'affiliate_payout_updated',
+      actor: ctx.userId,
+      data: {
+        conversionId: id,
+        action: body.action,
+        fromStatus: existing.status,
+        toStatus: transition.status,
+        amountCents: existing.amountCents,
+        reference,
+      },
+    });
+    return { kind: 'ok', conversion };
+  });
+
+  if (result.kind === 'not_found') return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (result.kind === 'conflict') return reply.code(409).send({ error: result.error });
+  return { conversion: result.conversion };
 });
 
 
@@ -680,12 +869,12 @@ app.post('/api/agent-tasks/:id/run', async (req, reply) => {
   const { isKillSwitchActive } = await import('../lib/security.js');
   const active = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => isKillSwitchActive(ctx.workspaceId, tx));
   if (active) { return reply.code(409).send({ error: 'KILL_SWITCH_ACTIVE' }); }
-  await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.agentTask.update({ where: { id }, data: { status: 'running', startedAt: new Date() } }));
-  // simple execution: echo input
-  const output = { echoed: task.input, agent: task.agentId };
-  await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.agentTask.update({ where: { id }, data: { status: 'completed', output, finishedAt: new Date() } }));
-  const updated = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.agentTask.findUnique({ where: { id } }));
-  return { task: updated };
+  // This route has no live agent runtime. Do not echo input back as agent
+  // output or mark the task as completed; leave it queued for a real worker.
+  return reply.code(501).send({
+    error: 'AGENT_RUNTIME_NOT_CONNECTED',
+    message: 'No live agent runtime is connected for this task. Use the orchestration AI gateway or an orchestration worker.',
+  });
 });
 
 
@@ -822,6 +1011,7 @@ app.post('/api/jobs', async (req, reply) => {
   const body = (req.body ?? {}) as any;
   const type = String(body.type ?? 'WORKFLOW_RUN').trim() as any;
   if (!type || type === 'CONTENT_DISCOVERY') return reply.code(400).send({ error: 'INVALID_INPUT' });
+  if ((type === 'WORKFLOW_RUN' || type === 'AGENT_TASK') && !requireOperatorRole(ctx, reply)) return;
   const { createJob } = await import('./jobs.js');
   const job = await createJob({ workspaceId: ctx.workspaceId, type, category: body.category ?? null, priority: body.priority, payload: body.payload ?? {}, idempotencyKey: body.idempotencyKey ?? null, maxAttempts: body.maxAttempts, timeoutMs: body.timeoutMs, runAt: body.runAt ? new Date(body.runAt) : null });
   reply.code(201).send({ job });
@@ -877,6 +1067,7 @@ app.post('/api/jobs/:id/heartbeat', async (req, reply) => {
 app.post('/api/jobs/:id/complete', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;
+  if (!requireOperatorRole(ctx, reply)) return;
   const id = (req.params as any).id;
   const body = (req.body ?? {}) as any;
   const { getJob } = await import('./jobs.js');
@@ -898,7 +1089,7 @@ app.post('/api/jobs/:id/fail', async (req, reply) => {
   if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
   if (job.type === 'CONTENT_DISCOVERY' && !requireOperatorRole(ctx, reply)) return;
   const { failJob } = await import('./jobs.js');
-  const updated = await failJob(id, { error: body.error ?? body.reason, retryable: body.retryable, nextRunAt: body.nextRunAt ? new Date(body.nextRunAt) : undefined, leaseId: body.leaseId ?? job.leaseId, workerId: body.workerId ?? job.leaseOwner, workspaceId: ctx.workspaceId }, { workspaceId: ctx.workspaceId });
+  const updated = await failJob(id, { error: body.error ?? body.reason, retryable: body.retryable, nextRunAt: body.nextRunAt ? new Date(body.nextRunAt) : undefined, leaseId: body.leaseId ?? job.leaseId, workerId: body.workerId ?? job.leaseOwner }, { workspaceId: ctx.workspaceId });
   return { job: updated };
 });
 
@@ -947,6 +1138,7 @@ app.post('/api/jobs/:id/retry', async (req, reply) => {
 app.post('/api/jobs/:id/resume', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;
+  if (!requireOperatorRole(ctx, reply)) return;
   const id = (req.params as any).id;
   const body = (req.body ?? {}) as any;
   const { getJob } = await import('./jobs.js');
@@ -1013,6 +1205,35 @@ app.get('/api/discovery/candidates', async (req, reply) => {
   if (!ctx) return;
   const { listDiscoveryCandidates } = await import('./discovery.js');
   return { candidates: await listDiscoveryCandidates(ctx.workspaceId) };
+});
+
+app.post('/api/discovery/schedules', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const { discoveryEnabled, discoveryScheduleInput, createDiscoverySchedule } = await import('./discovery.js');
+  if (!discoveryEnabled()) return reply.code(503).send({ error: 'DISCOVERY_NOT_CONFIGURED' });
+  const input = discoveryScheduleInput.safeParse(req.body);
+  if (!input.success) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const schedule = await createDiscoverySchedule(ctx.workspaceId, input.data);
+  return reply.code(201).send({ schedule });
+});
+
+app.get('/api/discovery/schedules', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { listDiscoverySchedules } = await import('./discovery.js');
+  return { schedules: await listDiscoverySchedules(ctx.workspaceId) };
+});
+
+app.delete('/api/discovery/schedules/:id', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const id = String((req.params as any)?.id ?? '');
+  const { deleteDiscoverySchedule } = await import('./discovery.js');
+  if (!id || !(await deleteDiscoverySchedule(ctx.workspaceId, id))) {
+    return reply.code(404).send({ error: 'SCHEDULE_NOT_FOUND' });
+  }
+  return reply.code(204).send();
 });
 
 async function engineTickHandler(ctx: any, reply: any, body: any) {
@@ -1638,7 +1859,7 @@ app.post('/api/ollama/chat', { config: { rateLimit: { max: 20, timeWindow: '1 mi
     const errMessage = (err as Error)?.message ?? '';
     if (errMessage === 'OLLAMA_BUDGET_EXCEEDED') {
       try {
-        await writeAuditEvent({ workspaceId: ctx.workspaceId, userId: ctx.userId, runId: null, type: 'ollama_request', actor: ctx.userId, data: { outcome: 'budget_exceeded', status: 'budget_exceeded', model: 'glm-5.3-flash', promptLength: prompt.length } });
+        await writeAuditEvent({ workspaceId: ctx.workspaceId, userId: ctx.userId, runId: null, type: 'ollama_request', actor: ctx.userId, data: { outcome: 'budget_exceeded', status: 'budget_exceeded', model: (process.env.OLLAMA_MODEL?.trim() || 'Base 1-flash'), promptLength: prompt.length } });
       } catch (auditErr) {
         req.log.error(auditErr);
       }
@@ -1656,7 +1877,7 @@ app.post('/api/ollama/chat', { config: { rateLimit: { max: 20, timeWindow: '1 mi
     const { ollamaChat } = await import('./ollama.js');
     const result = await ollamaChat({ prompt });
     try {
-      await writeAuditEvent({ workspaceId: ctx.workspaceId, userId: ctx.userId, runId: null, type: 'ollama_request', actor: ctx.userId, data: { outcome: 'success', status, model: (result as any)?.model ?? 'glm-5.3-flash', promptLength: prompt.length, durationMs: Date.now() - startTime, costMetadata: 'not-supplied-by-provider' } });
+      await writeAuditEvent({ workspaceId: ctx.workspaceId, userId: ctx.userId, runId: null, type: 'ollama_request', actor: ctx.userId, data: { outcome: 'success', status, model: (result as any)?.model ?? (process.env.OLLAMA_MODEL?.trim() || 'Base 1-flash'), promptLength: prompt.length, durationMs: Date.now() - startTime, costMetadata: 'not-supplied-by-provider' } });
     } catch (auditErr) {
       req.log.error(auditErr);
     }
@@ -1671,7 +1892,7 @@ app.post('/api/ollama/chat', { config: { rateLimit: { max: 20, timeWindow: '1 mi
     else { status = 502; mappedStatus = 502; errorCode = 'OLLAMA_REQUEST_FAILED'; }
     outcome = 'error';
     try {
-      await writeAuditEvent({ workspaceId: ctx.workspaceId, userId: ctx.userId, runId: null, type: 'ollama_request', actor: ctx.userId, data: { outcome, status: mappedStatus, model: 'glm-5.3-flash', promptLength: prompt.length, durationMs: Date.now() - startTime, errorCode, costMetadata: 'not-supplied-by-provider' } });
+      await writeAuditEvent({ workspaceId: ctx.workspaceId, userId: ctx.userId, runId: null, type: 'ollama_request', actor: ctx.userId, data: { outcome, status: mappedStatus, model: (process.env.OLLAMA_MODEL?.trim() || 'Base 1-flash'), promptLength: prompt.length, durationMs: Date.now() - startTime, errorCode, costMetadata: 'not-supplied-by-provider' } });
     } catch (auditErr) {
       req.log.error(auditErr);
     }

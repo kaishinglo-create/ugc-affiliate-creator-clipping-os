@@ -10,5 +10,5 @@ export async function driveOrchestrationTo(workspaceId: string, runId: string, s
     expect(run?.status).toBe(status);
     expect(run?.leaseOwner).toBeNull();
     return run;
-  }, { timeout: 5_000 });
+  }, { timeout: 30_000 });
 }

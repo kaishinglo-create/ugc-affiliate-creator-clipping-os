@@ -28,7 +28,7 @@ import {
   recoverExpiredJobs,
 } from './jobs.js';
 import { executeRun } from './workflows.js';
-import { discoveryEnabled, executeDiscovery } from './discovery.js';
+import { discoveryEnabled, enqueueDueDiscoverySchedules, executeDiscovery } from './discovery.js';
 import { runOrchestration } from './orchestration.js';
 
 export const DEFAULT_ENGINE_POLL_INTERVAL_MS = 3_000;
@@ -73,6 +73,7 @@ export interface EngineTickSummary {
   skipped: number;
   workflowRunsRecovered: number;
   orchestrationsResumed: number;
+  scheduledSearchesQueued: number;
   jobs: { id: string; type: string; outcome: EngineOutcome; runId: string | null; error?: string }[];
 }
 
@@ -261,6 +262,7 @@ export async function runEngineTick(opts: EngineTickOptions = {}): Promise<Engin
     skipped: 0,
     workflowRunsRecovered: 0,
     orchestrationsResumed: 0,
+    scheduledSearchesQueued: 0,
     jobs: [],
   };
 
@@ -280,6 +282,10 @@ export async function runEngineTick(opts: EngineTickOptions = {}): Promise<Engin
       await recoverExpiredJobs(workspace.id, { now });
       const killActive = await withWorkspaceTransaction(workspace.id, (tx) => isKillSwitchActive(workspace.id, tx));
       if (killActive) continue;
+
+      if (discoveryEnabled()) {
+        summary.scheduledSearchesQueued += await enqueueDueDiscoverySchedules(workspace.id, now);
+      }
 
       const claimed = await claimDueJobs(workspace.id, workerId, {
         now,
