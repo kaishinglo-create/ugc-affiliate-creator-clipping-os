@@ -21,7 +21,7 @@
 | Self-Healing | Vollständig (Code) | src/engine.ts, scripts/autonomous-controller.mjs | Nicht dynamisch geprüft |
 | Self-Improving | Vollständig | src/self-improving.ts, tests/self-improving.test.ts, GET /api/self-improving | Vorschläge nur beratend, keine automatische Richtlinienänderung |
 | Scheduler | Vollständig (Code) | src/engine.ts:468-521 | Laufzustand nicht geprüft |
-| Security | Vollständig | tests/jobs-approval-regression.test.ts, tests/deterministic-agent-output.test.ts | — |
+| Security | Vollständig | tests/jobs-approval-regression.test.ts, tests/workspace-isolation.test.ts 5/5, ugc_os_app (rolsuper=f, rolbypassrls=f) | Read-only-Audit neuer Media-/Agenten-Endpunkte läuft |
 | Frontend | Teilweise | public/app.js, public/index.html | Stale Labels entfernt; MECE-Link geprüft |
 | Deployment | Blockiert | docs/release/PRODUCTION-ROADMAP.md:41 | Keine Credentials |
 | E2E-Tests | Vollständig | playwright.config.ts, tests/e2e/mece.spec.ts (8/8), Browsercheck 27/27 | — |

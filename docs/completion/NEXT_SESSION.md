@@ -72,6 +72,8 @@ bash scripts/controller-supervisor.sh               # Watchdog, nur explizit
 - Reproduzierbarer Real-Lauf: `npm run verify:media`. Report und Frame liegen
   unter `/tmp/opencode/ugc-media-verify/`; SSIM 0.930179 gegen Clipart ohne
   Untertitel. Vitest 175/175, Typecheck/ESLint/Build PASS.
+- RLS erneut mit `ugc_os_app` verifiziert (`rolsuper=f`, `rolbypassrls=f`),
+  `tests/workspace-isolation.test.ts` 5/5 PASS.
 
 ## Nächste sinnvolle Aufgaben
 

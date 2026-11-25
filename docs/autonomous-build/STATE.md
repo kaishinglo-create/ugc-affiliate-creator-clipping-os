@@ -1,5 +1,14 @@
 # STATE
 
+## Phase D: RLS mit Nicht-Superuser erneut verifiziert (2026-11-25T02:09Z) — 3/10
+
+- Frische Ausführung `tests/workspace-isolation.test.ts`: **5/5 PASS**.
+- Direkte Rollenprüfung über die aktive `DATABASE_URL`: `current_user =
+  ugc_os_app`, `rolsuper = false`, `rolbypassrls = false`; FORCE-RLS wird
+  also nicht umgangen. Kein Superuser-Kontext, kein Workaround.
+- Security-Matrix bleibt vollständig; weiterhin offen ist das separate
+  Read-only-Audit der neuen Media-/Agenten-Endpunkte durch den Security-Agent.
+
 ## Phase D: echter FFmpeg-/Whisper-Medienlauf (2026-11-25T00:55Z) — 2/10
 
 - Installiert und verifiziert: `ffmpeg`/`ffprobe` 7.1.5 (Debian trixie),

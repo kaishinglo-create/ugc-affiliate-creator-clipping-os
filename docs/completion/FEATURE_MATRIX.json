@@ -19,7 +19,7 @@
     {"name":"Self-Healing","status":"complete","criteria":["Engine recovery"]},
     {"name":"Self-Improving","status":"complete","criteria":["Deterministic audit-event rules with evidence","No automatic policy application","tests/self-improving.test.ts","GET /api/self-improving"]},
     {"name":"Scheduler","status":"complete","criteria":["State verified"]},
-    {"name":"Security","status":"complete","criteria":["F2/F3 closed","Approval bypass regression passing"]},
+    {"name":"Security","status":"complete","criteria":["F2/F3 closed","Approval bypass regression passing","Phase D: ugc_os_app rolsuper=false rolbypassrls=false","tests/workspace-isolation.test.ts 5/5"]},
     {"name":"Frontend","status":"partial","criteria":["Stale labels removed"]},
     {"name":"Deployment","status":"blocked","criteria":["Credentials"]},
     {"name":"End-to-End-Tests","status":"complete","criteria":["Browser smoke 27/27 verified","Repo Playwright suite 8/8 (tests/e2e/mece.spec.ts)","playwright.config.ts"]}
