@@ -17,7 +17,7 @@ Would you buy it?`;
 it('parses real timestamped transcript lines without inventing segments', () => {
   const segments = parseTranscript(TIMED_TRANSCRIPT);
   expect(segments).toHaveLength(3);
-  expect(segments[1]).toEqual({ startMs: 5000, endMs: 13_000, text: 'This gadget saved me 37 percent on my bill, and here is the proof!' });
+  expect(segments[1]).toEqual({ startMs: 5000, endMs: 12_000, text: 'This gadget saved me 37 percent on my bill, and here is the proof!' });
   expect(parseTranscript('plain transcript')).toEqual([{ startMs: null, endMs: null, text: 'plain transcript' }]);
 });
 
@@ -25,7 +25,7 @@ it('detects highlights only from evidence in the transcript', () => {
   const highlights = detectHighlights(TIMED_TRANSCRIPT, { keywords: ['gadget'], minScore: 3 });
   expect(highlights).toHaveLength(1);
   expect(highlights[0].startMs).toBe(5000);
-  expect(highlights[0].endMs).toBe(13_000);
+  expect(highlights[0].endMs).toBe(12_000);
   expect(highlights[0].reasons).toEqual(expect.arrayContaining(['keyword:gadget', 'number_or_stat', 'emphasis']));
   expect(detectHighlights('nothing notable here', { minScore: 2 })).toEqual([]);
 });
@@ -80,6 +80,45 @@ writeFileSync(out + '.txt', ${JSON.stringify(TIMED_TRANSCRIPT)});
     expect(result.highlights[0].text).toContain('37 percent');
   } finally {
     vi.unstubAllEnvs();
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 20_000);
+
+it('prefers real whisper SRT timestamps over untimed txt output', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'ugc-transcribe-srt-'));
+  try {
+    const audio = join(directory, 'audio.wav');
+    const model = join(directory, 'model.bin');
+    await writeFile(audio, 'RIFF');
+    await writeFile(model, 'model');
+    const binary = join(directory, 'whisper-srt-double');
+    await writeFile(binary, `#!/usr/bin/env node
+import { writeFileSync } from 'node:fs';
+const args = process.argv.slice(2);
+writeFileSync(${JSON.stringify(join(directory, 'argv.log'))}, JSON.stringify(args));
+const out = args[args.indexOf('-of') + 1];
+writeFileSync(out + '.txt', 'plain transcript without times');
+writeFileSync(out + '.srt', '1\\n00:00:01,000 --> 00:00:03,500\\nTimed evidence line.\\n');
+`);
+    await chmod(binary, 0o755);
+    const result = await transcribeAndHighlight({
+      audioPath: audio,
+      outputDir: directory,
+      modelPath: model,
+      binary,
+      language: 'en',
+      threads: 1,
+      keywords: ['timed'],
+      minScore: 1,
+    });
+    expect(result.text).toContain('plain transcript');
+    expect(result.segments).toEqual([{ startMs: 1000, endMs: 3500, text: 'Timed evidence line.' }]);
+    expect(result.highlights[0]).toMatchObject({ startMs: 1000, endMs: 3500, text: 'Timed evidence line.' });
+    expect(result.timedTranscriptPath).toBeDefined();
+    const argv = JSON.parse(await (await import('node:fs/promises')).readFile(join(directory, 'argv.log'), 'utf8')) as string[];
+    expect(argv).toContain('-osrt');
+    expect(argv).toContain('-t');
+  } finally {
     await rm(directory, { recursive: true, force: true });
   }
 }, 20_000);

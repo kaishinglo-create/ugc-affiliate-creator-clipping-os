@@ -5,18 +5,24 @@ Gelöst / verifiziert:
   (`rolsuper=f`, `rolbypassrls=f`). `tests/workspace-isolation.test.ts` 5/5 PASS.
 - KI: `opencode/beam-free` ist im Katalog als kostenlos geführt und lieferte
   einen echten Antworttext (`OK.`). Kein `OLLAMA_API_KEY` nötig.
-- MECE-Token, Browsercheck, Fastify-Bridge, 143/143 Vitest: unverändert grün.
+- MECE-Token, Browsercheck, Fastify-Bridge: unverändert grün. Vitest nach
+  Phase D/Media: 175/175 (47 Dateien).
+- Echter Medienlauf: ffmpeg/ffprobe 7.1.5, whisper.cpp 1.9.6-dev mit
+  `ggml-tiny.en.bin`, 720x1280 H.264/AAC-Export, SSIM 0.930179 gegen
+  identischen Clipart ohne Untertitel. Report:
+  `/tmp/opencode/ugc-media-verify/verification.json`.
 
 Weiterhin extern blockiert (lokale Entwicklung läuft weiter):
 - `DISCOVERY_MCP_SERVER` / `DISCOVERY_MCP_CLIENT` nicht gesetzt: kein
   konfigurierter MCP-Datenanbieter für Creator-/Produktdiscovery.
 - YouTube-Suche ohne API-Zugang/Cursor-Quelle nicht live prüfbar; Retry- und
   Budgetlogik kann lokal gegen einen Fake-MCP-Server getestet werden.
-- `ffmpeg` / `ffprobe` nicht installiert: Clipping-Pipeline wird mit
-  expliziter `NOT_CONFIGURED`-Rückmeldung implementiert und mit einem
-  Test-Dummy verifiziert; echte Medienausgabe bleibt offen bis Installation.
-- Kein lokales Whisper-Modell: Transkription/Highlight-Erkennung bleibt ohne
-  kostenloses lokales Modell nicht echt ausführbar.
+- `ffmpeg` / `ffprobe` sind jetzt installiert (7.1.5) und mit echtem 11-s-Video
+  verifiziert; der frühere `NOT_CONFIGURED`-Blocker ist geschlossen. Die
+  Binaries liegen systemweit, das Whisper-Modell liegt unter `/tmp/opencode`
+  und muss bei einem neuen Host erneut bereitgestellt werden.
+- Lokales whisper.cpp (1.9.6-dev) + `ggml-tiny.en.bin` sind installiert und
+  liefern echtes Transcript mit SRT-Zeitstempeln; kein Cloud-/Kostenfallback.
 - Keine Plattform-Credentials: Publishing bleibt freigabepflichtig und ohne
   echten Upload; keine Veröffentlichung ohne manuelle Freigabe.
 - Keine externen Analytics-Quellen; Analytics bleibt auf gespeicherte

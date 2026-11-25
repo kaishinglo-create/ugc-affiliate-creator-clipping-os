@@ -1375,6 +1375,27 @@ app.post('/api/media/subtitles', async (req, reply) => {
   }
 });
 
+app.post('/api/media/extract-audio', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  try {
+    const { extractAudio } = await import('./video/clipping.js');
+    const { workspaceMediaPath, workspaceMediaRoot } = await import('./media-workspace.js');
+    const result = await extractAudio({
+      input: workspaceMediaPath(ctx.workspaceId, body.inputName),
+      output: workspaceMediaPath(ctx.workspaceId, body.outputName),
+      sampleRate: body.sampleRate === undefined ? undefined : Number(body.sampleRate),
+      allowedTempDir: workspaceMediaRoot(ctx.workspaceId),
+    });
+    return { audio: result };
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+    return;
+  }
+});
+
 app.post('/api/media/export', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;
@@ -1421,6 +1442,7 @@ app.post('/api/media/transcription/audio', async (req, reply) => {
       outputDir: workspaceMediaRoot(ctx.workspaceId),
       modelPath: body.modelPath ? String(body.modelPath) : undefined,
       language: body.language ? String(body.language) : undefined,
+      threads: body.threads === undefined ? undefined : Number(body.threads),
       keywords: Array.isArray(body.keywords) ? body.keywords : [],
       minScore: Number(body.minScore) || undefined,
     });

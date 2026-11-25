@@ -13,8 +13,8 @@
 | YouTube Discovery | Vollständig (Code) | src/discovery.ts, tests/discovery-cursor-retry.test.ts | Live-Quelle nicht konfiguriert; Cursor/Retry gegen Fake-MCP geprüft |
 | Affiliate Management | Vollständig | src/affiliate.ts, /api/affiliate/*, tests/affiliate.test.ts | Manuelle Erfassung; kein externes Affiliate-Netzwerk |
 | Kampagnenmanagement | Vollständig (CRUD) | src/index.ts:392-406 | — |
-| Video Clipping | Vollständig (Code) | src/video/clipping.ts, src/video/subtitles.ts, tests/video-pipeline.test.ts, /api/media/export | ffmpeg/ffprobe lokal nicht installiert (NOT_CONFIGURED) |
-| Transkription & Highlights | Vollständig (Code) | src/transcription.ts, tests/transcription.test.ts, /api/media/transcription/* | Whisper-Binary/Modell lokal nicht installiert |
+| Video Clipping | Vollständig (real) | ffmpeg/ffprobe 7.1.5, scripts/verify-media-runtime.ts, 720x1280 H.264/AAC, SSIM 0.930179, /api/media/extract-audio, /api/media/export | — |
+| Transkription & Highlights | Vollständig (real) | whisper.cpp 1.9.6-dev + ggml-tiny.en.bin, echtes JFK-Transcript, SRT-Zeiten, tests/transcription.test.ts, /api/media/transcription/audio | — |
 | Publishing | Mock/Platzhalter | src/orchestration.ts:205 | Keine Plattform-Clients |
 | Analytics | Teilweise | src/index.ts:320-358 | Keine externen Quellen |
 | Multi-Account | Vollständig | lib/auth.ts, src/index.ts:139-149 | UI nur erster Workspace |

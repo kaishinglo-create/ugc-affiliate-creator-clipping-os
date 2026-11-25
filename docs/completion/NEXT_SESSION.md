@@ -3,8 +3,8 @@
 ## Einstieg
 
 - Repo: `/home/kaishinglo/ugc-affiliate-creator-clipping-os`
-- Branch: `main`, letzter lokaler Checkpoint `f77dd81` (Phase A/B) plus Phase-C
-  Änderungen; keine Pushes, Merges oder Deployments. Vorhandene
+- Branch: `main`, letzter lokaler Checkpoint ist dieser Phase-D-Media-Commit
+  (nach `0b5c806`); keine Pushes, Merges oder Deployments. Vorhandene
   Benutzeränderungen wurden bewahrt.
 - Node 22, TypeScript strict, Fastify/Prisma 7/PostgreSQL, Vitest.
 - QA-Baseline vor Phase C: Typecheck/ESLint/Build PASS, Vitest 143/143,
@@ -62,19 +62,35 @@ bash scripts/controller-supervisor.sh               # Watchdog, nur explizit
   automatische Richtlinienänderung (`src/self-improving.ts`).
 - Repo-Playwright-Suite `playwright.config.ts` + `tests/e2e/mece.spec.ts`: 8/8.
 
+## Phase D erledigt (2026-11-25)
+
+- FFmpeg/FFprobe 7.1.5 installiert; whisper.cpp 1.9.6-dev mit
+  `ggml-tiny.en.bin` lokal gebaut und mit echtem JFK-Sprachsample betrieben.
+- `extractAudio()`, `POST /api/media/extract-audio`, echte SRT-Zeitstempel und
+  thread-begrenzte Whisper-Läufe ergänzt. Highlight-Zeiten stammen jetzt aus
+  der echten SRT, nicht aus dem untimed Text.
+- Reproduzierbarer Real-Lauf: `npm run verify:media`. Report und Frame liegen
+  unter `/tmp/opencode/ugc-media-verify/`; SSIM 0.930179 gegen Clipart ohne
+  Untertitel. Vitest 175/175, Typecheck/ESLint/Build PASS.
+
 ## Nächste sinnvolle Aufgaben
 
-1. Externe Blockaden auflösen (ffmpeg/whisper, Discovery-MCP/YouTube,
-   Plattform-Credentials, Analytics-Quellen, Deployment) und die bestehenden
-   `NOT_CONFIGURED`-Verträge mit echten Läufen verifizieren.
-2. `scripts/services.sh` um einen `doctor`-Modus erweitern (Ports, Auth,
-   Controller-Heartbeat, Medien-Binaries).
-3. Legacy-Archive `docs/completion/TASK_QUEUE.txt`, `COMPLETED_TASKS.txt` und
+1. Publishing-Adapter (YouTube/TikTok/Instagram) mit `NOT_CONFIGURED`,
+   Warteschlange, Retry, Idempotenz, Audit und manueller Freigabe fertigstellen.
+2. Analytics/Affiliate echte lokale Datenquellen zusammenführen und fehlende
+   Daten explizit markieren.
+3. `scripts/services.sh doctor` und externen Controller-Watchdog ergänzen;
+   Cooldown bis `2026-11-25T04:59:00.966Z` strikt respektieren.
+4. Discovery-MCP/YouTube, Plattform-Credentials und externe Analytics-Quellen
+   bleiben extern blockiert und werden nicht simuliert.
+5. Legacy-Archive `docs/completion/TASK_QUEUE.txt`, `COMPLETED_TASKS.txt` und
    `FAILED_TASKS.txt` als reines Archiv kennzeichnen; nichts löschen.
-4. Autonomen Controller mit persistentem Fortschritt wieder starten, sobald die
+6. Autonomen Controller mit persistentem Fortschritt wieder starten, sobald die
    `GLOBAL_FREE_QUOTA`-Cooldowns abgelaufen sind (bis
    `2026-11-25T04:59:00.966Z`) und ein erneuter begrenzter Free-Model-Call
    erfolgreich war. Aktuell: bewusst gestoppt.
+7. Vollständigen UGC-Workflow und alle Frontend-Tabs mit echtem Chromium
+   abschließen; keine Platzhalter als Erfolg ausgeben.
 
 ## Extern blockiert (nicht mit freien Ressourcen lösbar)
 

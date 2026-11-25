@@ -61,6 +61,32 @@ describe('workspace media API', () => {
     }
   }, 60_000);
 
+  it('extracts audio only inside the workspace root and reports a missing ffmpeg honestly', async () => {
+    const { workspaceId, headers } = await workspaceHeaders();
+    const root = workspaceMediaRoot(workspaceId);
+    await mkdir(root, { recursive: true });
+    await writeFile(`${root}/source.mp4`, 'source placeholder for audio extraction');
+
+    const traversal = await app.inject({
+      method: 'POST', url: '/api/media/extract-audio', headers,
+      payload: { inputName: 'source.mp4', outputName: '../escape.wav' },
+    });
+    expect(traversal.statusCode).toBe(400);
+    expect(traversal.json().code).toBe('INVALID_MEDIA_NAME');
+
+    vi.stubEnv('FFMPEG_BIN', '/nonexistent/ffmpeg');
+    try {
+      const res = await app.inject({
+        method: 'POST', url: '/api/media/extract-audio', headers,
+        payload: { inputName: 'source.mp4', outputName: 'speech.wav' },
+      });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toMatchObject({ code: 'NOT_CONFIGURED' });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  }, 60_000);
+
   it('derives highlights from supplied text and rejects missing audio honestly', async () => {
     const { headers } = await workspaceHeaders();
     const transcript = '00:00:00.000 --> 00:00:05.000\nThis product saved me 30 percent, and here is the proof!';

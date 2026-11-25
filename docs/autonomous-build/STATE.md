@@ -1,5 +1,34 @@
 # STATE
 
+## Phase D: echter FFmpeg-/Whisper-Medienlauf (2026-11-25T00:55Z) — 2/10
+
+- Installiert und verifiziert: `ffmpeg`/`ffprobe` 7.1.5 (Debian trixie),
+  `cmake`/`g++`/`make`, whisper.cpp 1.9.6-dev aus `ggml-org/whisper.cpp`
+  unter `/tmp/opencode/whisper.cpp`, Modell `ggml-tiny.en.bin` (75 MB,
+  kostenlos, lokal). Ressourcenbegrenzung: 1 Whisper-Thread
+  (`WHISPER_THREADS=1`), kein GPU-/Cloud-Fallback.
+- Echter Lauf ohne Test-Doubles über
+  `scripts/verify-media-runtime.ts` (`npm run verify:media`): aus dem echten
+  JFK-Sprachsample wurde ein 11-s-Quellvideo erzeugt, Mono-16-kHz-WAV
+  extrahiert, mit whisper.cpp transkribiert, SRT-Zeitstempel in Highlights
+  übernommen und ein 8-s-Hochformat-Clip (720×1280, H.264/AAC) mit
+  eingebrannten Untertiteln exportiert.
+- Technisch-visuelle Validierung: identischer Clipart ohne Untertitel
+  dagegen verglichen, `SSIM All = 0.930179` (unter 0.999 => sichtbarer
+  Unterschied durch Burn-in). Frame:
+  `/tmp/opencode/ugc-media-verify/subtitled-frame.png`; vollständiger Report:
+  `/tmp/opencode/ugc-media-verify/verification.json`.
+- Code: `extractAudio()` in `src/video/clipping.ts` und
+  `POST /api/media/extract-audio`; `transcribeAudio()` holt jetzt `-osrt`,
+  begrenzt Threads und benutzt echte SRT-Zeiten für Highlights
+  (`transcribeAndHighlight`). `NOT_CONFIGURED` bleibt erhalten, wenn Binary
+  oder Modell fehlen.
+- QA: Typecheck PASS, ESLint PASS (geänderte Dateien), Vitest **175/175**
+  (47 Dateien; 3 neue ehrliche Tests), Build im nächsten Schritt geprüft.
+  Browsercheck/Playwright unverändert (keine Frontend-Änderung).
+- Feature-Matrix und externe Blockaden aktualisiert: FFmpeg/Whisper-Blocker
+  geschlossen. Kein Push, Merge oder Deploy.
+
 ## Controller status (2026-11-24T23:53Z)
 
 - Full local QA is green (Vitest 172/172, browser 27/27, Playwright 8/8,

@@ -12,7 +12,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/pr
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { clipSegment, exportVideo, probeMedia } from '../src/video/clipping.js';
+import { clipSegment, exportVideo, extractAudio, probeMedia } from '../src/video/clipping.js';
 import { burnSubtitles, escapeFilterPath, writeSrt } from '../src/video/subtitles.js';
 
 const FFMPEG_DOUBLE = `#!/bin/sh
@@ -227,6 +227,37 @@ describe('video pipeline (ffmpeg/ffprobe test doubles)', () => {
       allowedTempDir: allowed,
     })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
     expect(await argvGroups(ffmpegLog)).toEqual([]);
+  });
+
+  it('extractAudio builds an exact mono 16 kHz WAV command and rejects a missing ffmpeg', async () => {
+    const input = await source();
+    const output = path.join(root, 'audio', 'speech.wav');
+    const result = await extractAudio({ input, output });
+
+    expect(result.args).toEqual([
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-y',
+      '-i',
+      input,
+      '-vn',
+      '-ac',
+      '1',
+      '-ar',
+      '16000',
+      '-c:a',
+      'pcm_s16le',
+      output,
+    ]);
+    expect(result.bytes).toBeGreaterThan(0);
+    expect(await argvGroups(ffmpegLog)).toEqual([result.args]);
+
+    disableBinaries();
+    await expect(extractAudio({ input, output: path.join(root, 'audio', 'never.wav') }))
+      .rejects.toMatchObject({ code: 'NOT_CONFIGURED', message: 'FFMPEG_NOT_CONFIGURED' });
+    await expect(extractAudio({ input, output: path.join(root, 'audio', 'bad.wav'), sampleRate: 7 }))
+      .rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
 
   it('writeSrt produces valid SRT and rejects invalid cue timestamps', async () => {

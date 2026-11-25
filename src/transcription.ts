@@ -76,6 +76,7 @@ export function parseTranscript(text: string): TranscriptSegment[] {
   const lines = text.split(/\r?\n/);
   const segments: TranscriptSegment[] = [];
   let pendingStart: number | null = null;
+  let pendingEnd: number | null = null;
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -83,12 +84,16 @@ export function parseTranscript(text: string): TranscriptSegment[] {
     if (times.length === 2) {
       const start = parseTimestamp(times[0]);
       const end = parseTimestamp(times[1]);
-      if (start !== null && end !== null && end >= start) pendingStart = start;
+      if (start !== null && end !== null && end >= start) {
+        pendingStart = start;
+        pendingEnd = end;
+      }
       continue;
     }
     if (pendingStart !== null) {
-      segments.push({ startMs: pendingStart, endMs: null, text: trimmed });
+      segments.push({ startMs: pendingStart, endMs: pendingEnd, text: trimmed });
       pendingStart = null;
+      pendingEnd = null;
     }
   }
   if (segments.length > 0) {
@@ -150,6 +155,8 @@ export interface TranscribeOptions {
   modelPath?: string;
   binary?: string;
   language?: string;
+  /** Bound CPU use; defaults to one thread on small hosts. */
+  threads?: number;
   timeoutMs?: number;
 }
 
@@ -158,6 +165,8 @@ export interface TranscriptionResult {
   text: string;
   segments: TranscriptSegment[];
   transcriptPath: string;
+  /** Timestamped SRT produced by whisper.cpp when available. */
+  timedTranscriptPath?: string;
   durationMs: number;
 }
 
@@ -216,8 +225,11 @@ export async function transcribeAudio(options: TranscribeOptions): Promise<Trans
 
   await mkdir(outputDir, { recursive: true });
   const outputBase = path.join(outputDir, `transcript-${randomUUID()}`);
-  const args = ['-m', model, '-f', audio, '-otxt', '-of', outputBase];
+  const args = ['-m', model, '-f', audio, '-otxt', '-osrt', '-of', outputBase];
   if (options.language?.trim()) args.push('-l', options.language.trim().slice(0, 16));
+  const rawThreads = options.threads ?? Number(process.env.WHISPER_THREADS ?? 0);
+  const threads = Number.isFinite(rawThreads) ? Math.max(1, Math.min(4, Math.trunc(rawThreads))) : 1;
+  args.push('-t', String(threads));
   await runWhisper(binary, args, Math.max(1000, Math.min(600_000, Number(options.timeoutMs) || 120_000)));
 
   const transcriptPath = `${outputBase}.txt`;
@@ -227,13 +239,37 @@ export async function transcribeAudio(options: TranscribeOptions): Promise<Trans
   }
   const { readFile } = await import('node:fs/promises');
   const text = await readFile(transcriptPath, 'utf8');
+  const timedTranscriptPath = `${outputBase}.srt`;
+  const timedInfo = await stat(timedTranscriptPath).catch(() => null);
+  const timedText = timedInfo?.isFile() ? await readFile(timedTranscriptPath, 'utf8') : null;
   return {
     ok: true,
     text,
-    segments: parseTranscript(text),
+    segments: parseTranscript(timedText ?? text),
     transcriptPath,
+    ...(timedText === null ? {} : { timedTranscriptPath }),
     durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
   };
+}
+
+function formatHighlightTimestamp(ms: number | null): string {
+  const safe = Math.max(0, Math.trunc(ms ?? 0));
+  const hours = Math.floor(safe / 3_600_000);
+  const minutes = Math.floor((safe % 3_600_000) / 60_000);
+  const seconds = Math.floor((safe % 60_000) / 1000);
+  const millis = safe % 1000;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(millis).padStart(3, '0')}`;
+}
+
+function transcriptForHighlights(result: TranscriptionResult): string {
+  const hasTimings = result.segments.some((segment) => segment.startMs !== null);
+  if (!hasTimings) return result.text;
+  return result.segments
+    .map((segment) => {
+      if (segment.startMs === null) return segment.text;
+      return `${formatHighlightTimestamp(segment.startMs)} --> ${formatHighlightTimestamp(segment.endMs)}\n${segment.text}`;
+    })
+    .join('\n\n');
 }
 
 /** Transcribe real audio, then derive explainable highlights from that transcript. */
@@ -241,7 +277,7 @@ export async function transcribeAndHighlight(options: TranscribeOptions & Highli
   const result = await transcribeAudio(options);
   return {
     ...result,
-    highlights: detectHighlights(result.text, options),
+    highlights: detectHighlights(transcriptForHighlights(result), options),
   };
 }
 

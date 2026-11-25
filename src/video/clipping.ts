@@ -119,6 +119,65 @@ export function assertWithinDirectory(candidate: string, base: string): void {
   }
 }
 
+export interface ExtractAudioOptions {
+  input: string;
+  output: string;
+  /** Mono WAV sample rate; defaults to 16 kHz for Whisper. */
+  sampleRate?: number;
+  /** Optional workspace temp directory that must contain `output`. */
+  allowedTempDir?: string;
+}
+
+export interface ExtractAudioResult {
+  outputPath: string;
+  bytes: number;
+  args: string[];
+  durationMs: number;
+}
+
+/**
+ * Extract a real mono 16 kHz PCM WAV from a video with ffmpeg. The result is
+ * only returned after ffmpeg exits successfully and the output file exists.
+ */
+export async function extractAudio(options: ExtractAudioOptions): Promise<ExtractAudioResult> {
+  const startedAt = performance.now();
+  const input = assertSafePath(options.input, 'input');
+  const output = assertSafePath(options.output, 'output');
+  if (options.allowedTempDir !== undefined) {
+    assertWithinDirectory(output, options.allowedTempDir);
+  }
+  const sampleRate = options.sampleRate ?? 16_000;
+  if (!Number.isInteger(sampleRate) || sampleRate < 8_000 || sampleRate > 48_000) {
+    throw invalidVideoInput('sampleRate must be an integer between 8000 and 48000');
+  }
+
+  const inputInfo = await stat(input).catch(() => null);
+  if (!inputInfo || !inputInfo.isFile()) {
+    throw new MediaNotFoundError(input);
+  }
+
+  const args = [
+    '-hide_banner',
+    '-loglevel',
+    'error',
+    '-y',
+    '-i',
+    input,
+    '-vn',
+    '-ac',
+    '1',
+    '-ar',
+    String(sampleRate),
+    '-c:a',
+    'pcm_s16le',
+    output,
+  ];
+  await mkdir(path.dirname(output), { recursive: true });
+  await runBinary('ffmpeg', args);
+  const bytes = await verifyOutputFile(output);
+  return { outputPath: output, bytes, args, durationMs: elapsedMs(startedAt) };
+}
+
 /** Resolve the video codec; the argument wins over the environment variable. */
 export function resolveVideoCodec(codec?: string): string {
   const value = codec?.trim() || process.env.FFMPEG_VIDEO_CODEC?.trim() || 'libx264';
