@@ -32,6 +32,7 @@ export interface VideoErrorDetails {
   stderr?: string;
   cause?: string;
   reason?: string;
+  timeoutMs?: number;
 }
 
 export interface VideoErrorInfo {
@@ -205,32 +206,58 @@ export interface BinaryRunResult {
   exitCode: number;
 }
 
+/** Default upper bound for one ffmpeg/ffprobe invocation; never unbounded. */
+const DEFAULT_BINARY_TIMEOUT_MS = 120_000;
+
+function binaryTimeoutMs(): number {
+  const configured = Number(process.env.FFMPEG_TIMEOUT_MS ?? DEFAULT_BINARY_TIMEOUT_MS);
+  return Number.isFinite(configured)
+    ? Math.max(1000, Math.min(600_000, Math.trunc(configured)))
+    : DEFAULT_BINARY_TIMEOUT_MS;
+}
+
 /** Spawn a configured binary with an argument array; never use a shell. */
-export async function runBinary(binary: 'ffmpeg' | 'ffprobe', args: readonly string[]): Promise<BinaryRunResult> {
+export async function runBinary(binary: 'ffmpeg' | 'ffprobe', args: readonly string[], timeoutMs = binaryTimeoutMs()): Promise<BinaryRunResult> {
   const resolved = binaryName(binary);
   const failureCode = binary === 'ffprobe' ? 'FFPROBE_FAILED' : 'FFMPEG_FAILED';
+  const boundedTimeout = Math.max(1000, Math.min(600_000, Math.trunc(timeoutMs) || DEFAULT_BINARY_TIMEOUT_MS));
 
   return await new Promise<BinaryRunResult>((resolve, reject) => {
     let settled = false;
     let stdout = '';
     let stderr = '';
+    let clearTimer: () => void = () => undefined;
 
-    const fail = (error: VideoPipelineError): void => {
+    const finish = (error?: VideoPipelineError, result?: BinaryRunResult): void => {
       if (settled) return;
       settled = true;
-      reject(error);
+      clearTimer();
+      if (error) reject(error);
+      else if (result) resolve(result);
     };
 
     let child;
     try {
       child = spawn(resolved, [...args], { shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (error) {
-      fail(new VideoPipelineError(failureCode, `${binary.toUpperCase()}_SPAWN_FAILED`, {
+      finish(new VideoPipelineError(failureCode, `${binary.toUpperCase()}_SPAWN_FAILED`, {
         binary,
         cause: error instanceof Error ? error.message : String(error),
       }));
       return;
     }
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      child.kill('SIGKILL');
+      finish(new VideoPipelineError(failureCode, `${binary.toUpperCase()}_TIMEOUT`, {
+        binary,
+        timeoutMs: boundedTimeout,
+        stderr: stderr.slice(-2000),
+      }));
+    }, boundedTimeout);
+    clearTimer = () => clearTimeout(timer);
+    timer.unref();
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout = appendCapped(stdout, chunk);
@@ -240,23 +267,21 @@ export async function runBinary(binary: 'ffmpeg' | 'ffprobe', args: readonly str
     });
     child.once('error', (error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT' || error.code === 'EACCES') {
-        fail(new FFmpegNotConfiguredError(binary));
+        finish(new FFmpegNotConfiguredError(binary));
         return;
       }
-      fail(new VideoPipelineError(failureCode, `${binary.toUpperCase()}_SPAWN_FAILED`, {
+      finish(new VideoPipelineError(failureCode, `${binary.toUpperCase()}_SPAWN_FAILED`, {
         binary,
         cause: error.message,
         stderr: stderr.slice(-2000),
       }));
     });
     child.once('close', (code, signal) => {
-      if (settled) return;
-      settled = true;
       if (code === 0) {
-        resolve({ stdout, stderr, exitCode: 0 });
+        finish(undefined, { stdout, stderr, exitCode: 0 });
         return;
       }
-      reject(new VideoPipelineError(failureCode, `${binary.toUpperCase()}_EXIT_${code ?? `SIGNAL_${signal ?? 'UNKNOWN'}`}`, {
+      finish(new VideoPipelineError(failureCode, `${binary.toUpperCase()}_EXIT_${code ?? `SIGNAL_${signal ?? 'UNKNOWN'}`}`, {
         binary,
         exitCode: code,
         signal,

@@ -1,32 +1,48 @@
-# EXTERNE BLOCKADEN (Stand 2026-11-25)
+# EXTERNE BLOCKADEN (Stand 2026-11-25, finale Phase-D-QA)
 
 Gelöst / verifiziert:
 - RLS: `DATABASE_URL` verwendet die Nicht-Superuser-Rolle `ugc_os_app`
   (`rolsuper=f`, `rolbypassrls=f`). `tests/workspace-isolation.test.ts` 5/5 PASS.
 - KI: `opencode/beam-free` ist im Katalog als kostenlos geführt und lieferte
   einen echten Antworttext (`OK.`). Kein `OLLAMA_API_KEY` nötig.
-- MECE-Token, Browsercheck, Fastify-Bridge: unverändert grün. Vitest nach
-  Phase D/Media: 175/175 (47 Dateien).
+- Finale QA: Typecheck, ESLint, Build PASS; Vitest 225/225 (57 Dateien);
+  MECE-Browsercheck 27/27, UGC-Main-UI-Check 5/5, Playwright 8/8.
+  Secret-Scan über das Repository (ohne `.env`/Logs): 0 Treffer für gesetzte
+  Token/Keys. MECE-Token, Browsercheck und Fastify-Bridge unverändert grün.
 - Echter Medienlauf: ffmpeg/ffprobe 7.1.5, whisper.cpp 1.9.6-dev mit
   `ggml-tiny.en.bin`, 720x1280 H.264/AAC-Export, SSIM 0.930179 gegen
   identischen Clipart ohne Untertitel. Report:
   `/tmp/opencode/ugc-media-verify/verification.json`.
+- Doctor/Watchdog: Ports 3000/3031/3200 HTTP 200, Controller `stopped` /
+  `GLOBAL_FREE_QUOTA`, Watchdog `SKIPPED_COOLDOWN`, `started: false`,
+  `success: false`, `paidFallbackAttempted: false`. Kein Token-Wert in der
+  Doctor-Ausgabe.
+- Security-Härtung F-01..F-10 lokal geschlossen, inklusive Symlink-Schutz,
+  Wegfall des statischen Dev-JWT-Fallbacks, zentraler Redaction in Logs/Audit,
+  deterministischem `TRUST_PROXY` und DNS-/IP-Prüfung für Browser-URLs.
 
 Weiterhin extern blockiert (lokale Entwicklung läuft weiter):
+- Live-KI im Phase-D-Sinn: `GLOBAL_FREE_QUOTA`-Cooldowns bis
+  `2026-11-25T04:59:00.966Z`. Controller bleibt bewusst gestoppt; kein Start,
+  kein Workaround und kein kostenpflichtiger Fallback vor Ablauf und einem
+  erneuten begrenzten Free-Call.
 - `DISCOVERY_MCP_SERVER` / `DISCOVERY_MCP_CLIENT` nicht gesetzt: kein
-  konfigurierter MCP-Datenanbieter für Creator-/Produktdiscovery.
+  konfigurierter MCP-Datenanbieter für Creator-/Produktdiscovery. Der eine
+  erlaubte Tier-1-Smoke scheiterte mit `UND_ERR_HEADERS_OVERFLOW`; kein Tier-2-
+  oder Paid-Fallback benutzt.
 - YouTube-Suche ohne API-Zugang/Cursor-Quelle nicht live prüfbar; Retry- und
-  Budgetlogik kann lokal gegen einen Fake-MCP-Server getestet werden.
+  Budgetlogik ist lokal gegen einen Fake-MCP-Server getestet.
 - `ffmpeg` / `ffprobe` sind jetzt installiert (7.1.5) und mit echtem 11-s-Video
   verifiziert; der frühere `NOT_CONFIGURED`-Blocker ist geschlossen. Die
   Binaries liegen systemweit, das Whisper-Modell liegt unter `/tmp/opencode`
   und muss bei einem neuen Host erneut bereitgestellt werden.
-- Lokales whisper.cpp (1.9.6-dev) + `ggml-tiny.en.bin` sind installiert und
-  liefern echtes Transcript mit SRT-Zeitstempeln; kein Cloud-/Kostenfallback.
+- Lokales whisper.cpp (1.9.6-dev) + `ggml-tiny.en.bin` liefern echtes Transcript
+  mit SRT-Zeitstempeln; kein Cloud-/Kostenfallback.
 - Keine Plattform-Credentials: Publishing bleibt freigabepflichtig und ohne
-  echten Upload; keine Veröffentlichung ohne manuelle Freigabe.
+  echten Upload; ohne Credentials `NOT_CONFIGURED`, mit Credentials
+  `CREDENTIALS_ONLY` + `ADAPTER_NOT_IMPLEMENTED`. Keine erfundenen URLs/IDs.
 - Keine externen Analytics-Quellen; Analytics bleibt auf gespeicherte
-workspace-eigene Daten beschränkt.
+  workspace-eigene Daten beschränkt und markiert Fehlendes explizit.
+- MECE-Chat: OpenCode-Server :4096 lässt sich wegen belegtem Port nicht starten;
+  der Startfehler wird sichtbar angezeigt, kein Fake-Erfolg.
 - Keine Deployment-Credentials: kein Push/Merge/Deploy.
-- Ollama-Cloud-spezifischer Live-Call ohne `OLLAMA_API_KEY` nicht prüfbar;
-  OpenCode-Free-Modelle sind davon unabhängig und funktionieren.

@@ -572,6 +572,7 @@ button.warn{background:#612a2a;border-color:#9c4d4d}
 button:disabled{opacity:.45;cursor:wait}
 main{padding:14px;max-width:1080px;margin:auto}
 .panel{display:none}.panel.active{display:block}
+body:not(.authenticated) nav,body:not(.authenticated) main{display:none}
 .card{background:#191f2b;border:1px solid #30394a;border-radius:14px;padding:15px;margin:10px 0}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
 label{display:block;margin:10px 0 4px;color:#c8d2e3}
@@ -632,7 +633,7 @@ button:focus-visible{outline:2px solid #8bb9ff}
 <pre id="mcpCommandOutput">Noch keine MCP-Pruefung.</pre></div></section>
 
 <section id="chat" class="panel">
-<h2>KI Chat</h2><p class="muted">Chat mit OpenCode-Server 127.0.0.1:4096. Modell wird automatisch erkannt, keine stillen kostenpflichtigen Wechsel.</p>
+<h2>KI Chat</h2><p class="muted">Chat mit dem lokalen OpenCode-Server (Port 4096). Modell wird automatisch erkannt; Startfehler werden sichtbar angezeigt, keine stillen kostenpflichtigen Wechsel.</p>
 <div class="card row">
 <label style="flex:1">Agent</label><select id="chatAgent"></select>
 <label style="flex:1">Modell (kostenlos)</label><select id="chatModel"></select>
@@ -695,21 +696,37 @@ async function api(url,opts={}){
   return d;
 }
 function showLogin(message){
+  document.body.classList.remove("authenticated");
   $("login").style.display="block";
   $("tokenStatus").textContent=message||"";
   $("tokenInput").focus();
 }
 function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function jsonText(value){if(typeof value==="string")return value;try{return JSON.stringify(value||{},null,2);}catch{return "{}";}}
+function relativeAge(value){
+  if(!value||value==="-")return "-";
+  const ms=Date.parse(String(value));
+  if(!Number.isFinite(ms))return String(value);
+  const age=Math.max(0,Date.now()-ms);
+  const minutes=Math.floor(age/60000);
+  if(minutes<1)return "gerade eben";
+  const hours=Math.floor(minutes/60);
+  if(hours<24)return "vor "+minutes+" Min";
+  return "vor "+Math.floor(hours/24)+" Tag(en) ("+String(value)+")";
+}
 async function init(){
   if(!CONTROL_TOKEN){showLogin("Token erforderlich (fail-closed).");return;}
-  $("login").style.display="none";
   const d=await api("/api/bootstrap");
   APP=d.config; agents=d.agents; automations=d.automations; mcpServers=d.mcp||[];
+  renderAgents(); renderAutomations(); renderMcp(); fillSettings(); fillChatAgents();
+  await refreshRuns().catch(()=>{});
+  await refreshTasks().catch(()=>{});
+  await refreshChatModel();
+  await loadChatSessions();
   $("projectHead").textContent=APP.projectPath+" · OpenCode "+d.version+(d.ugc&&d.ugc.reachable?" · UGC online":" · UGC offline");
   $("state").textContent=d.controller&&d.controller.status?("Controller: "+d.controller.status):"Bereit";
-  renderAgents(); renderAutomations(); renderMcp(); fillSettings(); fillChatAgents(); fillChatModel(); refreshRuns(); refreshTasks();
-  await loadChatSessions();
+  document.body.classList.add("authenticated");
+  $("login").style.display="none";
 }
 function renderAgents(){
   $("agentList").innerHTML=agents.map(a=>'<div class="card"><div class="row"><strong>'+esc(a.name)+'</strong><span class="pill">'+esc(a.mode)+'</span></div>'+
@@ -780,10 +797,22 @@ async function disableMcp(){
 }
 async function testMcp(){
   const data=currentMcpFormData();
-  if(data.name) await saveMcp().catch(()=>{});
+  try{
+    if(data.name) await saveMcp();
+  }catch(err){
+    $("mcpStatus").textContent="Speichern fehlgeschlagen: "+err.message;
+    $("mcpCommandOutput").textContent="Keine Pruefung, weil das Speichern fehlgeschlagen ist.";
+    return;
+  }
   const res=await api("/api/mcp/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:data.name})});
-  $("mcpCommandOutput").textContent=res.output||"Keine Ausgabe.";
-  $("mcpStatus").textContent="Pruefung abgeschlossen (Exit "+esc(res.code)+").";
+  const output=String(res.output||"");
+  $("mcpCommandOutput").textContent=output||"Keine Ausgabe.";
+  const noServers=/no mcp servers configured|keine mcp-server/i.test(output);
+  $("mcpStatus").textContent=noServers
+    ? "Keine MCP-Server konfiguriert – nichts geprueft."
+    : res.ok
+      ? "MCP-Serverliste geprueft (Exit "+esc(res.code)+")."
+      : "Pruefung fehlgeschlagen (Exit "+esc(res.code)+").";
 }
 async function refreshMcp(){
   const d=await api("/api/mcp");
@@ -847,7 +876,7 @@ async function refreshTasks(){
   try{
     const d=await api("/api/tasks");
     const c=d.controller||{};
-    $("controllerState").innerHTML='<div class="row"><strong>Status: '+esc(c.status||"unknown")+'</strong><span class="muted">Queue: '+(c.queueDepth??"-")+' · Stand: '+esc(c.updatedAt||"-")+'</span></div>'+
+    $("controllerState").innerHTML='<div class="row"><strong>Status: '+esc(c.status||"unknown")+'</strong><span class="muted">Queue: '+(c.queueDepth??"-")+' · Stand: '+esc(relativeAge(c.updatedAt))+'</span></div>'+
       '<p class="muted">Aktuelle Aufgabe: '+esc(c.currentTask?(c.currentTask.text||c.currentTask.taskId||c.currentTask.id):"keine")+
       (c.model&&c.model.activeModel?" · Modell: "+esc(c.model.activeModel):"")+
       (c.heartbeatAgeSeconds!==null&&c.heartbeatAgeSeconds!==undefined?" · Heartbeat: "+esc(c.heartbeatAgeSeconds)+"s":"")+'</p>';
@@ -861,14 +890,6 @@ function fillChatAgents(){
   const select=$("chatAgent");
   select.innerHTML=((APP.chatAgents)||${JSON.stringify(CHAT_AGENTS)}).map(a=>'<option value="'+esc(a)+'">'+esc(a)+'</option>').join("");
   select.value=APP.agent||"orchestrator";
-}
-async function fillChatModel(){
-  try{
-    const d=await api("/api/chat/model");
-    const options=d.available||[];
-    $("chatModel").innerHTML=options.map(m=>'<option value="'+esc(m)+'">'+esc(m)+'</option>').join("");
-    $("chatModel").value=d.model||options[0]||"";
-  }catch(e){$("chatModelError").textContent="Modelle nicht geladen: "+e.message;}
 }
 async function loadChatSessions(){
   try{
@@ -923,11 +944,32 @@ async function abortChat(){
   await refreshChatMessages();
 }
 async function refreshChatModel(){
+  let selectedModel="-";
   try{
-    const d=await api("/api/chat/state");
-    $("chatModelError").textContent="OpenCode "+(d.version||"?")+" · "+(d.url?"Server aktiv":"Server nicht gestartet")+" · Modell "+esc(d.model||"-");
+    const d=await api("/api/chat/model");
+    const options=d.available||[];
+    $("chatModel").innerHTML=options.map(m=>'<option value="'+esc(m)+'">'+esc(m)+'</option>').join("");
+    selectedModel=d.model||options[0]||"-";
+    $("chatModel").value=selectedModel;
   }catch(e){
-    $("chatModelError").textContent="Runtime nicht erkannt: "+e.message;
+    $("chatModelError").textContent="Modelle nicht geladen: "+e.message;
+    return;
+  }
+  try{
+    const state=await api("/api/chat/state");
+    const runtime=state.startupError
+      ? "Startfehler: "+state.startupError
+      : state.starting
+        ? "Server startet"
+        : state.url
+          ? "Server aktiv"
+          : "Server nicht gestartet";
+    $("chatModelError").textContent="OpenCode "+(state.version||"?")+" · "+runtime+" · Modell "+esc(selectedModel);
+    if(state.startupError||state.starting||!state.url){
+      $("chatStatus").textContent="Chat-Runtime nicht verfuegbar: "+(state.startupError||"OpenCode-Server nicht gestartet");
+    }
+  }catch(e){
+    $("chatModelError").textContent="OpenCode · Runtime nicht erkannt: "+e.message+" · Modell "+esc(selectedModel);
   }
 }
 $("tokenSave").onclick=()=>{

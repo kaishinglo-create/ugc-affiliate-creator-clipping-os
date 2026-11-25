@@ -27,8 +27,29 @@ export function mediaErrorStatus(error: unknown): number {
   return 502;
 }
 
-export function mediaErrorBody(error: unknown): { error: string; code: string; details?: unknown } {
+type SafeMediaErrorDetails = {
+  binary?: string;
+  exitCode?: number;
+  signal?: string;
+  reason?: string;
+};
+
+/**
+ * Client-facing media errors never expose absolute paths or captured stderr.
+ * Those remain available internally for logs/audits; only stable classification
+ * fields are returned to the workspace user.
+ */
+export function mediaErrorBody(error: unknown): { error: string; code: string; details?: SafeMediaErrorDetails } {
   const code = String((error as any)?.code ?? (error as any)?.message ?? 'MEDIA_PIPELINE_FAILED');
   const message = error instanceof Error ? error.message : 'MEDIA_PIPELINE_FAILED';
-  return { error: message, code, details: (error as any)?.details ?? undefined };
+  const raw = (error as any)?.details;
+  const safe: SafeMediaErrorDetails = {};
+  if (raw && typeof raw === 'object') {
+    if (typeof raw.binary === 'string') safe.binary = raw.binary.slice(0, 32);
+    if (Number.isInteger(raw.exitCode)) safe.exitCode = raw.exitCode;
+    if (typeof raw.signal === 'string') safe.signal = raw.signal.slice(0, 32);
+    if (typeof raw.reason === 'string' && raw.reason.length <= 120) safe.reason = raw.reason;
+  }
+  const hasDetails = Object.keys(safe).length > 0;
+  return { error: message, code, ...(hasDetails ? { details: safe } : {}) };
 }

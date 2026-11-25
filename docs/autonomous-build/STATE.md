@@ -1,5 +1,49 @@
 # STATE
 
+## Phase D: lokale Betriebsreife abgeschlossen (2026-11-25T02:35Z) — 10/10
+
+- Vollständige QA nach allen Code- und Dokumentationsänderungen:
+  Typecheck, `eslint .` und Build PASS; Vitest **225/225** (57 Dateien).
+  MECE-Browsercheck **27/27**, UGC-Main-UI-Check **5/5**, Playwright **8/8**.
+  `npm run verify:media` erneut real grün mit `SSIM All = 0.930179`.
+  Secret-Scan über das Repository (ohne `.env`/Logs): 0 Treffer für gesetzte
+  Token/Keys. Keine Tests abgeschwächt, keine Fake-Erfolge.
+- `bash scripts/services.sh doctor` liefert maschinenlesbares JSON mit Ports
+  3000/3031/3200 (je HTTP 200), Controller-Status `stopped` /
+  `GLOBAL_FREE_QUOTA`, `resumeAt = 1795582740966`, Queue-Tiefe 12, Medien-Binaries,
+  Datenbank und `tokenConfigured: true`. Kein Token-Wert erscheint in der Ausgabe.
+  `tests/services-doctor.test.ts`: 5/5 PASS.
+- `bash scripts/controller-watchdog.sh` real ausgeführt: `SKIPPED_COOLDOWN`,
+  `started: false`, `success: false`, `paidFallbackAttempted: false`. Kein
+  Controller-Start und kein Modellaufruf vor `2026-11-25T04:59:00.966Z`.
+- Publishing: `src/publishing.ts` + Endpunkte für Queue, Retry, Idempotenz,
+  Audit und manuelle Freigabe. Ohne Credentials `NOT_CONFIGURED` (503), mit
+  Credentials `CREDENTIALS_ONLY` + `ADAPTER_NOT_IMPLEMENTED` (501). Generische
+  `/api/jobs/:id/*`-Übergänge blockieren Publishing-Jobs mit 409
+  `USE_PUBLISHING_PROCESS_ENDPOINT`. `tests/publishing.test.ts`: 7/7.
+- Analytics: `src/analytics-sources.ts` nutzt ausschließlich echte
+  workspace-scoped Prisma-Zeilen mit expliziten `NO_ROWS`/`NOT_CONFIGURED`-
+  Markern und getrennten Affiliate-/Cash-Revenue-Werten. `GET /api/analytics/sources`
+  ist verdrahtet; `tests/analytics-sources.test.ts`: 5/5.
+- Self-Healing: `src/self-healing.ts` (14/14) liefert nur Vorschläge; der
+  read-only Endpunkt `GET /api/self-healing/proposals` lädt echte Audit-Rows
+  und markiert nichts als `applied`. `tests/self-healing-api.test.ts`: 1/1.
+- Frontend: echter Logout, bedingtes `Content-Type`, sichtbare Fehler,
+  ehrliche YouTube-/Clipping-Texte und dynamisches Live-Badge in der UGC-App;
+  MECE-UI blendet Nav/Main bis zur Auth aus, zeigt MCP-/Chat-Fehler sichtbar
+  und wartet in `init()` auf Modelle/Runtime.
+- Security-Audit der Media-/Agenten-Endpunkte (F-01 bis F-10) lokal geschlossen:
+  F-01 (`body.modelPath` entfernt), F-02 (`mediaErrorBody`-Redaction),
+  F-03 (Symlink-Härtung in `lib/static-files.ts`), F-04 (kein statischer
+  Dev-JWT-Fallback mehr), F-05 (zentrale Redaction in `lib/redaction.ts` für
+  Logs, Audit und Fehlertexte), F-06 (deterministisches `TRUST_PROXY` via
+  `resolveTrustProxy`, fail-closed), F-07 (DNS-/IP-Prüfung in
+  `validateBrowserUrl`), F-08 (`runBinary`-Timeout + `SIGKILL`), F-09
+  (Legacy-Discovery `--`-Guard), F-10 (Nicht-Superuser-Rolle `ugc_os_app`).
+- Discovery-Pilot: nur Tier 1 erlaubt; der Tier-1-Smoke scheiterte mit
+  `UND_ERR_HEADERS_OVERFLOW`. Kein Tier-2-/Paid-Fallback, keine erfundenen
+  Kandidaten. Live-Discovery bleibt extern blockiert.
+
 ## Phase D: RLS mit Nicht-Superuser erneut verifiziert (2026-11-25T02:09Z) — 3/10
 
 - Frische Ausführung `tests/workspace-isolation.test.ts`: **5/5 PASS**.
@@ -32,9 +76,9 @@
   begrenzt Threads und benutzt echte SRT-Zeiten für Highlights
   (`transcribeAndHighlight`). `NOT_CONFIGURED` bleibt erhalten, wenn Binary
   oder Modell fehlen.
-- QA: Typecheck PASS, ESLint PASS (geänderte Dateien), Vitest **175/175**
-  (47 Dateien; 3 neue ehrliche Tests), Build im nächsten Schritt geprüft.
-  Browsercheck/Playwright unverändert (keine Frontend-Änderung).
+- QA damals: Typecheck/ESLint/Build PASS, Vitest **175/175** (47 Dateien;
+  3 neue ehrliche Tests). Finaler Stand nach Phase D: **225/225** (57 Dateien),
+  Browsercheck 27/27, Playwright 8/8.
 - Feature-Matrix und externe Blockaden aktualisiert: FFmpeg/Whisper-Blocker
   geschlossen. Kein Push, Merge oder Deploy.
 
@@ -80,8 +124,8 @@
   ffprobe/ffmpeg invocations with argument arrays, vertical scale/crop export,
   SRT generation/burn-in and explicit `NOT_CONFIGURED` errors when binaries are
   absent. `tests/video-pipeline.test.ts` passes 12/12 using named test doubles;
-  no fabricated media is presented as a result. ffmpeg/ffprobe remain externally
-  unavailable on this host.
+  no fabricated media is presented as a result. ffmpeg/ffprobe sind inzwischen
+  systemweit installiert und in Phase D real verifiziert (siehe oben).
 
 ## Phase C: CEO/COO, Department, Self-Improving (2026-11-25)
 

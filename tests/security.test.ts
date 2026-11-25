@@ -66,10 +66,18 @@ describe('security', () => {
     expect(cfg.sessionSecret.length).toBeGreaterThanOrEqual(32);
   });
 
-  it('uses dev fallback only outside production', () => {
+  it('rejects a missing or short jwt secret outside production too', () => {
     vi.stubEnv('APP_ENV', 'development');
     vi.stubEnv('SESSION_JWT_SECRET', '');
-    const cfg = loadConfig();
-    expect(cfg.sessionSecret.length).toBeGreaterThanOrEqual(32);
+    expect(() => loadConfig()).toThrow(/SESSION_JWT_SECRET/);
+    vi.stubEnv('SESSION_JWT_SECRET', 'shortsecret');
+    expect(() => loadConfig()).toThrow(/SESSION_JWT_SECRET/);
+  });
+
+  it('returns the configured secret without a static dev fallback', () => {
+    vi.stubEnv('APP_ENV', 'development');
+    const configured = 'd'.repeat(40);
+    vi.stubEnv('SESSION_JWT_SECRET', configured);
+    expect(loadConfig().sessionSecret).toBe(configured);
   });
 });

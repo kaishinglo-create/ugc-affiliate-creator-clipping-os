@@ -8,7 +8,7 @@ const state = {
     workflows: [], ideas: [], insights: [], experiments: [], agents: [],
     agentTasks: [], contentPosts: [], incidents: [], approvals: [],
     analytics: null, integrations: [], systemStatus: null, summary: null,
-    niches: [], items: []
+    browser: null, niches: [], items: []
   },
   loading: false,
   error: null,
@@ -29,7 +29,10 @@ function stat(label, value, note, symbol) { return '<article class="stat"><div c
 
 async function api(path, opts) {
   opts = opts || {};
-  const headers = Object.assign({"Content-Type":"application/json"}, opts.headers || {});
+  // Only declare JSON when a body exists; Fastify rejects a bare JSON header
+  // without a body (this broke /api/auth/logout).
+  const headers = Object.assign({}, opts.headers || {});
+  if (opts.body !== undefined && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
   if (state.workspaceId && !path.startsWith("/api/auth")) headers["X-Workspace-Id"] = state.workspaceId;
   const res = await fetch(path, Object.assign({}, opts, { credentials:"include", headers }));
   if (!res.ok) {
@@ -91,7 +94,14 @@ async function handleSignup(e) {
 }
 
 async function doLogout() {
-  try { await api("/api/auth/logout", { method:"POST" }); } catch {}
+  // The server revokes the session on POST; an empty JSON object keeps the
+  // request valid for Fastify's JSON body parser.
+  try {
+    await api("/api/auth/logout", { method:"POST", body: JSON.stringify({}) });
+  } catch (err) {
+    toast("Logout failed: " + err.message);
+    return;
+  }
   state.user = null; state.workspaces = []; state.workspaceId = null;
   localStorage.removeItem("ugc_workspaceId");
   renderAuth();
@@ -100,6 +110,7 @@ async function doLogout() {
 async function loadView(view) {
   state.view = view;
   state.loading = true;
+  state.error = null;
   render();
   try {
     switch (view) {
@@ -132,6 +143,7 @@ async function loadView(view) {
       case "youtube": state.data.contentPosts = (await api("/api/content-posts")).posts; break;
       case "calendar": state.data.tasks = (await api("/api/tasks")).tasks; break;
       case "analytics": state.data.analytics = await api("/api/analytics/summary"); break;
+      case "agent-browser": state.data.browser = await loadBrowserData(); break;
     }
   } catch (e) {
     state.error = e.message;
@@ -160,7 +172,7 @@ function overview() {
 
 function radar() {
   const items = state.data.products || [];
-  const cards = items.length ? items.map(p=>'<article class="card"><div class="card-top">'+tag(p.category||"product","purple")+'<span class="score">'+(p.priceCents!=null?p.priceCents/100:"—")+'</span></div><h3>'+esc(p.name)+'</h3><p>Persisted product opportunity.</p><div class="metrics"><div><small>Source</small><b>'+esc(p.source||"—")+'</b></div><div><small>Status</small><b>'+esc(p.status||"new")+'</b></div></div></article>').join("") : '<div class="panel">No products yet. Add one.</div>';
+  const cards = items.length ? items.map(p=>'<article class="card"><div class="card-top">'+tag(p.category||"product","purple")+'<span class="score">'+(p.priceCents!=null?'€'+(p.priceCents/100).toFixed(2):"—")+'</span></div><h3>'+esc(p.name)+'</h3><p>Persisted product opportunity.</p><div class="metrics"><div><small>Source</small><b>'+esc(p.source||"—")+'</b></div><div><small>Status</small><b>'+esc(p.status||"new")+'</b></div></div></article>').join("") : '<div class="panel">No products yet. Add one.</div>';
   return heading("Product Radar","Persisted products from /api/products.", button("＋ Add product","add-product",true)) + '<div class="cards">'+cards+'</div>' + loadingBlock();
 }
 
@@ -184,8 +196,8 @@ function scripts() {
 
 function clipping() {
   const rows = state.data.workflows || [];
-  const body = rows.length ? '<section class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Workflow</th><th>Steps</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+esc(r.name)+'</td><td>'+esc(JSON.stringify(r.steps))+'</td></tr>').join("")+'</tbody></table></div></section>' : '<div class="panel">No workflows yet.</div>';
-  return heading("Clipping Studio / Workflows","Persisted workflows from /api/workflows. Video processing is not connected.", button("＋ Add workflow","add-workflow",true)) + body + loadingBlock();
+  const body = rows.length ? '<section class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Workflow</th><th>Steps</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+esc(r.name)+'</td><td>'+esc(Array.isArray(r.steps)&&r.steps.length?JSON.stringify(r.steps):'keine (kein Editor in diesem Build)')+'</td></tr>').join("")+'</tbody></table></div></section>' : '<div class="panel">No workflows yet.</div>';
+  return heading("Clipping Studio / Workflows","Persisted workflows from /api/workflows. Video processing is not connected to this UI.", button("＋ Add workflow","add-workflow",true)) + body + loadingBlock();
 }
 
 function content() {
@@ -195,12 +207,12 @@ function content() {
 }
 
 function youtube() {
-  return heading("YouTube Intelligence","Manual research only. No YouTube API configured.") + '<div class="notice">No YouTube API or transcript provider is configured. This workspace accepts manual research notes; it does not download videos.</div>' + loadingBlock();
+  return heading("YouTube Intelligence","Manual research only. No YouTube API configured.") + '<div class="notice">No YouTube API or transcript provider is configured. This build has no notes form; record manual findings with Content Factory or through the API. It does not download videos.</div>' + loadingBlock();
 }
 
 function calendar() {
   const rows = state.data.tasks || [];
-  const body = rows.length ? '<section class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Task</th><th>Status</th><th>Priority</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+esc(r.title)+'</td><td>'+esc(r.status)+'</td><td>'+esc(r.priority)+'</td></tr>').join("")+'</tbody></table></div></section>' : '<div class="panel">No tasks yet.</div>';
+  const body = rows.length ? '<section class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Task</th><th>Status</th><th>Priority</th><th>Due</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+esc(r.title)+'</td><td>'+esc(r.status)+'</td><td>'+esc(r.priority)+'</td><td>'+esc(r.dueDate?new Date(r.dueDate).toLocaleDateString():"—")+'</td></tr>').join("")+'</tbody></table></div></section>' : '<div class="panel">No tasks yet.</div>';
   return heading("Publishing Calendar / Tasks","Persisted tasks from /api/tasks.", button("＋ Add task","add-task",true)) + body + loadingBlock();
 }
 
@@ -218,7 +230,7 @@ function analytics() {
 function enginePanel() {
   const payload = state.data.engine;
   if (!payload || !payload.engine) {
-    return '<section class="panel"><h2>Automation engine</h2><p class="sub">Runtime status unavailable.</p></section>';
+    return '<section class="panel"><h2>Automation engine</h2><p class="sub">'+(state.loading ? 'Runtime status loading…' : 'Runtime status unavailable.')+'</p></section>';
   }
   const engine = payload.engine;
   const counts = (payload.queue && payload.queue.counts) || {};
@@ -237,7 +249,7 @@ function enginePanel() {
 function aiPanel() {
   const ai = state.data.ai;
   if (!ai) {
-    return '<section class="panel"><h2>AI gateway</h2><p class="sub">Gateway status unavailable.</p></section>';
+    return '<section class="panel"><h2>AI gateway</h2><p class="sub">'+(state.loading ? 'Gateway status loading…' : 'Gateway status unavailable.')+'</p></section>';
   }
   const agents = ai.agents || [];
   const budget = ai.budget || {};
@@ -268,7 +280,7 @@ function integrations() {
 }
 
 
-async function agentBrowser() {
+async function loadBrowserData() {
   const status = await api('/api/browser/status').catch(()=>({runtime:{available:false,message:'status unavailable'}}));
   const sessions = await api('/api/browser/sessions').catch(()=>({sessions:[]}));
   const list = sessions.sessions || [];
@@ -276,6 +288,15 @@ async function agentBrowser() {
   state.browserSessionId = sid;
   const session = sid ? await api('/api/browser/sessions/'+sid).then(r=>r.session).catch(()=>null) : null;
   const screen = session && session.runtimeSessionId ? await api('/api/browser/sessions/'+sid+'/screenshot').catch(()=>null) : null;
+  return { status, list, sid, session, screen };
+}
+
+function agentBrowser() {
+  const b = state.data.browser || { status:{runtime:{available:false,message:'not loaded'}}, list:[], sid:'', session:null, screen:null };
+  const status = b.status;
+  const sid = b.sid;
+  const session = b.session;
+  const screen = b.screen;
   const tabs = (session && Array.isArray(session.tabs)) ? session.tabs : [];
   const statusText = status.runtime && status.runtime.available ? 'Runtime connected' : 'Runtime blocked/unavailable';
   const workspaceText = state.workspaceId ? state.workspaceId : 'none';
@@ -323,7 +344,15 @@ function renderPage() {
   if (!state.user) { renderAuth(); return; }
   const page = $("#page");
   if (!page) { window.location.reload(); return; }
-  page.innerHTML = (views[state.view]||overview)();
+  const errorBanner = state.error
+    ? '<div class="notice" role="alert">Daten konnten nicht aktualisiert werden: '+esc(state.error)+'. Angezeigte Werte können veraltet sein.</div>'
+    : '';
+  page.innerHTML = errorBanner + (views[state.view]||overview)();
+  const badge = $("#live-badge");
+  if (badge) {
+    badge.textContent = state.error ? '● STALE DATA' : state.loading ? '● LOADING' : '● LIVE DATA';
+    badge.style.color = state.error ? '#ff8a8a' : '';
+  }
   const crumb = $("#crumb"); if (crumb) crumb.textContent = titles[state.view]||"Overview";
   document.querySelectorAll(".nav[data-view]").forEach(b=>{b.classList.toggle("active",b.dataset.view===state.view);b.setAttribute("aria-current",b.dataset.view===state.view?"page":"false");});
   const sb = $("#sidebar"); if (sb) sb.classList.remove("open");
@@ -417,12 +446,12 @@ function wireEvents() {
         await loadView(state.view);
         return;
       }
-      if (name === "add-product") { openForm("Add product", [{n:"name",l:"Name"},{n:"category",l:"Category"},{n:"source",l:"Source"}], "product"); return; }
+      if (name === "add-product") { openForm("Add product", [{n:"name",l:"Name"},{n:"category",l:"Category"},{n:"source",l:"Source"},{n:"priceCents",l:"Price (cents)",optional:true}], "product"); return; }
       if (name === "add-creator") { openForm("Add creator", [{n:"name",l:"Name"},{n:"email",l:"Email"},{n:"niches",l:"Niches"},{n:"platforms",l:"Platforms"}], "creator"); return; }
-      if (name === "add-campaign") { openForm("Add campaign", [{n:"name",l:"Name"},{n:"goal",l:"Goal"},{n:"status",l:"Status"}], "campaign"); return; }
+      if (name === "add-campaign") { openForm("Add campaign", [{n:"name",l:"Name"},{n:"goal",l:"Goal"},{n:"status",l:"Status"},{n:"budgetCents",l:"Budget (cents)",optional:true}], "campaign"); return; }
       if (name === "add-idea") { openForm("Add idea", [{n:"title",l:"Title"},{n:"format",l:"Format"}], "idea"); return; }
       if (name === "add-workflow") { openForm("Add workflow", [{n:"name",l:"Name"}], "workflow"); return; }
-      if (name === "add-task") { openForm("Add task", [{n:"title",l:"Title"},{n:"priority",l:"Priority"}], "task"); return; }
+      if (name === "add-task") { openForm("Add task", [{n:"title",l:"Title"},{n:"priority",l:"Priority"},{n:"dueDate",l:"Due date",optional:true,type:"date"}], "task"); return; }
       if (name === "add-post") { openForm("Add post", [{n:"platform",l:"Platform"},{n:"externalId",l:"External ID"},{n:"title",l:"Title"}], "post"); return; }
       if (name === "save-form") {
         const form = $("#entry-form");
@@ -431,12 +460,12 @@ function wireEvents() {
         const kind = form.dataset.kind;
         (async () => {
           try {
-            if (kind === "product") await api("/api/products", {method:"POST", body: JSON.stringify({name:d.name, category:d.category, source:d.source})});
+            if (kind === "product") await api("/api/products", {method:"POST", body: JSON.stringify({name:d.name, category:d.category, source:d.source, priceCents:d.priceCents === "" ? null : Number(d.priceCents)})});
             if (kind === "creator") await api("/api/creators", {method:"POST", body: JSON.stringify({name:d.name, email:d.email, niches:d.niches, platforms:d.platforms})});
-            if (kind === "campaign") await api("/api/campaigns", {method:"POST", body: JSON.stringify({name:d.name, goal:d.goal, status:d.status})});
+            if (kind === "campaign") await api("/api/campaigns", {method:"POST", body: JSON.stringify({name:d.name, goal:d.goal, status:d.status, budgetCents:d.budgetCents === "" ? null : Number(d.budgetCents)})});
             if (kind === "idea") await api("/api/ideas", {method:"POST", body: JSON.stringify({title:d.title, format:d.format})});
             if (kind === "workflow") await api("/api/workflows", {method:"POST", body: JSON.stringify({name:d.name, steps:[]})});
-            if (kind === "task") await api("/api/tasks", {method:"POST", body: JSON.stringify({title:d.title, priority:d.priority})});
+            if (kind === "task") await api("/api/tasks", {method:"POST", body: JSON.stringify({title:d.title, priority:d.priority, dueDate:d.dueDate || null})});
             if (kind === "post") await api("/api/content-posts", {method:"POST", body: JSON.stringify({platform:d.platform, externalId:d.externalId, title:d.title})});
             $("#modal").close();
             toast("Saved");
@@ -453,12 +482,12 @@ function wireEvents() {
       const d = Object.fromEntries(new FormData(e.target));
       const kind = e.target.dataset.kind;
       try {
-        if (kind === "product") await api("/api/products", {method:"POST", body: JSON.stringify({name:d.name, category:d.category, source:d.source})});
+        if (kind === "product") await api("/api/products", {method:"POST", body: JSON.stringify({name:d.name, category:d.category, source:d.source, priceCents:d.priceCents === "" ? null : Number(d.priceCents)})});
         if (kind === "creator") await api("/api/creators", {method:"POST", body: JSON.stringify({name:d.name, email:d.email, niches:d.niches, platforms:d.platforms})});
-        if (kind === "campaign") await api("/api/campaigns", {method:"POST", body: JSON.stringify({name:d.name, goal:d.goal, status:d.status})});
+        if (kind === "campaign") await api("/api/campaigns", {method:"POST", body: JSON.stringify({name:d.name, goal:d.goal, status:d.status, budgetCents:d.budgetCents === "" ? null : Number(d.budgetCents)})});
         if (kind === "idea") await api("/api/ideas", {method:"POST", body: JSON.stringify({title:d.title, format:d.format})});
         if (kind === "workflow") await api("/api/workflows", {method:"POST", body: JSON.stringify({name:d.name, steps:[]})});
-        if (kind === "task") await api("/api/tasks", {method:"POST", body: JSON.stringify({title:d.title, priority:d.priority})});
+        if (kind === "task") await api("/api/tasks", {method:"POST", body: JSON.stringify({title:d.title, priority:d.priority, dueDate:d.dueDate || null})});
         if (kind === "post") await api("/api/content-posts", {method:"POST", body: JSON.stringify({platform:d.platform, externalId:d.externalId, title:d.title})});
         $("#modal").close();
         toast("Saved");
@@ -480,7 +509,7 @@ function wireEvents() {
 }
 
 function openForm(title, fields, kind) {
-  $("#modal-body").innerHTML = '<div class="eyebrow">WORKSPACE</div><h2>'+title+'</h2><form id="entry-form" data-kind="'+kind+'" class="field-grid">'+fields.map(f=>'<div class="field full"><label>'+f.l+'</label><input name="'+f.n+'" required></div>').join("")+'<div class="field full"><button class="btn primary" type="button" data-action="save-form">Save</button></div></form>';
+  $("#modal-body").innerHTML = '<div class="eyebrow">WORKSPACE</div><h2>'+title+'</h2><form id="entry-form" data-kind="'+kind+'" class="field-grid">'+fields.map(f=>'<div class="field full"><label>'+f.l+(f.optional?' (optional)':'')+'</label><input name="'+f.n+'"'+(f.type?' type="'+f.type+'"':'')+(f.optional?'':' required')+'></div>').join("")+'<div class="field full"><button class="btn primary" type="button" data-action="save-form">Save</button></div></form>';
   $("#modal").showModal();
 }
 

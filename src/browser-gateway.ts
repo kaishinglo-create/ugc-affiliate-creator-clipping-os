@@ -1,5 +1,7 @@
 import { writeAuditEvent } from '../lib/audit.js';
 import { withWorkspaceTransaction } from '../lib/db.js';
+import { lookup } from 'node:dns';
+import { isIP } from 'node:net';
 
 export type BrowserControllerState =
   | 'HUMAN_CONTROL'
@@ -67,18 +69,111 @@ export interface BrowserRuntimeAdapter {
 }
 
 const PRIVATE_HOST_PATTERNS = [
-  /^localhost$/i,
+  /^(.*\.)?localhost$/i,
   /^127\./,
   /^10\./,
   /^192\.168\./,
   /^172\.(1[6-9]|2[0-9]|3[0-1])\./,
   /^169\.254\./,
   /^0\./,
-  /^\[::1\]$/i,
-  /^fc/i,
-  /^fd/i,
-  /^fe80:/i,
+  /^(.*\.)?(local|internal|home\.arpa)$/i,
 ];
+
+function ipv4ToInt(ip: string): number | null {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return null;
+  let value = 0;
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const octet = Number(part);
+    if (octet > 255) return null;
+    value = (value << 8) | octet;
+  }
+  return value >>> 0;
+}
+
+function isBlockedIpv4(ip: string): boolean {
+  const value = ipv4ToInt(ip);
+  if (value === null) return false;
+  const inRange = (base: string, bits: number): boolean => {
+    const baseValue = ipv4ToInt(base);
+    if (baseValue === null) return false;
+    const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+    return ((value & mask) >>> 0) === ((baseValue & mask) >>> 0);
+  };
+  return [
+    ['0.0.0.0', 8],       // "this" network, including 0.x
+    ['10.0.0.0', 8],
+    ['100.64.0.0', 10],   // carrier-grade NAT
+    ['127.0.0.0', 8],
+    ['169.254.0.0', 16],
+    ['172.16.0.0', 12],
+    ['192.0.0.0', 24],
+    ['192.0.2.0', 24],    // documentation
+    ['192.168.0.0', 16],
+    ['198.18.0.0', 15],   // benchmarking
+    ['198.51.100.0', 24], // documentation
+    ['203.0.113.0', 24],  // documentation
+    ['224.0.0.0', 4],     // multicast
+    ['240.0.0.0', 4],     // reserved
+  ].some(([base, bits]) => inRange(base as string, bits as number));
+}
+
+function isBlockedIpv6(raw: string): boolean {
+  const ip = raw.toLowerCase();
+  if (ip === '::' || ip === '::1') return true;
+  if (/^::ffff:/.test(ip)) {
+    const tail = ip.slice('::ffff:'.length);
+    if (tail.includes('.')) return isBlockedIpv4(tail);
+    const parts = tail.split(':').filter(Boolean);
+    const high = Number.parseInt(parts[parts.length - 2] ?? '', 16);
+    const low = Number.parseInt(parts[parts.length - 1] ?? '', 16);
+    if (Number.isFinite(high) && Number.isFinite(low)) {
+      return isBlockedIpv4(`${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`);
+    }
+    return true;
+  }
+  return (
+    /^64:ff9b::/.test(ip) ||   // NAT64
+    /^2001:db8:/.test(ip) ||   // documentation
+    /^f[cd][0-9a-f]*:/.test(ip) || // unique local fc00::/7
+    /^fe[89ab][0-9a-f]*:/.test(ip) || // link-local fe80::/10
+    /^ff/.test(ip)             // multicast
+  );
+}
+
+function isBlockedAddress(address: string): boolean {
+  const ip = address.replace(/^\[|\]$/g, '');
+  const family = isIP(ip);
+  if (family === 4) return isBlockedIpv4(ip);
+  if (family === 6) return isBlockedIpv6(ip);
+  return false;
+}
+
+function isBlockedHost(host: string): boolean {
+  return PRIVATE_HOST_PATTERNS.some((pattern) => pattern.test(host)) || isBlockedAddress(host);
+}
+
+function resolveHostAddresses(host: string): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error('URL_HOST_RESOLUTION_FAILED'));
+    }, 3000);
+    lookup(host, { all: true }, (error, addresses) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error || addresses.length === 0) {
+        reject(new Error('URL_HOST_RESOLUTION_FAILED'));
+        return;
+      }
+      resolve(addresses.map((entry) => entry.address));
+    });
+  });
+}
 
 const BROWSER_PERMISSIONS: Record<string, Set<string>> = {
   orchestrator: new Set(['session:create', 'session:close', 'session:list', 'session:status', 'tabs:list', 'screenshot', 'read', 'control:request', 'control:release', 'control:takeover']),
@@ -244,7 +339,12 @@ export function createBrowserRuntimeFromEnv(): BrowserRuntimeAdapter {
   }
 }
 
-export function validateBrowserUrl(raw: string): string {
+/**
+ * Validates a browser navigation target. Literal private/loopback/metadata IPs
+ * are rejected, and hostnames are resolved so DNS names pointing at private
+ * addresses cannot bypass the literal check.
+ */
+export async function validateBrowserUrl(raw: string): Promise<string> {
   let parsed: URL;
   try {
     parsed = new URL(raw);
@@ -254,7 +354,12 @@ export function validateBrowserUrl(raw: string): string {
   if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('URL_PROTOCOL_NOT_ALLOWED');
   if (parsed.username || parsed.password) throw new Error('URL_CREDENTIALS_NOT_ALLOWED');
   const host = parsed.hostname.replace(/^\[|\]$/g, '');
-  if (PRIVATE_HOST_PATTERNS.some((pattern) => pattern.test(host))) throw new Error('URL_HOST_NOT_ALLOWED');
+  if (!host) throw new Error('URL_HOST_NOT_ALLOWED');
+  if (isBlockedHost(host)) throw new Error('URL_HOST_NOT_ALLOWED');
+  if (isIP(host) === 0) {
+    const addresses = await resolveHostAddresses(host);
+    if (addresses.some((address) => isBlockedAddress(address))) throw new Error('URL_HOST_NOT_ALLOWED');
+  }
   return parsed.toString();
 }
 
@@ -294,12 +399,12 @@ export class BrowserGateway {
       runtimeSessionId: null,
       disconnected: false,
     };
+    const url = initialUrl ? await validateBrowserUrl(initialUrl) : undefined;
     const status = await this.runtime.status();
     if (status.available) {
-      const res = await this.runtime.createSession({ sessionId: session.id, workspaceId, url: initialUrl });
+      const res = await this.runtime.createSession({ sessionId: session.id, workspaceId, url });
       session.runtimeSessionId = res.runtimeSessionId;
-      if (initialUrl) {
-        const url = validateBrowserUrl(initialUrl);
+      if (url) {
         const nav = await this.runtime.navigate({ runtimeSessionId: session.runtimeSessionId, tabId: session.activeTabId || 'tab-1', url });
         if (!session.activeTabId) session.activeTabId = 'tab-1';
         session.tabs = [{ id: session.activeTabId, url: nav.url, title: nav.title, createdAt: now }];
@@ -437,7 +542,7 @@ export class BrowserGateway {
   async navigate(workspaceId: string, sessionId: string, actorType: 'human' | 'agent', actorId: string, url: string): Promise<BrowserSession & { result: { url: string; title: string } }> {
     const session = this.getSession(workspaceId, sessionId);
     if (!session) throw new Error('SESSION_NOT_FOUND');
-    const normalized = validateBrowserUrl(url);
+    const normalized = await validateBrowserUrl(url);
     this.assertController(session, actorType, actorId);
     if (session.disconnected || !session.runtimeSessionId) throw new Error('SESSION_DISCONNECTED');
     const result = await this.runtime.navigate({ runtimeSessionId: session.runtimeSessionId, tabId: session.activeTabId, url: normalized });
@@ -502,7 +607,7 @@ export class BrowserGateway {
     const session = this.getRequired(workspaceId, sessionId);
     this.assertController(session, actorType, actorId);
     const runtimeSessionId = await this.withRuntime(session);
-    const normalized = url ? validateBrowserUrl(url) : undefined;
+    const normalized = url ? await validateBrowserUrl(url) : undefined;
     const result = await this.runtime.newTab({ runtimeSessionId, url: normalized });
     const tab = { id: result.tab.id, url: result.tab.url, title: result.tab.title, createdAt: nowIso() };
     session.tabs.push(tab);
@@ -567,7 +672,7 @@ export class BrowserGateway {
     const session = this.getRequired(workspaceId, sessionId);
     this.assertController(session, actorType, actorId);
     const runtimeSessionId = await this.withRuntime(session);
-    const normalized = validateBrowserUrl(url);
+    const normalized = await validateBrowserUrl(url);
     const result = await this.runtime.download({ runtimeSessionId, tabId: session.activeTabId, url: normalized });
     await this.audit(workspaceId, session, actorId, 'browser_download', { url: normalized });
     return result;

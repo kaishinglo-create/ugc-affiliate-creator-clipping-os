@@ -4,25 +4,18 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { z } from 'zod';
-import { loadConfig } from './config.js';
-import { stat } from 'node:fs/promises';
-import { join, extname, resolve, sep } from 'node:path';
+import { loadConfig, resolveTrustProxy } from './config.js';
+import { join, extname } from 'node:path';
 import { createReadStream } from 'node:fs';
 import { prisma, withWorkspaceTransaction } from '../lib/db.js';
 import { writeAuditEvent } from '../lib/audit.js';
+import { redactError, redactText } from '../lib/redaction.js';
+import { resolvePublicFile } from '../lib/static-files.js';
 import { hashPassword, verifyPassword, createSession, verifySession, sessionCookieHeader, readSessionCookie, revokeSession } from '../lib/auth.js';
 import { isAffiliatePayoutAction, resolvePayoutTransition, summarizeAttribution, summarizePayouts } from './affiliate.js';
 import { getBrowserGateway, validateBrowserUrl } from './browser-gateway.js';
 
-const trustedProxySetting = String(process.env.TRUST_PROXY || "").trim().toLowerCase();
-const trustProxy =
-  trustedProxySetting === "true" || trustedProxySetting === "1"
-    ? true
-    : trustedProxySetting === "loopback"
-      ? "loopback"
-      : /^\d+$/.test(trustedProxySetting)
-        ? Number(trustedProxySetting)
-        : false;
+const trustProxy = resolveTrustProxy(process.env.TRUST_PROXY);
 const app = Fastify({ logger: true, trustProxy: trustProxy as any });
 
 const config = loadConfig();
@@ -48,14 +41,14 @@ app.register(rateLimit, { max: 100, timeWindow: '1 minute' });
 
 app.setErrorHandler(async (err, req, reply) => {
   const status = (err as any).statusCode ?? 500;
-  const message = status >= 500 ? 'INTERNAL_ERROR' : (err as Error).message;
-  req.log.error(err);
-  const errMessage = (err as Error)?.message ?? '';
+  const message = status >= 500 ? 'INTERNAL_ERROR' : redactText((err as Error).message);
+  req.log.error({ err: redactError(err), statusCode: status }, 'request failed');
+  const errMessage = redactText((err as Error)?.message ?? '');
   if (status < 500 && (errMessage.includes('SESSION_JWT_SECRET') || errMessage.includes('DATABASE_URL'))) {
     try {
       await writeAuditEvent({ workspaceId: null, userId: null, runId: null, type: 'security_config_error', actor: null, data: { message: errMessage } });
     } catch (auditErr) {
-      req.log.error(auditErr);
+      req.log.error({ err: redactError(auditErr) }, 'security config audit failed');
     }
   }
   reply.code(status).send({ error: message });
@@ -342,6 +335,31 @@ app.get('/api/analytics/summary', async (req, reply) => {
   const clicks = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.affiliateClick.count({ where: { workspaceId: ctx.workspaceId } }));
   const convs = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.affiliateConversion.count({ where: { workspaceId: ctx.workspaceId } }));
   return { summary: { metrics: byMetric, clicks, conversions: convs, dataAvailable: snaps.length > 0 } };
+});
+
+// Truth-first analytics: only real workspace rows, with explicit missing markers.
+app.get('/api/analytics/sources', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const query = (req.query ?? {}) as Record<string, unknown>;
+  const options: { windowMs?: number; limit?: number } = {};
+  if (query.windowMs !== undefined) {
+    const windowMs = Number(query.windowMs);
+    if (!Number.isFinite(windowMs) || windowMs <= 0 || windowMs > 366 * 24 * 60 * 60 * 1000) {
+      return reply.code(400).send({ error: 'INVALID_WINDOW_MS' });
+    }
+    options.windowMs = Math.trunc(windowMs);
+  }
+  if (query.limit !== undefined) {
+    const limit = Number(query.limit);
+    if (!Number.isInteger(limit) || limit <= 0 || limit > 200) {
+      return reply.code(400).send({ error: 'INVALID_LIMIT' });
+    }
+    options.limit = limit;
+  }
+  const { collectWorkspaceAnalytics } = await import('./analytics-sources.js');
+  const analytics = await collectWorkspaceAnalytics(ctx.workspaceId, options);
+  return { analytics };
 });
 
 app.post('/api/analytics/clicks', async (req, reply) => {
@@ -1093,15 +1111,34 @@ app.post('/api/jobs/:id/heartbeat', async (req, reply) => {
   return { job: updated };
 });
 
+/**
+ * Generic job transitions must never settle a publishing job: only the
+ * dedicated /api/publishing/jobs/:id/process route may move it to a terminal
+ * state, and that route still refuses to fake an upload.
+ */
+async function loadNonPublishingJobForTransition(id: string, ctx: any, reply: any): Promise<any | null> {
+  const { getJob } = await import('./jobs.js');
+  const job = await getJob(id, ctx.workspaceId);
+  if (!job || job.workspaceId !== ctx.workspaceId) {
+    reply.code(404).send({ error: 'NOT_FOUND' });
+    return null;
+  }
+  const { isPublishingJob } = await import('./publishing.js');
+  if (isPublishingJob(job)) {
+    reply.code(409).send({ error: 'USE_PUBLISHING_PROCESS_ENDPOINT' });
+    return null;
+  }
+  return job;
+}
+
 app.post('/api/jobs/:id/complete', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;
   if (!requireOperatorRole(ctx, reply)) return;
   const id = (req.params as any).id;
   const body = (req.body ?? {}) as any;
-  const { getJob } = await import('./jobs.js');
-  const job = await getJob(id, ctx.workspaceId);
-  if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const job = await loadNonPublishingJobForTransition(id, ctx, reply);
+  if (!job) return;
   if (job.type === 'CONTENT_DISCOVERY' && !requireOperatorRole(ctx, reply)) return;
   const { completeJob } = await import('./jobs.js');
   const updated = await completeJob(id, { leaseId: body.leaseId ?? job.leaseId, workerId: body.workerId ?? job.leaseOwner, workspaceId: ctx.workspaceId });
@@ -1113,9 +1150,8 @@ app.post('/api/jobs/:id/fail', async (req, reply) => {
   if (!ctx) return;
   const id = (req.params as any).id;
   const body = (req.body ?? {}) as any;
-  const { getJob } = await import('./jobs.js');
-  const job = await getJob(id, ctx.workspaceId);
-  if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const job = await loadNonPublishingJobForTransition(id, ctx, reply);
+  if (!job) return;
   if (job.type === 'CONTENT_DISCOVERY' && !requireOperatorRole(ctx, reply)) return;
   const { failJob } = await import('./jobs.js');
   const updated = await failJob(id, { error: body.error ?? body.reason, retryable: body.retryable, nextRunAt: body.nextRunAt ? new Date(body.nextRunAt) : undefined, leaseId: body.leaseId ?? job.leaseId, workerId: body.workerId ?? job.leaseOwner }, { workspaceId: ctx.workspaceId });
@@ -1127,9 +1163,8 @@ app.post('/api/jobs/:id/cancel', async (req, reply) => {
   if (!ctx) return;
   const id = (req.params as any).id;
   const body = (req.body ?? {}) as any;
-  const { getJob } = await import('./jobs.js');
-  const job = await getJob(id, ctx.workspaceId);
-  if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const job = await loadNonPublishingJobForTransition(id, ctx, reply);
+  if (!job) return;
   if (job.type === 'CONTENT_DISCOVERY' && !requireOperatorRole(ctx, reply)) return;
   const { cancelJob } = await import('./jobs.js');
   const updated = await cancelJob(id, { reason: body.reason, leaseId: body.leaseId ?? job.leaseId, workerId: body.workerId ?? job.leaseOwner, workspaceId: ctx.workspaceId });
@@ -1141,9 +1176,8 @@ app.post('/api/jobs/:id/requeue', async (req, reply) => {
   if (!ctx) return;
   const id = (req.params as any).id;
   const body = (req.body ?? {}) as any;
-  const { getJob } = await import('./jobs.js');
-  const job = await getJob(id, ctx.workspaceId);
-  if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const job = await loadNonPublishingJobForTransition(id, ctx, reply);
+  if (!job) return;
   if (job.type === 'CONTENT_DISCOVERY' && !requireOperatorRole(ctx, reply)) return;
   const { requeueDeadLetterJob } = await import('./jobs.js');
   const updated = await requeueDeadLetterJob(id, { actor: ctx.userId, reason: body.reason ?? null, maxAttempts: body.maxAttempts, workspaceId: ctx.workspaceId });
@@ -1155,9 +1189,8 @@ app.post('/api/jobs/:id/retry', async (req, reply) => {
   if (!ctx) return;
   const id = (req.params as any).id;
   const body = (req.body ?? {}) as any;
-  const { getJob } = await import('./jobs.js');
-  const job = await getJob(id, ctx.workspaceId);
-  if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const job = await loadNonPublishingJobForTransition(id, ctx, reply);
+  if (!job) return;
   if (job.type === 'CONTENT_DISCOVERY' && !requireOperatorRole(ctx, reply)) return;
   const { requeueDeadLetterJob } = await import('./jobs.js');
   const updated = await requeueDeadLetterJob(id, { actor: ctx.userId, reason: body.reason ?? null, maxAttempts: body.maxAttempts, workspaceId: ctx.workspaceId });
@@ -1170,13 +1203,114 @@ app.post('/api/jobs/:id/resume', async (req, reply) => {
   if (!requireOperatorRole(ctx, reply)) return;
   const id = (req.params as any).id;
   const body = (req.body ?? {}) as any;
-  const { getJob } = await import('./jobs.js');
-  const job = await getJob(id, ctx.workspaceId);
-  if (!job || job.workspaceId !== ctx.workspaceId) return reply.code(404).send({ error: 'NOT_FOUND' });
+  const job = await loadNonPublishingJobForTransition(id, ctx, reply);
+  if (!job) return;
   if (job.type === 'CONTENT_DISCOVERY' && !requireOperatorRole(ctx, reply)) return;
   const { resumeJob } = await import('./jobs.js');
   const updated = await resumeJob(id, { actor: ctx.userId, reason: body.reason ?? null, leaseId: body.leaseId ?? job.leaseId, workerId: body.workerId ?? job.leaseOwner, workspaceId: ctx.workspaceId });
   return { job: updated };
+});
+
+// Publishing adapters (Phase D). Every route uses the standard workspace
+// session guard. Publishing jobs are AGENT_TASK rows with category=PUBLISHING;
+// the automatic engine never claims AGENT_TASK, so publishing only advances
+// through the explicit /process route below.
+app.get('/api/publishing/adapters', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { listPublishingAdapters } = await import('./publishing.js');
+  return { adapters: await listPublishingAdapters(ctx.workspaceId) };
+});
+
+app.post('/api/publishing/jobs', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const { enqueuePublishingJob } = await import('./publishing.js');
+  const body = (req.body ?? {}) as any;
+  const result = await enqueuePublishingJob({
+    workspaceId: ctx.workspaceId,
+    actor: ctx.userId,
+    platform: body.platform,
+    entityType: body.entityType,
+    entityId: body.entityId,
+    idempotencyKey: body.idempotencyKey,
+    approvalId: body.approvalId,
+    options: body.options,
+    maxAttempts: body.maxAttempts,
+    runAt: body.runAt ? new Date(body.runAt) : null,
+  });
+  return reply.code(result.statusCode).send(result.body);
+});
+
+app.get('/api/publishing/jobs', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { listPublishingJobs } = await import('./publishing.js');
+  const q = (req.query ?? {}) as any;
+  return { jobs: await listPublishingJobs(ctx.workspaceId, { status: q.status, limit: q.limit, offset: q.offset }) };
+});
+
+app.get('/api/publishing/jobs/:id', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { getPublishingJob } = await import('./publishing.js');
+  const job = await getPublishingJob(ctx.workspaceId, String((req.params as any).id));
+  if (!job) return reply.code(404).send({ error: 'NOT_FOUND' });
+  return { job };
+});
+
+app.post('/api/publishing/jobs/:id/process', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const { processPublishingJob } = await import('./publishing.js');
+  const result = await processPublishingJob(
+    ctx.workspaceId,
+    String((req.params as any).id),
+    ctx.userId,
+    { workerId: String(((req.body ?? {}) as any).workerId ?? ctx.userId) },
+  );
+  return reply.code(result.statusCode).send(result.body);
+});
+
+// Read-only self-healing proposals. Applying a proposal is deliberately not
+// exposed over HTTP: it needs explicit approval and externally executed quality
+// gates, so this route never mutates state or marks anything as applied.
+app.get('/api/self-healing/proposals', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const query = (req.query ?? {}) as Record<string, unknown>;
+  const options: { windowMs?: number; limit?: number } = {};
+  if (query.windowMs !== undefined) {
+    const windowMs = Number(query.windowMs);
+    if (!Number.isFinite(windowMs) || windowMs <= 0 || windowMs > 30 * 24 * 60 * 60 * 1000) {
+      return reply.code(400).send({ error: 'INVALID_WINDOW_MS' });
+    }
+    options.windowMs = Math.trunc(windowMs);
+  }
+  if (query.limit !== undefined) {
+    const limit = Number(query.limit);
+    if (!Number.isInteger(limit) || limit <= 0 || limit > 5000) {
+      return reply.code(400).send({ error: 'INVALID_LIMIT' });
+    }
+    options.limit = limit;
+  }
+  const { collectHealingProposals } = await import('./self-healing.js');
+  const report = await collectHealingProposals(
+    ctx.workspaceId,
+    async ({ workspaceId, from, to, limit }) => (await withWorkspaceTransaction(workspaceId, (tx: any) =>
+      tx.auditEvent.findMany({
+        where: { workspaceId, createdAt: { gte: from, lte: to } },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        select: { id: true, type: true, createdAt: true, workspaceId: true, actor: true, data: true },
+      })) as unknown as any[]),
+    options,
+  );
+  return {
+    report,
+    applied: false,
+    note: 'Read-only proposals; apply requires explicit approval and external quality gates.',
+  };
 });
 
 async function jobRuntimeStatusHandler(ctx: any) {
@@ -1440,7 +1574,8 @@ app.post('/api/media/transcription/audio', async (req, reply) => {
     const result = await transcribeAndHighlight({
       audioPath: workspaceMediaPath(ctx.workspaceId, body.audioName),
       outputDir: workspaceMediaRoot(ctx.workspaceId),
-      modelPath: body.modelPath ? String(body.modelPath) : undefined,
+      // F-01: the model is exclusively selected by the server-side WHISPER_MODEL
+      // environment variable; client-supplied model paths are never accepted.
       language: body.language ? String(body.language) : undefined,
       threads: body.threads === undefined ? undefined : Number(body.threads),
       keywords: Array.isArray(body.keywords) ? body.keywords : [],
@@ -1547,7 +1682,7 @@ app.post('/api/browser/sessions', async (req, reply) => {
   const body = (req.body ?? {}) as any;
   const initialUrl = typeof body.initialUrl === 'string' && body.initialUrl.trim() ? String(body.initialUrl).trim() : undefined;
   if (initialUrl) {
-    try { validateBrowserUrl(initialUrl); } catch (err) { return reply.code(400).send({ error: (err as Error).message }); }
+    try { await validateBrowserUrl(initialUrl); } catch (err) { return reply.code(400).send({ error: (err as Error).message }); }
   }
   const session = await browserGateway.createSession(ctx.workspaceId, ctx.userId, initialUrl);
   return reply.code(201).send({ session });
@@ -1897,8 +2032,9 @@ app.post('/api/browser/mcp', async (req, reply) => {
     try { await writeAuditEvent({ workspaceId: ctx.workspaceId, userId: ctx.userId, runId: null, type: 'browser_mcp_invoke', actor: aId, data: { tool, sessionId: sessionId || null } }); } catch {}
     return { jsonrpc: '2.0', id: body.id ?? null, result };
   } catch (err) {
-    try { await writeAuditEvent({ workspaceId: ctx.workspaceId, userId: ctx.userId, runId: null, type: 'browser_mcp_error', actor: ctx.userId, data: { tool, message: (err as Error).message } }); } catch {}
-    return reply.code(400).send({ jsonrpc: '2.0', id: body.id ?? null, error: { code: -32000, message: (err as Error).message } });
+    const safeMessage = redactText((err as Error).message);
+    try { await writeAuditEvent({ workspaceId: ctx.workspaceId, userId: ctx.userId, runId: null, type: 'browser_mcp_error', actor: ctx.userId, data: { tool, message: safeMessage } }); } catch {}
+    return reply.code(400).send({ jsonrpc: '2.0', id: body.id ?? null, error: { code: -32000, message: safeMessage } });
   }
 });
 
@@ -1932,20 +2068,16 @@ const MIME: Record<string,string> = {
 
 async function serveFile(req: any, reply: any, relPath: string) {
   try {
-    const cleaned = String(relPath || 'index.html').replace(/^\/+/, '');
-    if (cleaned.includes('\0')) return reply.code(400).send({ error: 'INVALID_PATH' });
-    const root = resolve(PUBLIC_DIR);
-    const fullPath = resolve(root, cleaned);
-    if (!fullPath.startsWith(root + sep) && fullPath !== root) {
-      return reply.code(403).send({ error: 'FORBIDDEN' });
+    const resolved = await resolvePublicFile(PUBLIC_DIR, relPath);
+    if (!resolved.ok) {
+      if (resolved.reason === 'INVALID_PATH') return reply.code(400).send({ error: 'INVALID_PATH' });
+      if (resolved.reason === 'FORBIDDEN') return reply.code(403).send({ error: 'FORBIDDEN' });
+      return reply.code(404).send({ error: 'NOT_FOUND' });
     }
-    const st = await stat(fullPath);
-    if (!st.isFile()) return reply.code(404).send({ error: 'NOT_FOUND' });
-    reply.type(MIME[extname(fullPath).toLowerCase()] || 'application/octet-stream');
-    return reply.send(createReadStream(fullPath));
+    reply.type(MIME[extname(resolved.path).toLowerCase()] || 'application/octet-stream');
+    return reply.send(createReadStream(resolved.path));
   } catch (err: any) {
-    if (err.code === 'ENOENT') return reply.code(404).send({ error: 'NOT_FOUND' });
-    req.log.error(err);
+    req.log.error({ err: redactError(err) }, 'static file serving failed');
     return reply.code(500).send({ error: 'INTERNAL_ERROR' });
   }
 }

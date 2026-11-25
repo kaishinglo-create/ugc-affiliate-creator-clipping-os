@@ -250,7 +250,9 @@ export async function executeDiscovery(workspaceId: string, job: { id: string; l
       if (server) {
         result = await searchViaMcp(server, query.data.query, query.data.cursor);
       } else {
-        const args = [client!, query.data.query];
+        // `--` makes the query positional for CLIs that parse options; a query
+        // like `--help` must never be interpreted as a client flag.
+        const args = [client!, '--', query.data.query];
         if (query.data.cursor) args.push('--cursor', query.data.cursor);
         args.push('--worker');
         const { stdout } = await runClient(process.execPath, args, {

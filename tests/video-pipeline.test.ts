@@ -12,7 +12,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/pr
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { clipSegment, exportVideo, extractAudio, probeMedia } from '../src/video/clipping.js';
+import { clipSegment, exportVideo, extractAudio, probeMedia, runBinary } from '../src/video/clipping.js';
 import { burnSubtitles, escapeFilterPath, writeSrt } from '../src/video/subtitles.js';
 
 const FFMPEG_DOUBLE = `#!/bin/sh
@@ -37,7 +37,14 @@ cat <<'JSON'
 JSON
 `;
 
-const TRACKED_ENV = ['FFMPEG_BIN', 'FFPROBE_BIN', 'FFMPEG_ARGV_LOG', 'FFPROBE_ARGV_LOG', 'FFMPEG_VIDEO_CODEC'];
+const TRACKED_ENV = [
+  'FFMPEG_BIN',
+  'FFPROBE_BIN',
+  'FFMPEG_ARGV_LOG',
+  'FFPROBE_ARGV_LOG',
+  'FFMPEG_VIDEO_CODEC',
+  'FFMPEG_TIMEOUT_MS',
+];
 
 async function writeExecutable(filePath: string, body: string): Promise<void> {
   await writeFile(filePath, body, { mode: 0o755 });
@@ -73,6 +80,7 @@ describe('video pipeline (ffmpeg/ffprobe test doubles)', () => {
     process.env.FFMPEG_ARGV_LOG = ffmpegLog;
     process.env.FFPROBE_ARGV_LOG = ffprobeLog;
     delete process.env.FFMPEG_VIDEO_CODEC;
+    delete process.env.FFMPEG_TIMEOUT_MS;
   });
 
   afterEach(async () => {
@@ -258,6 +266,20 @@ describe('video pipeline (ffmpeg/ffprobe test doubles)', () => {
       .rejects.toMatchObject({ code: 'NOT_CONFIGURED', message: 'FFMPEG_NOT_CONFIGURED' });
     await expect(extractAudio({ input, output: path.join(root, 'audio', 'bad.wav'), sampleRate: 7 }))
       .rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  });
+
+  it('runBinary kills a hung ffmpeg and reports FFMPEG_TIMEOUT instead of hanging forever', async () => {
+    const sleeper = path.join(root, 'bin', 'ffmpeg-hanging-test-double');
+    await writeExecutable(sleeper, '#!/bin/sh\nexec sleep 5\n');
+    process.env.FFMPEG_BIN = sleeper;
+
+    const started = Date.now();
+    await expect(runBinary('ffmpeg', [], 250)).rejects.toMatchObject({
+      code: 'FFMPEG_FAILED',
+      message: 'FFMPEG_TIMEOUT',
+      details: expect.objectContaining({ binary: 'ffmpeg', timeoutMs: 1000 }),
+    });
+    expect(Date.now() - started).toBeLessThan(4000);
   });
 
   it('writeSrt produces valid SRT and rejects invalid cue timestamps', async () => {
