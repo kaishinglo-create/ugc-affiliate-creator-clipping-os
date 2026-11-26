@@ -4,8 +4,9 @@
 
 - Merge: `origin/main` into `sync/remote-into-local`.
 - Merge commit: `4a19bed0f1d85eb392c002222868ce0caf062b26`.
-- Final CI run: `45909401512` — **SUCCESS**.
-- Final PR state: OPEN, MERGEABLE, CLEAN.
+- Final CI run: `45910004771` — **SUCCESS**.
+- Failed check rerun: `45909983760` job `140217570804` — **PASS**.
+- Final PR state: OPEN, MERGEABLE, **CLEAN**.
 
 ## QA summary
 
@@ -19,4 +20,4 @@
 
 ## Final status
 
-**READY_TO_MERGE** after successful conflict resolution and green CI.
+**READY_TO_MERGE** after successful conflict resolution, QA, and final CI/check verification.

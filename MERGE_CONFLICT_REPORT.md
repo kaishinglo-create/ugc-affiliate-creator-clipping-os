@@ -42,3 +42,10 @@
 - Final CI run: `45909401512`
 - Final CI conclusion: **success**
 - Final mergeability: **CLEAN**
+
+## Final verification
+
+- Final CI run: `45910004771` — success.
+- Failed PR check rerun: `45909983760` job `140217570804` — success.
+- Final PR state: MERGEABLE, CLEAN.
+- Final status: READY_TO_MERGE.

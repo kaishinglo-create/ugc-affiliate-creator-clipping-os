@@ -789,3 +789,11 @@ and verification on the target device are follow-up steps.
 - Final CI run: `45909401512` — **SUCCESS**.
 - Final PR state: OPEN, MERGEABLE, CLEAN.
 - Final status: **READY_TO_MERGE**.
+
+## Phase F.3.2 Final Status (2026-11-27)
+
+- Final merge: `4a19bed0f1d85eb392c002222868ce0caf062b26`.
+- Final CI run: `45910004771` — **SUCCESS**.
+- Final rerun check: job `140217570804` — **PASS**.
+- Final PR state: OPEN, MERGEABLE, CLEAN.
+- Final status: **READY_TO_MERGE**.

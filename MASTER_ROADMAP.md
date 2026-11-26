@@ -17,7 +17,7 @@ Status: final CI green; merge conflict reported.
 Status: **READY_TO_MERGE**.
 
 - Final merge: `4a19bed0f1d85eb392c002222868ce0caf062b26`.
-- Final CI: `45909401512` — success.
+- Final CI run: `45910004771` — success.
 - Final PR state: MERGEABLE/CLEAN.
 - Local QA: green.
 

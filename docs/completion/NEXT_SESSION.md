@@ -195,3 +195,8 @@ bash scripts/controller-watchdog.sh                 # respektiert Cooldowns
 
 - Final merge conflict resolution completed and CI green.
 - Final status: READY_TO_MERGE; awaiting explicit merge approval.
+
+## Phase F.3.2 final follow-up (2026-11-27)
+
+- Final CI/check rerun green at head `cfb9a5e`.
+- Final status: READY_TO_MERGE; awaiting explicit merge approval.
