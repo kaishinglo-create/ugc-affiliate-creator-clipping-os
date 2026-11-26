@@ -9,21 +9,75 @@
  * against an otherwise identical plain clip.
  */
 import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { clipSegment, exportVideo, extractAudio, probeMedia, runBinary } from '../src/video/clipping.js';
 import { writeSrt, type SrtCue } from '../src/video/subtitles.js';
-import { transcribeAndHighlight } from '../src/transcription.js';
+import { transcribeAndHighlight, whisperTimeoutMs } from '../src/transcription.js';
 
+const WHISPER_HOME = path.join(homedir(), '.local/share/ugc-media/whisper');
 const VERIFY_DIR = process.env.MEDIA_VERIFY_DIR?.trim() || '/tmp/opencode/ugc-media-verify';
-const SAMPLE = process.env.WHISPER_SAMPLE?.trim() || '/tmp/opencode/whisper.cpp/samples/jfk.wav';
-const WHISPER_CLI = process.env.WHISPER_BIN?.trim() || '/tmp/opencode/whisper.cpp/build/bin/whisper-cli';
-const WHISPER_MODEL = process.env.WHISPER_MODEL?.trim() || '/tmp/opencode/whisper.cpp/models/ggml-tiny.en.bin';
+const SAMPLE = process.env.WHISPER_SAMPLE?.trim() || path.join(WHISPER_HOME, 'samples/en-test-sentence-cc0.wav');
+const WHISPER_CLI = process.env.WHISPER_BIN?.trim() || path.join(WHISPER_HOME, 'whisper-cli');
+const WHISPER_MODEL = process.env.WHISPER_MODEL?.trim() || path.join(WHISPER_HOME, 'ggml-tiny.en.bin');
+const WHISPER_MODEL_MULTILINGUAL = process.env.WHISPER_MODEL_MULTILINGUAL?.trim() || path.join(WHISPER_HOME, 'ggml-tiny.bin');
+const SAMPLE_DE = process.env.WHISPER_SAMPLE_DE?.trim() || path.join(WHISPER_HOME, 'samples/de-deutschland-cc0.flac');
 const WIDTH = 720;
 const HEIGHT = 1280;
 
-async function requireFile(target: string, label: string): Promise<void> {
+async function fileExists(target: string): Promise<boolean> {
   const info = await stat(target).catch(() => null);
-  if (!info?.isFile()) throw new Error(`${label}_NOT_FOUND: ${target}`);
+  return Boolean(info?.isFile());
+}
+
+async function requireFile(target: string, label: string): Promise<void> {
+  if (!await fileExists(target)) throw new Error(`${label}_NOT_FOUND: ${target}`);
+}
+
+/** Prefer permanent assets; only fall back to legacy /tmp paths when needed. */
+async function firstExisting(candidates: string[]): Promise<string> {
+  for (const candidate of candidates) {
+    if (await fileExists(candidate)) return candidate;
+  }
+  return candidates[0];
+}
+
+async function runGermanCase(binary: string): Promise<Record<string, unknown>> {
+  const [modelOk, sampleOk] = await Promise.all([
+    fileExists(WHISPER_MODEL_MULTILINGUAL),
+    fileExists(SAMPLE_DE),
+  ]);
+  if (!modelOk || !sampleOk) {
+    return {
+      status: 'SKIPPED_EXTERNAL_SAMPLE',
+      reason: !modelOk ? 'WHISPER_MODEL_MULTILINGUAL_NOT_FOUND' : 'GERMAN_SAMPLE_NOT_FOUND',
+      modelPath: WHISPER_MODEL_MULTILINGUAL,
+      samplePath: SAMPLE_DE,
+    };
+  }
+  const started = Date.now();
+  const transcription = await transcribeAndHighlight({
+    audioPath: SAMPLE_DE,
+    outputDir: VERIFY_DIR,
+    modelPath: WHISPER_MODEL_MULTILINGUAL,
+    binary,
+    language: 'de',
+    threads: 1,
+    timeoutMs: whisperTimeoutMs(),
+    keywords: ['deutschland'],
+    minScore: 1,
+  });
+  const text = transcription.text.replace(/\s+/g, ' ').trim();
+  return {
+    status: 'OK',
+    language: 'de',
+    text,
+    containsExpectedGermanWord: /deutschland/i.test(text),
+    segmentCount: transcription.segments.length,
+    durationMs: Date.now() - started,
+    samplePath: SAMPLE_DE,
+    modelPath: WHISPER_MODEL_MULTILINGUAL,
+  };
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -31,15 +85,27 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 async function main(): Promise<void> {
+  const whisperCli = await firstExisting([
+    WHISPER_CLI,
+    '/tmp/opencode/whisper.cpp/build/bin/whisper-cli', // legacy only
+  ]);
+  const whisperModel = await firstExisting([
+    WHISPER_MODEL,
+    '/tmp/opencode/whisper.cpp/models/ggml-tiny.en.bin', // legacy only
+  ]);
+  const sample = await firstExisting([
+    SAMPLE,
+    '/tmp/opencode/whisper.cpp/samples/jfk.wav', // legacy only
+  ]);
   await Promise.all([
-    requireFile(SAMPLE, 'WHISPER_SAMPLE'),
-    requireFile(WHISPER_CLI, 'WHISPER_BIN'),
-    requireFile(WHISPER_MODEL, 'WHISPER_MODEL'),
+    requireFile(sample, 'WHISPER_SAMPLE'),
+    requireFile(whisperCli, 'WHISPER_BIN'),
+    requireFile(whisperModel, 'WHISPER_MODEL'),
   ]);
   await mkdir(VERIFY_DIR, { recursive: true });
 
-  process.env.WHISPER_BIN = WHISPER_CLI;
-  process.env.WHISPER_MODEL = WHISPER_MODEL;
+  process.env.WHISPER_BIN = whisperCli;
+  process.env.WHISPER_MODEL = whisperModel;
   process.env.WHISPER_THREADS = '1';
 
   const source = path.join(VERIFY_DIR, 'source.mp4');
@@ -52,9 +118,9 @@ async function main(): Promise<void> {
   await runBinary('ffmpeg', [
     '-hide_banner', '-loglevel', 'error', '-y',
     '-f', 'lavfi', '-i', 'color=c=navy:s=1280x720:r=25:d=11',
-    '-i', SAMPLE,
+    '-stream_loop', '-1', '-i', sample,
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'ultrafast',
-    '-c:a', 'aac', '-shortest', source,
+    '-threads', '1', '-c:a', 'aac', '-shortest', source,
   ]);
   const extracted = await extractAudio({ input: source, output: audio, allowedTempDir: VERIFY_DIR });
   const sourceMetadata = await probeMedia(source);
@@ -62,12 +128,12 @@ async function main(): Promise<void> {
   const transcription = await transcribeAndHighlight({
     audioPath: audio,
     outputDir: VERIFY_DIR,
-    modelPath: WHISPER_MODEL,
-    binary: WHISPER_CLI,
+    modelPath: whisperModel,
+    binary: whisperCli,
     language: 'en',
     threads: 1,
-    timeoutMs: 300_000,
-    keywords: ['country', 'americans', 'fellow'],
+    timeoutMs: whisperTimeoutMs(),
+    keywords: ['test', 'sentence', 'this'],
     minScore: 1,
   });
   const timed = transcription.segments.filter(
@@ -103,6 +169,7 @@ async function main(): Promise<void> {
     height: HEIGHT,
     subtitles: srt,
     allowedTempDir: VERIFY_DIR,
+    threads: 1,
   });
   if (!exportResult.ok) throw new Error(`REAL_EXPORT_FAILED: ${exportResult.error.code} ${exportResult.error.message}`);
   const outputMetadata = await probeMedia(output);
@@ -116,6 +183,7 @@ async function main(): Promise<void> {
     width: WIDTH,
     height: HEIGHT,
     allowedTempDir: VERIFY_DIR,
+    threads: 1,
   });
   const comparison = await runBinary('ffmpeg', [
     '-hide_banner', '-i', output, '-i', plain, '-lavfi', 'ssim', '-f', 'null', '-',
@@ -132,10 +200,16 @@ async function main(): Promise<void> {
     '-hide_banner', '-loglevel', 'error', '-y', '-ss', '1', '-i', output, '-frames:v', '1', frame,
   ]);
 
+  const germanCase = await runGermanCase(whisperCli);
+  if (germanCase.status === 'OK' && germanCase.containsExpectedGermanWord !== true) {
+    throw new Error(`GERMAN_TRANSCRIPT_UNEXPECTED: ${String(germanCase.text).slice(0, 240)}`);
+  }
+
   const report = {
     ok: true,
     at: new Date().toISOString(),
-    binaries: { whisperCli: WHISPER_CLI, model: WHISPER_MODEL, sample: SAMPLE },
+    languageCases: { en: { status: 'OK', language: 'en', text: transcription.text.trim() }, de: germanCase },
+    binaries: { whisperCli, model: whisperModel, multilingualModel: WHISPER_MODEL_MULTILINGUAL, sample },
     source: { durationSeconds: sourceMetadata.durationSeconds, sizeBytes: sourceMetadata.sizeBytes },
     audio: { outputPath: extracted.outputPath, bytes: extracted.bytes },
     transcription: {
@@ -171,6 +245,11 @@ async function main(): Promise<void> {
     clip: report.clip.durationSeconds,
     dimensions: `${WIDTH}x${HEIGHT}`,
     ssimAll: ssimAll,
+    languageCases: {
+      en: 'OK',
+      de: germanCase.status,
+      ...(germanCase.status === 'OK' ? { deText: germanCase.text, deContainsExpectedWord: germanCase.containsExpectedGermanWord } : { deReason: germanCase.reason }),
+    },
     report: path.join(VERIFY_DIR, 'verification.json'),
   }, null, 2));
 }

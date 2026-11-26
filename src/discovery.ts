@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { z } from 'zod';
 import { writeAuditEvent } from '../lib/audit.js';
 import { withWorkspaceTransaction } from '../lib/db.js';
+import { redactError, redactText } from '../lib/redaction.js';
 import { isKillSwitchActive } from '../lib/security.js';
 import { cancelJob, completeJob, createJob, failJob, getJob, heartbeatJob } from './jobs.js';
 import { McpStdioClient } from './mcp-client.js';
@@ -18,7 +19,11 @@ export const discoveryScheduleInput = z.object({
 });
 
 const providerResponse = z.discriminatedUnion('ok', [
-  z.object({ ok: z.literal(false), class: z.string().regex(/^[a-z_]{1,40}$/) }),
+  z.object({
+    ok: z.literal(false),
+    class: z.string().regex(/^[a-z_]{1,40}$/),
+    reason: z.string().max(2_000).optional(),
+  }),
   z.object({ ok: z.literal(true), tier: z.literal(1), candidates: z.array(z.object({
     id: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
     title: z.string().trim().min(1).max(500),
@@ -29,7 +34,44 @@ const providerResponse = z.discriminatedUnion('ok', [
 const runClient = promisify(execFile);
 const dailyLimit = 10;
 const reservationType = 'content_discovery_request_reserved';
+const failureType = 'content_discovery_failed';
 const MCP_TOOL = 'youtube_search';
+const DIAGNOSTIC_MESSAGE_LIMIT = 300;
+
+type DiscoveryDiagnostic = { class: string; message?: string };
+
+/** One bounded, redacted line suitable for lastError-adjacent audit data. */
+function safeDiagnosticMessage(value: unknown): string | undefined {
+  const text = redactText(value)
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, DIAGNOSTIC_MESSAGE_LIMIT);
+  return text || undefined;
+}
+
+/** Map an api-anything refusal to a stable class and a redacted diagnostic. */
+export function discoveryProviderDiagnostic(value: unknown): DiscoveryDiagnostic {
+  const row = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const rawClass = typeof row.class === 'string' && /^[a-z_]{1,40}$/.test(row.class) ? row.class : 'unknown';
+  const message = safeDiagnosticMessage(row.reason);
+  return { class: `DISCOVERY_PROVIDER_${rawClass.toUpperCase()}`, ...(message ? { message } : {}) };
+}
+
+/** Map a transport/tool exception to a stable class and a redacted diagnostic. */
+export function discoveryTransportDiagnostic(error: unknown): DiscoveryDiagnostic {
+  const details = redactError(error);
+  const name = typeof details.name === 'string' ? details.name : 'Error';
+  const message = safeDiagnosticMessage(`${name}: ${details.message}`);
+  return { class: 'DISCOVERY_MCP_UNAVAILABLE', ...(message ? { message } : {}) };
+}
+
+function toolSupportsCursor(tool: { name: string; inputSchema?: unknown }): boolean {
+  const schema = tool.inputSchema as { properties?: unknown } | undefined;
+  return Boolean(schema && typeof schema === 'object' && schema.properties &&
+    typeof schema.properties === 'object' && 'cursor' in schema.properties);
+}
+
 const childEnv = () => Object.fromEntries(Object.entries(process.env).filter(([name]) =>
   ['PATH', 'HOME', 'TMPDIR', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'NODE_USE_ENV_PROXY', 'NODE_EXTRA_CA_CERTS'].includes(name)));
 
@@ -104,8 +146,12 @@ async function searchViaMcp(serverPath: string, query: string, cursor?: string):
   });
   try {
     const tools = await client.listTools();
-    if (!tools.some((tool) => tool.name === MCP_TOOL)) throw new Error('MCP_TOOL_MISSING');
-    const result = await client.callTool(MCP_TOOL, cursor ? { query, cursor } : { query }, 30_000);
+    const tool = tools.find((candidate) => candidate.name === MCP_TOOL);
+    if (!tool) throw new Error('MCP_TOOL_MISSING');
+    // Only send a cursor when the tool advertises it; legacy peers never see
+    // an unsupported argument.
+    const args = cursor && toolSupportsCursor(tool) ? { query, cursor } : { query };
+    const result = await client.callTool(MCP_TOOL, args, 30_000);
     if (result.isError) throw new Error('MCP_TOOL_ERROR');
     if (result.structuredContent !== undefined) return result.structuredContent;
     const text = result.content.find((block) => block.type === 'text')?.text;
@@ -204,13 +250,26 @@ export async function executeDiscovery(workspaceId: string, job: { id: string; l
   const query = z.object({ query: querySchema, cursor: z.string().min(1).max(512).optional() }).safeParse(job.payload);
   const server = discoveryServerPath();
   const client = discoveryClientPath();
-  const fail = async (error: string, retryable = false) => {
+  const fail = async (error: string, retryable = false, diagnostic?: DiscoveryDiagnostic) => {
     const nextRunAt = retryable
       ? new Date(Date.now() + discoveryBackoffMs(Number((await getJob(job.id, workspaceId))?.attempts ?? 1)))
       : null;
     const updated = await failJob(job.id, { error, retryable, nextRunAt }, lease);
     const outcome = updated?.status === 'RETRY_WAIT' ? 'retry' as const :
       ['FAILED', 'DEAD_LETTER'].includes(updated?.status) ? 'failed' as const : 'skipped' as const;
+    if (diagnostic) {
+      await withWorkspaceTransaction(workspaceId, (tx) => writeAuditEvent({
+        workspaceId,
+        type: failureType,
+        data: {
+          jobId: job.id,
+          class: diagnostic.class,
+          ...(diagnostic.message ? { message: diagnostic.message } : {}),
+          retryable,
+        },
+        tx,
+      }));
+    }
     return { outcome, error };
   };
   if (!query.success || (!server && !client)) return fail('DISCOVERY_INVALID_CONFIGURATION');
@@ -264,15 +323,18 @@ export async function executeDiscovery(workspaceId: string, job: { id: string; l
           return await fail('DISCOVERY_INVALID_RESULT');
         }
       }
-    } catch {
-      return await fail('DISCOVERY_MCP_UNAVAILABLE', true);
+    } catch (error) {
+      const diagnostic = discoveryTransportDiagnostic(error);
+      const errorText = diagnostic.message ? `${diagnostic.class}: ${diagnostic.message}` : diagnostic.class;
+      return await fail(errorText, true, diagnostic);
     }
 
     const parsed = providerResponse.safeParse(result);
     if (!parsed.success) return await fail('DISCOVERY_INVALID_RESULT');
     if (!parsed.data.ok) {
       const retryableClass = ['rate_limited', 'quota', 'unavailable'].includes(parsed.data.class);
-      return await fail(`DISCOVERY_PROVIDER_${parsed.data.class.toUpperCase()}`, retryableClass);
+      const diagnostic = discoveryProviderDiagnostic(parsed.data);
+      return await fail(diagnostic.class, retryableClass, diagnostic);
     }
     const candidates = parsed.data.candidates;
     const nextCursor = parsed.data.nextCursor;

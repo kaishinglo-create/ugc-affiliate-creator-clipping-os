@@ -96,6 +96,10 @@ export interface BurnSubtitlesOptions {
   output: string;
   /** Video encoder; defaults to `FFMPEG_VIDEO_CODEC` or libx264. */
   codec?: string;
+  /** Opt-in CPU limit; appended only when requested. */
+  threads?: 1;
+  /** Cooperative cancellation for workspace media jobs. */
+  signal?: AbortSignal;
 }
 
 export interface BurnSubtitlesResult {
@@ -141,7 +145,8 @@ export async function burnSubtitles(options: BurnSubtitlesOptions): Promise<Burn
     output,
   ];
 
-  await runBinary('ffmpeg', args);
+  if (options.threads === 1) args.push('-threads', '1');
+  await runBinary('ffmpeg', args, undefined, options.signal);
   const bytes = await verifyOutputFile(output);
   return {
     outputPath: output,

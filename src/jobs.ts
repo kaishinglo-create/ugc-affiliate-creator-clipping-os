@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { prisma, withWorkspaceTransaction } from '../lib/db.js';
 import { writeAuditEvent } from '../lib/audit.js';
 import { isKillSwitchActive } from '../lib/security.js';
+import { newSpan, trace } from './qa-trace.js';
 
 export const DEFAULT_JOB_MAX_ATTEMPTS = 3;
 export const DEFAULT_JOB_LEASE_TTL_MS = 30_000;
@@ -588,7 +589,9 @@ export async function markWaitingForApproval(jobId: string, opts: JobActionOptio
     })
   );
   if (waitingUpdate.count !== 1) {
-    return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+    const current = await withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+    trace('job.transition', { workspaceId: requestedWorkspaceId, jobId, workerId: opts.workerId ?? null, from: job.status, to: 'WAITING_FOR_APPROVAL', ok: false, currentStatus: (current as any)?.status ?? null });
+    return current;
   }
   const updated = await withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   await writeAuditEvent({
@@ -599,6 +602,7 @@ export async function markWaitingForApproval(jobId: string, opts: JobActionOptio
     actor: opts.actor ?? null,
     data: { workflowRunId: job.workflowRunId, jobId, status: 'WAITING_FOR_APPROVAL', ...(opts.data as any) },
   });
+  trace('job.transition', { workspaceId: requestedWorkspaceId, jobId, workerId: opts.workerId ?? null, from: job.status, to: 'WAITING_FOR_APPROVAL', ok: true });
   return updated;
 }
 
@@ -794,6 +798,9 @@ export async function runSchedulerOnce(opts: SchedulerOptions = {}): Promise<any
   const workerId = opts.workerId ?? 'scheduler';
   const batchSize = Math.max(1, Math.min(100, Number(opts.batchSize ?? opts.limit ?? DEFAULT_JOB_SCHEDULER_BATCH_SIZE) || DEFAULT_JOB_SCHEDULER_BATCH_SIZE));
   const leaseTtlMs = Math.max(1, Number(opts.leaseTtlMs ?? DEFAULT_JOB_LEASE_TTL_MS) || DEFAULT_JOB_LEASE_TTL_MS);
+  const span = newSpan();
+  const started = Date.now();
+  trace('scheduler.start', { span, workerId, workspaceId: opts.workspaceId ?? null, batchSize, leaseTtlMs });
 
   const workspaces = opts.workspaceId
     ? [{ id: opts.workspaceId }]
@@ -804,13 +811,18 @@ export async function runSchedulerOnce(opts: SchedulerOptions = {}): Promise<any
     try {
       await recoverExpiredJobs(workspace.id, { now });
       const killActive = await withWorkspaceTransaction(workspace.id, async (tx) => isKillSwitchActive(workspace.id, tx));
-      if (killActive) continue;
+      if (killActive) {
+        trace('scheduler.workspace_skipped', { span, workerId, workspaceId: workspace.id, reason: 'kill_switch' });
+        continue;
+      }
       const rows = await claimDueJobs(workspace.id, workerId, { now, limit: batchSize, leaseTtlMs });
       claimed.push(...rows);
-    } catch {
+    } catch (error) {
+      trace('scheduler.workspace_error', { span, workerId, workspaceId: workspace.id, error: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200) });
       continue;
     }
   }
+  trace('scheduler.end', { span, workerId, claimed: claimed.length, durationMs: Date.now() - started });
   return claimed;
 }
 
@@ -975,6 +987,9 @@ export async function claimJobById(jobId: string, workerId: string, opts: ClaimJ
   const now = toNow(opts.now);
   const leaseTtlMs = Math.max(1, Number(opts.leaseTtlMs ?? DEFAULT_JOB_LEASE_TTL_MS) || DEFAULT_JOB_LEASE_TTL_MS);
   const requestedWorkspaceId = opts.workspaceId ?? null;
+  const span = newSpan();
+  const started = Date.now();
+  trace('job_claim.start', { span, workspaceId: requestedWorkspaceId, jobId, workerId, leaseTtlMs });
   if (!requestedWorkspaceId) return null;
   const job = transaction
     ? await transaction.job.findFirst({ where: { id: jobId, workspaceId: requestedWorkspaceId } })
@@ -986,7 +1001,10 @@ export async function claimJobById(jobId: string, workerId: string, opts: ClaimJ
     await recoverWorkspaceExpiredJobs(tx, job.workspaceId, now);
     return isKillSwitchActive(job.workspaceId, tx);
   });
-  if (killActive) return null;
+  if (killActive) {
+    trace('job_claim.end', { span, workspaceId: requestedWorkspaceId, jobId, workerId, claimed: false, reason: 'kill_switch', durationMs: Date.now() - started });
+    return null;
+  }
 
   const leaseId = randomUUID();
   const leaseExpiresAt = new Date(now.getTime() + leaseTtlMs);
@@ -1011,9 +1029,13 @@ export async function claimJobById(jobId: string, workerId: string, opts: ClaimJ
     });
   });
   if (result.count !== 1) {
-    return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+    const current = await withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+    trace('job_claim.end', { span, workspaceId: requestedWorkspaceId, jobId, workerId, claimed: false, currentStatus: (current as any)?.status ?? null, durationMs: Date.now() - started });
+    return current;
   }
-  return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+  const claimed = await withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+  trace('job_claim.end', { span, workspaceId: requestedWorkspaceId, jobId, workerId, claimed: true, status: (claimed as any)?.status ?? null, durationMs: Date.now() - started });
+  return claimed;
 }
 
 export { claimJobById as claimJobByTask };

@@ -1,20 +1,29 @@
 import { withWorkspaceTransaction } from '../lib/db.js';
 import { writeAuditEvent } from '../lib/audit.js';
+import { redactText } from '../lib/redaction.js';
+import {
+  executeLivePublishing,
+  type PublishingFetch,
+  type PublishingLookup,
+} from './publishing-adapters.js';
 import { claimJobById, completeJob, createJob, failJob } from './jobs.js';
 
 /**
  * Publishing adapters — official contracts only, no fake success.
  *
- * This module deliberately contains NO HTTP client and NO scraping/upload hack.
- * An adapter may only ever call the documented platform API after real OAuth
- * credentials and the exact human approval exist. Because this build has no
- * platform developer apps or live clients, every attempt is settled honestly:
- *   - missing credentials  -> NOT_CONFIGURED (retryable, zero network calls)
- *   - credentials present  -> CREDENTIALS_ONLY + ADAPTER_NOT_IMPLEMENTED
+ * A live adapter runs only when BOTH real environment credentials and the
+ * explicit PUBLISHING_LIVE_ADAPTERS=1|true opt-in are present. Otherwise the
+ * honest legacy behaviour is preserved:
+ *   - missing credentials              -> NOT_CONFIGURED (retryable, zero network calls)
+ *   - credentials present, opt-in off  -> CREDENTIALS_ONLY + ADAPTER_NOT_IMPLEMENTED
  * Never invent an externalId, URL, publishedAt or ContentPost row.
  *
- * Official contracts (read-only documentation of what a future adapter must
- * implement; none of these endpoints is called from this file):
+ * Live HTTP lives in src/publishing-adapters.ts. The claim, the network call and
+ * the settlement are three separate phases: no fetch call holds a DB
+ * transaction, and both success and failure settle only after re-checking the
+ * approved gate and the job lease.
+ *
+ * Official contracts implemented by the live adapters:
  *
  * 1. YouTube Data API v3 — videos.insert
  *    POST https://www.googleapis.com/upload/youtube/v3/videos
@@ -40,8 +49,9 @@ import { claimJobById, completeJob, createJob, failJob } from './jobs.js';
  *
  * The clipping providers in src/integrations.ts (YAPS/CLIPPINGMINI/KLAP/
  * OPUSCLIP) are unrelated to publishing credentials and are never consulted
- * here. Only environment-variable *presence* is inspected; values are never
- * read into logs, payloads, responses or the database.
+ * here. Status responses expose only variable NAMES; credential values are
+ * read only by the live adapter, are never logged and are never returned in
+ * payloads, responses or the database.
  */
 
 export type PublishingPlatform = 'youtube' | 'tiktok' | 'instagram';
@@ -52,6 +62,8 @@ export const PUBLISHING_JOB_CATEGORY = 'PUBLISHING';
 /** Approval rows use this entityType; entityId is publishingApprovalEntityId(...). */
 export const PUBLISHING_APPROVAL_ENTITY_TYPE = 'publishing';
 export const PUBLISHING_DEFAULT_MAX_ATTEMPTS = 3;
+/** Live adapters run outside a transaction; keep their lease fenced while uploading. */
+export const PUBLISHING_LIVE_LEASE_TTL_MS = 5 * 60_000;
 
 export interface PublishingAdapterContract {
   api: string;
@@ -71,24 +83,35 @@ export const PUBLISHING_CONTRACTS: Record<PublishingPlatform, PublishingAdapterC
   },
   tiktok: {
     api: 'TikTok Content Posting API v2',
-    operation: 'direct post: /v2/post/publish/video/init/ and /v2/post/publish/status/fetch/',
+    operation: 'direct post: /v2/oauth/token/, /v2/post/publish/video/init/ and /v2/post/publish/status/fetch/',
     auth: 'OAuth scope video.publish (app-approved and creator-granted)',
-    requiredEnv: ['TIKTOK_CLIENT_KEY', 'TIKTOK_CLIENT_SECRET', 'TIKTOK_ACCESS_TOKEN'],
+    requiredEnv: ['TIKTOK_CLIENT_KEY', 'TIKTOK_CLIENT_SECRET', 'TIKTOK_REFRESH_TOKEN'],
     note: 'Direct post is not the upload/inbox flow; scope approval is mandatory.',
   },
   instagram: {
     api: 'Instagram Graph API',
-    operation: 'create media container, wait for FINISHED, then media_publish',
+    operation: 'refresh long-lived token, create media container, wait for FINISHED, then media_publish',
     auth: 'Instagram Business/Creator account with long-lived access token',
-    requiredEnv: ['INSTAGRAM_ACCESS_TOKEN', 'INSTAGRAM_USER_ID'],
+    requiredEnv: ['INSTAGRAM_ACCESS_TOKEN', 'INSTAGRAM_USER_ID', 'INSTAGRAM_APP_ID', 'INSTAGRAM_APP_SECRET'],
     note: 'No Basic Display API publishing; publication requires a finished container.',
   },
 };
 
+/** Required in addition to real credentials before any live network call. */
+export const PUBLISHING_LIVE_OPT_IN_ENV = 'PUBLISHING_LIVE_ADAPTERS';
+
+export function isPublishingLiveOptInEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  const value = String(env[PUBLISHING_LIVE_OPT_IN_ENV] ?? '').trim().toLowerCase();
+  return value === '1' || value === 'true';
+}
+
 export interface PublishingAdapterState {
   platform: PublishingPlatform;
   status: PublishingAdapterStatus;
+  /** Legacy field kept false: this build never advertises a fake client. */
   liveAdapter: false;
+  /** True only with both real env credentials and the explicit live opt-in. */
+  liveEnabled: boolean;
   contract: PublishingAdapterContract;
   credentials: {
     present: boolean;
@@ -133,6 +156,9 @@ export function getPublishingAdapter(
     platform,
     status: present ? 'CREDENTIALS_ONLY' : 'NOT_CONFIGURED',
     liveAdapter: false,
+    // A stored Integration row is not a usable OAuth client; only real env
+    // credentials plus the explicit opt-in can enable network calls.
+    liveEnabled: isPublishingLiveOptInEnabled() && env.present,
     contract: PUBLISHING_CONTRACTS[platform],
     credentials: {
       present,
@@ -205,9 +231,23 @@ const ENTITY_ID_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
 function normalizeOptions(raw: unknown): Record<string, string | null> {
   const source = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const out: Record<string, string | null> = {};
-  for (const key of ['title', 'description', 'caption', 'visibility'] as const) {
+  const limits: Record<string, number> = {
+    title: 5_000,
+    description: 5_000,
+    caption: 5_000,
+    visibility: 64,
+    // Basenames only; workspaceMediaPath enforces the scratch-root boundary.
+    mediaName: 128,
+    mediaFile: 128,
+    fileName: 128,
+    // Public https URLs only; never a filesystem path.
+    mediaUrl: 2_048,
+    videoUrl: 2_048,
+    fileUrl: 2_048,
+  };
+  for (const [key, limit] of Object.entries(limits)) {
     const value = source[key];
-    if (typeof value === 'string' && value.trim()) out[key] = value.trim().slice(0, 5_000);
+    if (typeof value === 'string' && value.trim()) out[key] = value.trim().slice(0, limit);
   }
   return out;
 }
@@ -401,9 +441,8 @@ export async function listPublishingJobs(workspaceId: string, filters: any = {})
 }
 
 /**
- * There is no live platform client in this build. This function is the single
- * seam a future adapter would replace with OAuth + the official endpoints
- * documented above. It never performs I/O and never returns a fake success.
+ * Legacy seam kept for callers that have not opted in. It performs no I/O and
+ * never returns a fake success. The live path uses executeLivePublishing().
  */
 export function attemptOfficialPublishing(_platform: PublishingPlatform, _job: any): {
   ok: false;
@@ -413,36 +452,188 @@ export function attemptOfficialPublishing(_platform: PublishingPlatform, _job: a
   return { ok: false, code: 'ADAPTER_NOT_IMPLEMENTED', retryable: false };
 }
 
+export interface PublishingProcessOptions {
+  workerId?: string;
+  now?: Date;
+  /** Injectable HTTP client for deterministic tests; defaults to globalThis.fetch. */
+  fetch?: PublishingFetch;
+  /** Injectable resolver used to reject private/loopback media URLs. */
+  lookup?: PublishingLookup;
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  maxPolls?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export interface PublishingSettlementOptions {
+  leaseId?: string | null;
+  workerId?: string | null;
+}
+
+type ProcessingPhase =
+  | { kind: 'final'; result: PublishingResult }
+  | { kind: 'live'; claimed: any; platform: PublishingPlatform };
+
+function publishingHttpStatus(code: string): number {
+  if (code === 'NOT_CONFIGURED') return 503;
+  if (code === 'ADAPTER_NOT_IMPLEMENTED') return 501;
+  if (code === 'APPROVAL_REQUIRED' || code === 'JOB_NOT_CLAIMABLE') return 409;
+  if (code === 'INVALID_MEDIA_INPUT' || code === 'INVALID_PLATFORM_RESULT' || code === 'INVALID_INPUT') return 400;
+  if (code === 'RATE_LIMITED') return 429;
+  if (code === 'TOKEN_EXPIRED') return 401;
+  return 502;
+}
+
+/** Copy only the exact variables required by this platform; never spread process.env. */
+function liveCredentials(platform: PublishingPlatform): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const name of PUBLISHING_CONTRACTS[platform].requiredEnv) {
+    const value = process.env[name]?.trim();
+    if (value) out[name] = value;
+  }
+  return out;
+}
+
+function failureBody(
+  code: string,
+  message: string,
+  statusCode: number,
+  adapter: PublishingAdapterState | null,
+  job: any,
+): PublishingResult {
+  return {
+    statusCode,
+    body: {
+      error: { code, message: redactText(message).slice(0, 300) },
+      code,
+      result: { ok: false, externalId: null, url: null, publishedAt: null },
+      ...(adapter ? { adapter } : {}),
+      job: publicJob(job),
+    },
+  };
+}
+
+function leaseStillHeld(job: any, opts: PublishingSettlementOptions): boolean {
+  if (!job || job.status !== 'RUNNING') return false;
+  if (opts.leaseId && job.leaseId !== opts.leaseId) return false;
+  if (opts.workerId && job.leaseOwner !== opts.workerId) return false;
+  if (job.leaseExpiresAt && new Date(job.leaseExpiresAt).getTime() <= Date.now()) return false;
+  return true;
+}
+
+/** The only way a ContentPost is created: an approved gate + a verified platform id. */
+function safePlatformUrl(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const parsed = new URL(value.trim());
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function settleLostApproval(
+  tx: any,
+  workspaceId: string,
+  job: any,
+  actor: string | null,
+  opts: PublishingSettlementOptions,
+): Promise<PublishingResult> {
+  const platform = (job.payload as any).platform as PublishingPlatform;
+  const settled = await failJob(
+    job.id,
+    { error: 'PUBLISHING_APPROVAL_REQUIRED', retryable: false },
+    {
+      workspaceId,
+      actor: actor ?? null,
+      leaseId: opts.leaseId ?? job.leaseId ?? null,
+      workerId: opts.workerId ?? job.leaseOwner ?? null,
+    },
+    tx,
+  ) as any;
+  await writeAuditEvent({
+    workspaceId,
+    userId: actor ?? null,
+    runId: null,
+    type: 'publishing_attempt_failed',
+    actor: actor ?? null,
+    data: {
+      jobId: job.id,
+      platform,
+      code: 'APPROVAL_REQUIRED',
+      retryable: false,
+      approvalRevoked: true,
+      status: settled?.status ?? null,
+      noNetworkCall: false,
+    },
+    tx,
+  });
+  return failureBody(
+    'APPROVAL_REQUIRED',
+    'The approval is no longer active; no post was recorded.',
+    409,
+    getPublishingAdapter(platform),
+    settled ?? job,
+  );
+}
+
 /**
  * One explicit processing attempt. There is no automatic background publisher:
  * the engine never claims AGENT_TASK jobs, and this route must be called by an
  * operator. The approval gate is re-checked before any state transition.
+ *
+ * Live adapters run in three phases: claim in one workspace transaction,
+ * network I/O with no transaction open, then settle in another workspace
+ * transaction with a fresh approval + lease check.
  */
 export async function processPublishingJob(
   workspaceId: string,
   jobId: string,
   actor: string | null,
-  opts: { workerId?: string; now?: Date } = {},
+  opts: PublishingProcessOptions = {},
 ): Promise<PublishingResult> {
   const now = opts.now instanceof Date && Number.isFinite(opts.now.getTime()) ? opts.now : new Date();
   const workerId = String(opts.workerId ?? actor ?? 'publishing-operator');
 
-  return withWorkspaceTransaction(workspaceId, async (tx) => {
+  const phase = await withWorkspaceTransaction(workspaceId, async (tx): Promise<ProcessingPhase> => {
     const job = await tx.job.findFirst({ where: { id: jobId, workspaceId } }) as any;
-    if (!job || !isPublishingJob(job)) return fail('NOT_FOUND', 'Publishing job not found.', 404);
+    if (!job || !isPublishingJob(job)) {
+      return { kind: 'final', result: fail('NOT_FOUND', 'Publishing job not found.', 404) };
+    }
 
     const gate = await gateForJob(tx, workspaceId, job);
     if (!gate) {
-      return fail(
-        'APPROVAL_REQUIRED',
-        'The publishing approval is missing, pending, rejected or does not match this job.',
-        409,
-      );
+      return {
+        kind: 'final',
+        result: fail(
+          'APPROVAL_REQUIRED',
+          'The publishing approval is missing, pending, rejected or does not match this job.',
+          409,
+        ),
+      };
     }
 
-    const claimed = await claimJobById(jobId, workerId, { workspaceId, now }, tx) as any;
+    const platform = (job.payload as any).platform as PublishingPlatform;
+    const adapter = getPublishingAdapter(platform);
+    const liveEnabled = isPublishingLiveOptInEnabled()
+      && adapter.status !== 'NOT_CONFIGURED'
+      && adapter.credentials.present;
+    // A live upload may run longer than the default lease; keep the fencing
+    // token valid for the whole adapter call without holding a DB transaction.
+    const claimed = await claimJobById(jobId, workerId, {
+      workspaceId,
+      now,
+      leaseTtlMs: liveEnabled ? PUBLISHING_LIVE_LEASE_TTL_MS : undefined,
+    }, tx) as any;
     if (!claimed || claimed.status !== 'RUNNING') {
-      return { statusCode: 409, body: { error: { code: 'JOB_NOT_CLAIMABLE', message: 'Job is not claimable.' }, job: publicJob(claimed ?? job) } };
+      return {
+        kind: 'final',
+        result: {
+          statusCode: 409,
+          body: { error: { code: 'JOB_NOT_CLAIMABLE', message: 'Job is not claimable.' }, job: publicJob(claimed ?? job) },
+        },
+      };
     }
 
     await writeAuditEvent({
@@ -461,22 +652,145 @@ export async function processPublishingJob(
       tx,
     });
 
-    const adapter = getPublishingAdapter((job.payload as any).platform);
-    const code = adapter.status === 'NOT_CONFIGURED'
-      ? 'NOT_CONFIGURED'
-      : attemptOfficialPublishing((job.payload as any).platform, job).code;
-    const classification = classifyPublishingFailure(code);
+    if (!liveEnabled) {
+      // Preserve the legacy, network-free behaviour exactly.
+      const code = adapter.status === 'NOT_CONFIGURED'
+        ? 'NOT_CONFIGURED'
+        : attemptOfficialPublishing(platform, job).code;
+      const classification = classifyPublishingFailure(code);
+      const settled = await failJob(
+        jobId,
+        {
+          error: code === 'NOT_CONFIGURED' ? 'PUBLISHING_NOT_CONFIGURED' : 'PUBLISHING_ADAPTER_NOT_IMPLEMENTED',
+          retryable: classification.retryable,
+          nextRunAt: classification.retryable
+            ? new Date(now.getTime() + publishingBackoffMs(Number(claimed.attempts)))
+            : null,
+        },
+        { workspaceId, actor: actor ?? null, leaseId: claimed.leaseId, workerId },
+        tx,
+      ) as any;
 
+      await writeAuditEvent({
+        workspaceId,
+        userId: actor ?? null,
+        runId: null,
+        type: 'publishing_attempt_failed',
+        actor: actor ?? null,
+        data: {
+          jobId,
+          platform,
+          code,
+          retryable: classification.retryable,
+          attempts: claimed.attempts,
+          status: settled?.status ?? null,
+          noNetworkCall: true,
+        },
+        tx,
+      });
+
+      return {
+        kind: 'final',
+        result: {
+          statusCode: publishingHttpStatus(code),
+          body: {
+            error: {
+              code,
+              message: code === 'NOT_CONFIGURED'
+                ? 'Platform credentials are not configured; no upload was attempted.'
+                : 'Credentials are present but no live platform adapter is implemented; no upload was attempted.',
+            },
+            code,
+            result: { ok: false, externalId: null, url: null, publishedAt: null },
+            adapter,
+            job: publicJob(settled ?? claimed),
+          },
+        },
+      };
+    }
+
+    return { kind: 'live', claimed, platform };
+  });
+
+  if (phase.kind === 'final') return phase.result;
+
+  const { claimed, platform } = phase;
+  let live: Awaited<ReturnType<typeof executeLivePublishing>>;
+  try {
+    live = await executeLivePublishing({
+      platform,
+      workspaceId,
+      jobId,
+      idempotencyKey: String((claimed.payload as any).idempotencyKey ?? ''),
+      options: ((claimed.payload as any).options ?? {}) as Record<string, string | null>,
+      env: liveCredentials(platform),
+    }, {
+      fetch: opts.fetch ?? globalThis.fetch,
+      lookup: opts.lookup,
+      timeoutMs: opts.timeoutMs,
+      pollIntervalMs: opts.pollIntervalMs,
+      maxPolls: opts.maxPolls,
+      sleep: opts.sleep,
+    });
+  } catch {
+    live = {
+      ok: false,
+      code: 'NETWORK_ERROR',
+      message: 'Publishing adapter failed unexpectedly.',
+      retryable: true,
+      providerStatus: null,
+    };
+  }
+
+  const settlement: PublishingSettlementOptions = { leaseId: claimed.leaseId, workerId };
+  if (live.ok) {
+    return settleRealPublishingSuccess(workspaceId, jobId, live.value, actor, settlement);
+  }
+  return settleRealPublishingFailure(workspaceId, jobId, {
+    code: live.code,
+    message: live.message,
+    retryable: live.retryable,
+    providerStatus: live.providerStatus,
+    attempts: Number(claimed.attempts),
+  }, actor, settlement);
+}
+
+async function settleRealPublishingFailure(
+  workspaceId: string,
+  jobId: string,
+  failure: {
+    code: string;
+    message: string;
+    retryable: boolean;
+    providerStatus: number | null;
+    attempts: number;
+  },
+  actor: string | null,
+  opts: PublishingSettlementOptions,
+): Promise<PublishingResult> {
+  return withWorkspaceTransaction(workspaceId, async (tx) => {
+    const job = await tx.job.findFirst({ where: { id: jobId, workspaceId } }) as any;
+    if (!job || !isPublishingJob(job)) return fail('NOT_FOUND', 'Publishing job not found.', 404);
+    if (!leaseStillHeld(job, opts)) {
+      return failureBody('JOB_NOT_CLAIMABLE', 'Job is no longer held by this publisher.', 409, null, job);
+    }
+    const gate = await gateForJob(tx, workspaceId, job);
+    if (!gate) return settleLostApproval(tx, workspaceId, job, actor, opts);
+
+    const platform = (job.payload as any).platform as PublishingPlatform;
+    const code = String(failure.code || 'PLATFORM_TEMPORARY_ERROR');
+    const classification = classifyPublishingFailure(code);
+    const attempts = Number.isFinite(failure.attempts) ? failure.attempts : Number(job.attempts);
     const settled = await failJob(
       jobId,
       {
-        error: code === 'NOT_CONFIGURED' ? 'PUBLISHING_NOT_CONFIGURED' : 'PUBLISHING_ADAPTER_NOT_IMPLEMENTED',
+        error: `PUBLISHING_${code}`,
         retryable: classification.retryable,
         nextRunAt: classification.retryable
-          ? new Date(now.getTime() + publishingBackoffMs(Number(claimed.attempts)))
+          ? new Date(Date.now() + publishingBackoffMs(attempts))
           : null,
       },
-      { workspaceId, actor: actor ?? null, leaseId: claimed.leaseId, workerId },
+      { workspaceId, actor: actor ?? null, leaseId: opts.leaseId, workerId: opts.workerId },
       tx,
     ) as any;
 
@@ -488,71 +802,79 @@ export async function processPublishingJob(
       actor: actor ?? null,
       data: {
         jobId,
-        platform: (job.payload as any).platform,
+        platform,
         code,
         retryable: classification.retryable,
-        attempts: claimed.attempts,
+        providerStatus: Number.isInteger(failure.providerStatus) ? failure.providerStatus : null,
+        attempts,
         status: settled?.status ?? null,
-        noNetworkCall: true,
+        noNetworkCall: false,
       },
       tx,
     });
 
-    const statusCode = code === 'NOT_CONFIGURED' ? 503 : 501;
-    return {
-      statusCode,
-      body: {
-        error: {
-          code,
-          message: code === 'NOT_CONFIGURED'
-            ? 'Platform credentials are not configured; no upload was attempted.'
-            : 'Credentials are present but no live platform adapter is implemented; no upload was attempted.',
-        },
-        code,
-        result: { ok: false, externalId: null, url: null, publishedAt: null },
-        adapter,
-        job: publicJob(settled ?? claimed),
-      },
-    };
+    return failureBody(
+      code,
+      redactText(failure.message).slice(0, 300),
+      publishingHttpStatus(code),
+      getPublishingAdapter(platform),
+      settled ?? job,
+    );
   });
 }
 
 /**
- * Success settlement for a future REAL adapter. It is intentionally not used
- * by attemptOfficialPublishing(): a ContentPost may only be written from a
- * verified platform response containing an externalId.
+ * Success settlement for a REAL adapter. A ContentPost may only be written
+ * from a verified platform response containing a real externalId, and only
+ * while the approved gate and this publisher's lease are still held.
  */
 export async function settleRealPublishingSuccess(
   workspaceId: string,
   jobId: string,
   result: { externalId: string; url?: string | null; publishedAt?: Date | null },
   actor: string | null,
+  opts: PublishingSettlementOptions = {},
 ): Promise<PublishingResult> {
-  if (!result?.externalId || !String(result.externalId).trim()) {
+  const externalId = typeof result?.externalId === 'string' ? result.externalId.trim() : '';
+  if (!externalId || externalId.length > 255) {
     return fail('INVALID_PLATFORM_RESULT', 'A real externalId is required to record a publish.', 502);
   }
+  const url = safePlatformUrl(result.url);
+  const publishedAt = result.publishedAt instanceof Date && Number.isFinite(result.publishedAt.getTime())
+    ? result.publishedAt
+    : null;
+
   return withWorkspaceTransaction(workspaceId, async (tx) => {
     const job = await tx.job.findFirst({ where: { id: jobId, workspaceId } }) as any;
     if (!job || !isPublishingJob(job)) return fail('NOT_FOUND', 'Publishing job not found.', 404);
-    if (job.status !== 'RUNNING') return fail('JOB_NOT_CLAIMABLE', 'Job is not running.', 409);
+    if (!leaseStillHeld(job, opts)) {
+      return failureBody('JOB_NOT_CLAIMABLE', 'Job is no longer held by this publisher.', 409, null, job);
+    }
+    const gate = await gateForJob(tx, workspaceId, job);
+    if (!gate) return settleLostApproval(tx, workspaceId, job, actor, opts);
 
     const payload = job.payload as any;
-    await tx.contentPost.create({
-      data: {
-        workspaceId,
-        platform: payload.platform,
-        externalId: String(result.externalId),
-        title: payload.options?.title ?? null,
-        url: result.url ?? null,
-        publishedAt: result.publishedAt instanceof Date ? result.publishedAt : null,
-        format: payload.entity?.type ?? null,
-      },
-    });
+    const existing = await tx.contentPost.findFirst({
+      where: { workspaceId, platform: payload.platform, externalId },
+    }) as any;
+    if (!existing) {
+      await tx.contentPost.create({
+        data: {
+          workspaceId,
+          platform: payload.platform,
+          externalId,
+          title: payload.options?.title ?? null,
+          url,
+          publishedAt,
+          format: payload.entity?.type ?? null,
+        },
+      });
+    }
     const settled = await completeJob(jobId, {
       workspaceId,
       actor: actor ?? null,
-      leaseId: job.leaseId ?? null,
-      workerId: job.leaseOwner ?? actor ?? null,
+      leaseId: opts.leaseId ?? job.leaseId ?? null,
+      workerId: opts.workerId ?? job.leaseOwner ?? actor ?? null,
     }, tx) as any;
     await writeAuditEvent({
       workspaceId,
@@ -563,11 +885,17 @@ export async function settleRealPublishingSuccess(
       data: {
         jobId,
         platform: payload.platform,
-        externalId: String(result.externalId),
+        externalId,
         status: 'SUCCEEDED',
       },
       tx,
     });
-    return { statusCode: 200, body: { job: publicJob(settled) } };
+    return {
+      statusCode: 200,
+      body: {
+        job: publicJob(settled),
+        result: { ok: true, externalId, url, publishedAt },
+      },
+    };
   });
 }

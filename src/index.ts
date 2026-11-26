@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { loadConfig, resolveTrustProxy } from './config.js';
 import { join, extname } from 'node:path';
 import { createReadStream } from 'node:fs';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { prisma, withWorkspaceTransaction } from '../lib/db.js';
 import { writeAuditEvent } from '../lib/audit.js';
 import { redactError, redactText } from '../lib/redaction.js';
@@ -14,6 +15,7 @@ import { resolvePublicFile } from '../lib/static-files.js';
 import { hashPassword, verifyPassword, createSession, verifySession, sessionCookieHeader, readSessionCookie, revokeSession } from '../lib/auth.js';
 import { isAffiliatePayoutAction, resolvePayoutTransition, summarizeAttribution, summarizePayouts } from './affiliate.js';
 import { getBrowserGateway, validateBrowserUrl } from './browser-gateway.js';
+import { newSpan, trace } from './qa-trace.js';
 
 const trustProxy = resolveTrustProxy(process.env.TRUST_PROXY);
 const app = Fastify({ logger: true, trustProxy: trustProxy as any });
@@ -38,6 +40,9 @@ app.register(helmet, {
 });
 app.register(cors, { origin: allowedOrigin, credentials: true });
 app.register(rateLimit, { max: 100, timeWindow: '1 minute' });
+
+// Media uploads accept a raw binary body; register before any route is compiled.
+app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (_req: any, payload: Buffer, done: any) => done(null, payload));
 
 app.setErrorHandler(async (err, req, reply) => {
   const status = (err as any).statusCode ?? 500;
@@ -747,6 +752,8 @@ app.post('/api/approvals/:id/decide', async (req, reply) => {
   // Orchestration tasks own their approval row together with the task and the
   // blocked job, so that module records the decision.
   if (String(existing.entityType) === 'orchestration_task') {
+    const approvalSpan = newSpan();
+    trace('approval.decide.start', { span: approvalSpan, workspaceId: ctx.workspaceId, approvalId: id, status, entityType: String(existing.entityType) });
     const task: any = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) =>
       tx.orchestrationTask.findFirst({ where: { id: String(existing.entityId), workspaceId: ctx.workspaceId }, select: { runId: true } })
     );
@@ -754,7 +761,9 @@ app.post('/api/approvals/:id/decide', async (req, reply) => {
     const mod = await import('./orchestration.js');
     try {
       await mod.decideOrchestrationTaskApproval(ctx.workspaceId, String(task.runId), String(existing.entityId), approved, ctx.userId, body.reason ?? null);
+      trace('approval.decide.end', { span: approvalSpan, runId: String(task.runId), status, ok: true });
     } catch (error: any) {
+      trace('approval.decide.error', { span: approvalSpan, runId: String(task.runId), status, error: String(error?.message ?? 'APPROVAL_DECISION_FAILED').slice(0, 200) });
       return reply.code(error?.statusCode === 404 ? 404 : 409).send({ error: String(error?.message ?? 'APPROVAL_DECISION_FAILED') });
     }
     const decided: any = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.approval.findUnique({ where: { id } }));
@@ -1168,6 +1177,8 @@ app.post('/api/jobs/:id/cancel', async (req, reply) => {
   if (job.type === 'CONTENT_DISCOVERY' && !requireOperatorRole(ctx, reply)) return;
   const { cancelJob } = await import('./jobs.js');
   const updated = await cancelJob(id, { reason: body.reason, leaseId: body.leaseId ?? job.leaseId, workerId: body.workerId ?? job.leaseOwner, workspaceId: ctx.workspaceId });
+  // Media processes observe the same cancel semantics and kill live children.
+  if (updated && (await import('./media-workspace.js')).isMediaJob(updated)) abortActiveMediaJob(id);
   return { job: updated };
 });
 
@@ -1194,6 +1205,12 @@ app.post('/api/jobs/:id/retry', async (req, reply) => {
   if (job.type === 'CONTENT_DISCOVERY' && !requireOperatorRole(ctx, reply)) return;
   const { requeueDeadLetterJob } = await import('./jobs.js');
   const updated = await requeueDeadLetterJob(id, { actor: ctx.userId, reason: body.reason ?? null, maxAttempts: body.maxAttempts, workspaceId: ctx.workspaceId });
+  if (updated && (await import('./media-workspace.js')).isMediaJob(updated)) {
+    await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.job.update({
+      where: { id, workspaceId: ctx.workspaceId },
+      data: { payload: { ...((updated.payload ?? {}) as Record<string, unknown>), kind: 'media_clip', stage: 'queued', progress: 0, result: { items: [] }, error: null } },
+    }));
+  }
   return { job: updated };
 });
 
@@ -1569,14 +1586,16 @@ app.post('/api/media/transcription/audio', async (req, reply) => {
   if (!ctx) return;
   const body = (req.body ?? {}) as any;
   try {
-    const { transcribeAndHighlight } = await import('./transcription.js');
+    const { transcribeAndHighlight, normalizeTranscriptionLanguage } = await import('./transcription.js');
     const { workspaceMediaPath, workspaceMediaRoot } = await import('./media-workspace.js');
+    // Strict allowlist before any filesystem work; model selection is server-side only.
+    const language = normalizeTranscriptionLanguage(body.language);
     const result = await transcribeAndHighlight({
       audioPath: workspaceMediaPath(ctx.workspaceId, body.audioName),
       outputDir: workspaceMediaRoot(ctx.workspaceId),
-      // F-01: the model is exclusively selected by the server-side WHISPER_MODEL
-      // environment variable; client-supplied model paths are never accepted.
-      language: body.language ? String(body.language) : undefined,
+      // F-01: modelPath is never read from the request; only WHISPER_MODEL /
+      // WHISPER_MODEL_MULTILINGUAL on the server may select weights.
+      language,
       threads: body.threads === undefined ? undefined : Number(body.threads),
       keywords: Array.isArray(body.keywords) ? body.keywords : [],
       minScore: Number(body.minScore) || undefined,
@@ -1585,6 +1604,469 @@ app.post('/api/media/transcription/audio', async (req, reply) => {
   } catch (error) {
     const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
     reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
+/* ---- Phase E media jobs, batch export, upload and preview ---------------- */
+
+/** One in-flight process per media job; cancellation aborts the live child. */
+const activeMediaJobs = new Map<string, AbortController>();
+
+function abortActiveMediaJob(jobId: string): boolean {
+  const controller = activeMediaJobs.get(jobId);
+  if (!controller) return false;
+  controller.abort();
+  activeMediaJobs.delete(jobId);
+  return true;
+}
+
+class MediaJobCancelled extends Error {
+  constructor() { super('MEDIA_JOB_CANCELLED'); this.name = 'MediaJobCancelled'; }
+}
+
+interface MediaClipSpec {
+  name: string;
+  start: number;
+  duration: number;
+  vertical?: boolean;
+  width?: number;
+  height?: number;
+  subtitlesName?: string;
+}
+
+/** Accept basenames only; absolute paths, traversal and duplicates are rejected. */
+function parseMediaClipSpecs(
+  workspaceId: string,
+  raw: unknown,
+  mediaPath: (workspaceId: string, name: unknown) => string,
+): MediaClipSpec[] {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > 12) throw Object.assign(new Error('INVALID_INPUT'), { statusCode: 400 });
+  const names = new Set<string>();
+  return raw.map((entry: any) => {
+    if (!entry || typeof entry !== 'object') throw Object.assign(new Error('INVALID_INPUT'), { statusCode: 400 });
+    const name = String(entry.name ?? '').trim();
+    if (names.has(name)) throw Object.assign(new Error('DUPLICATE_OUTPUT_NAME'), { statusCode: 400 });
+    names.add(name);
+    // Validation resolves to the workspace root; traversal names throw INVALID_MEDIA_NAME.
+    mediaPath(workspaceId, name);
+    if (entry.subtitlesName !== undefined && entry.subtitlesName !== null && entry.subtitlesName !== '') {
+      mediaPath(workspaceId, entry.subtitlesName);
+    }
+    const start = Number(entry.start);
+    const duration = Number(entry.duration);
+    if (!Number.isFinite(start) || start < 0 || !Number.isFinite(duration) || duration <= 0 || duration > 600) {
+      throw Object.assign(new Error('INVALID_INPUT'), { statusCode: 400 });
+    }
+    if (entry.width !== undefined && (!Number.isInteger(Number(entry.width)) || Number(entry.width) <= 0)) {
+      throw Object.assign(new Error('INVALID_INPUT'), { statusCode: 400 });
+    }
+    if (entry.height !== undefined && (!Number.isInteger(Number(entry.height)) || Number(entry.height) <= 0)) {
+      throw Object.assign(new Error('INVALID_INPUT'), { statusCode: 400 });
+    }
+    return {
+      name,
+      start,
+      duration,
+      ...(entry.vertical === true ? { vertical: true } : {}),
+      ...(entry.width === undefined ? {} : { width: Number(entry.width) }),
+      ...(entry.height === undefined ? {} : { height: Number(entry.height) }),
+      ...(entry.subtitlesName ? { subtitlesName: String(entry.subtitlesName) } : {}),
+    };
+  });
+}
+
+app.post('/api/media/export/batch', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  let clips: MediaClipSpec[];
+  let input: string;
+  let root: string;
+  try {
+    const mod = await import('./media-workspace.js');
+    clips = parseMediaClipSpecs(ctx.workspaceId, body.clips, mod.workspaceMediaPath);
+    input = mod.workspaceMediaPath(ctx.workspaceId, body.inputName);
+    root = mod.workspaceMediaRoot(ctx.workspaceId);
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+
+  const { exportVideo, probeMedia } = await import('./video/clipping.js');
+  const { mediaErrorBody } = await import('./media-workspace.js');
+  let durationSeconds: number | null = null;
+  try {
+    durationSeconds = (await probeMedia(input)).durationSeconds;
+  } catch (error) {
+    return reply.code(mediaErrorStatusForProbe(error)).send(mediaErrorBody(error));
+  }
+
+  const results: any[] = [];
+  for (const clip of clips) {
+    if (durationSeconds !== null && Number.isFinite(durationSeconds) && clip.start + clip.duration > durationSeconds + 0.25) {
+      results.push({ name: clip.name, ok: false, error: { code: 'INVALID_INPUT', message: 'CLIP_OUT_OF_RANGE' } });
+      continue;
+    }
+    try {
+      const result = await exportVideo({
+        input,
+        output: join(root, clip.name),
+        start: clip.start,
+        duration: clip.duration,
+        vertical: clip.vertical,
+        width: clip.width,
+        height: clip.height,
+        subtitles: clip.subtitlesName ? join(root, clip.subtitlesName) : undefined,
+        allowedTempDir: root,
+        threads: 1,
+      });
+      if (!result.ok) {
+        results.push({ name: clip.name, ok: false, error: mediaErrorBody({ code: result.error.code, message: result.error.message, details: result.error.details }) });
+      } else {
+        results.push({ name: clip.name, ok: true, outputName: clip.name, durationMs: result.durationMs, steps: result.steps.map((step) => ({ name: step.name, ok: step.ok, durationMs: step.durationMs })) });
+      }
+    } catch (error) {
+      results.push({ name: clip.name, ok: false, error: mediaErrorBody(error) });
+    }
+  }
+  return {
+    batch: {
+      total: results.length,
+      succeeded: results.filter((entry) => entry.ok).length,
+      failed: results.filter((entry) => !entry.ok).length,
+      sourceDurationSeconds: durationSeconds,
+      results,
+    },
+  };
+});
+
+function mediaErrorStatusForProbe(error: unknown): number {
+  const code = String((error as any)?.code ?? '');
+  if (code === 'NOT_CONFIGURED') return 503;
+  if (code === 'INVALID_INPUT' || code === 'MEDIA_NOT_FOUND') return 400;
+  return 502;
+}
+
+app.post('/api/media/planner/clips', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  try {
+    const { planHighlightClips } = await import('./video/clipping.js');
+    return {
+      plannedClips: planHighlightClips(Array.isArray(body.highlights) ? body.highlights : [], {
+        maxClips: body.maxClips === undefined ? undefined : Number(body.maxClips),
+        maxDurationMs: body.maxDurationMs === undefined ? undefined : Number(body.maxDurationMs),
+        minDurationMs: body.minDurationMs === undefined ? undefined : Number(body.minDurationMs),
+        padMs: body.padMs === undefined ? undefined : Number(body.padMs),
+        sourceDurationSeconds: body.sourceDurationSeconds === undefined ? null : Number(body.sourceDurationSeconds),
+      }),
+    };
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
+app.post('/api/media/jobs', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const body = (req.body ?? {}) as any;
+  try {
+    const { normalizeTranscriptionLanguage } = await import('./transcription.js');
+    const { workspaceMediaPath, MEDIA_JOB_CATEGORY, MEDIA_JOB_KIND } = await import('./media-workspace.js');
+    const clips = parseMediaClipSpecs(ctx.workspaceId, body.clips, workspaceMediaPath);
+    workspaceMediaPath(ctx.workspaceId, body.sourceName);
+    if (body.subtitlesName !== undefined && body.subtitlesName !== null && body.subtitlesName !== '') {
+      workspaceMediaPath(ctx.workspaceId, body.subtitlesName);
+    }
+    const language = normalizeTranscriptionLanguage(body.language);
+    const idempotencyKey = body.idempotencyKey === undefined || body.idempotencyKey === null
+      ? null
+      : String(body.idempotencyKey).trim().slice(0, 128) || null;
+    const { createJob } = await import('./jobs.js');
+    const job = await createJob({
+      workspaceId: ctx.workspaceId,
+      type: 'AGENT_TASK',
+      category: MEDIA_JOB_CATEGORY,
+      payload: {
+        kind: MEDIA_JOB_KIND,
+        stage: 'queued',
+        progress: 0,
+        result: { items: [] },
+        sourceName: String(body.sourceName),
+        ...(language ? { language } : {}),
+        ...(body.subtitlesName ? { subtitlesName: String(body.subtitlesName) } : {}),
+        clips,
+      },
+      idempotencyKey,
+      maxAttempts: body.maxAttempts === undefined ? undefined : Number(body.maxAttempts),
+    });
+    const { publicMediaJob } = await import('./media-workspace.js');
+    return reply.code(201).send({ job: publicMediaJob(job) });
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
+app.get('/api/media/jobs', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { getJobs } = await import('./jobs.js');
+  const { isMediaJob, publicMediaJob } = await import('./media-workspace.js');
+  const rows = await getJobs(ctx.workspaceId, { limit: (req.query as any)?.limit ?? 50 });
+  return { jobs: rows.filter(isMediaJob).map(publicMediaJob) };
+});
+
+app.get('/api/media/jobs/:id', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { getJob } = await import('./jobs.js');
+  const { isMediaJob, publicMediaJob } = await import('./media-workspace.js');
+  const job = await getJob((req.params as any).id, ctx.workspaceId);
+  if (!job || !isMediaJob(job)) return reply.code(404).send({ error: 'NOT_FOUND' });
+  return { job: publicMediaJob(job) };
+});
+
+app.post('/api/media/jobs/:id/process', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const id = (req.params as any).id;
+  const { getJob, claimJobById, completeJob, failJob } = await import('./jobs.js');
+  const {
+    isMediaJob, publicMediaJob, mediaErrorBody, workspaceMediaPath, workspaceMediaRoot, MEDIA_JOB_KIND,
+  } = await import('./media-workspace.js');
+
+  const initial = await getJob(id, ctx.workspaceId);
+  if (!initial || !isMediaJob(initial)) return reply.code(404).send({ error: 'NOT_FOUND' });
+  if (activeMediaJobs.has(id)) return reply.code(409).send({ error: 'JOB_ALREADY_PROCESSING' });
+
+  const claimed = await claimJobById(id, `media-worker-${ctx.userId}`, { workspaceId: ctx.workspaceId, leaseTtlMs: 600_000 });
+  if (!claimed || claimed.status !== 'RUNNING') return reply.code(409).send({ error: 'JOB_NOT_CLAIMABLE' });
+
+  const controller = new AbortController();
+  activeMediaJobs.set(id, controller);
+  const leaseId = claimed.leaseId;
+  const workerId = claimed.leaseOwner ?? `media-worker-${ctx.userId}`;
+  const payload = (claimed.payload ?? {}) as Record<string, any>;
+  const result = payload.result && typeof payload.result === 'object' ? { ...payload.result } : { items: [] as any[] };
+  if (!Array.isArray(result.items)) result.items = [];
+
+  const patch = async (fields: Record<string, unknown>): Promise<void> => {
+    if (controller.signal.aborted) throw new MediaJobCancelled();
+    const fresh = await getJob(id, ctx.workspaceId);
+    if (!fresh || fresh.status !== 'RUNNING') throw new MediaJobCancelled();
+    const merged = { ...((fresh.payload ?? {}) as Record<string, unknown>), ...fields, result };
+    await withWorkspaceTransaction(ctx.workspaceId, (tx: any) =>
+      tx.job.update({ where: { id, workspaceId: ctx.workspaceId }, data: { payload: merged } }));
+  };
+
+  const assertActive = async (): Promise<void> => {
+    const fresh = await getJob(id, ctx.workspaceId);
+    if (!fresh || fresh.status !== 'RUNNING' || controller.signal.aborted) {
+      controller.abort();
+      throw new MediaJobCancelled();
+    }
+  };
+
+  try {
+    await patch({ kind: MEDIA_JOB_KIND, stage: 'probe', progress: 10 });
+    const input = workspaceMediaPath(ctx.workspaceId, String(payload.sourceName ?? ''));
+    const root = workspaceMediaRoot(ctx.workspaceId);
+    const { probeMedia, extractAudio, exportVideo } = await import('./video/clipping.js');
+    await assertActive();
+    const metadata = await probeMedia(input);
+    await assertActive();
+    result.sourceDurationSeconds = metadata.durationSeconds ?? null;
+
+    if (payload.language) {
+      await patch({ stage: 'transcription', progress: 25 });
+      const audioName = `media-job-${id.replace(/[^A-Za-z0-9_-]/g, '').slice(-16)}.wav`;
+      const audioPath = workspaceMediaPath(ctx.workspaceId, audioName);
+      await extractAudio({ input, output: audioPath, threads: 1, signal: controller.signal });
+      await assertActive();
+      const { transcribeAndHighlight } = await import('./transcription.js');
+      const transcription = await transcribeAndHighlight({
+        audioPath,
+        outputDir: root,
+        language: payload.language,
+        threads: 1,
+        signal: controller.signal,
+        keywords: Array.isArray(payload.keywords) ? payload.keywords : [],
+        minScore: Number(payload.minScore) || undefined,
+      });
+      await assertActive();
+      result.transcription = {
+        language: payload.language,
+        textLength: transcription.text.length,
+        segmentCount: transcription.segments.length,
+        highlights: transcription.highlights.map((highlight) => ({
+          startMs: highlight.startMs,
+          endMs: highlight.endMs,
+          text: highlight.text,
+          score: highlight.score,
+        })),
+      };
+      await patch({ stage: 'transcription', progress: 40 });
+    }
+
+    const clips: MediaClipSpec[] = Array.isArray(payload.clips) ? payload.clips : [];
+    for (let index = 0; index < clips.length; index += 1) {
+      await assertActive();
+      const clip = clips[index];
+      const name = String(clip.name ?? '');
+      const output = workspaceMediaPath(ctx.workspaceId, name);
+      if (metadata.durationSeconds !== null
+        && Number.isFinite(metadata.durationSeconds)
+        && clip.start + clip.duration > metadata.durationSeconds + 0.25) {
+        result.items.push({ name, ok: false, error: { code: 'INVALID_INPUT', message: 'CLIP_OUT_OF_RANGE' } });
+      } else {
+        try {
+          const exported = await exportVideo({
+            input,
+            output,
+            start: clip.start,
+            duration: clip.duration,
+            vertical: clip.vertical,
+            width: clip.width,
+            height: clip.height,
+            subtitles: clip.subtitlesName ? workspaceMediaPath(ctx.workspaceId, clip.subtitlesName) : undefined,
+            allowedTempDir: root,
+            threads: 1,
+            signal: controller.signal,
+          });
+          result.items.push(exported.ok
+            ? { name, ok: true, outputName: name, durationMs: exported.durationMs }
+            : { name, ok: false, error: mediaErrorBody({ code: exported.error.code, message: exported.error.message, details: exported.error.details }) });
+        } catch (error) {
+          if (error instanceof MediaJobCancelled || controller.signal.aborted) throw error;
+          result.items.push({ name, ok: false, error: mediaErrorBody(error) });
+        }
+      }
+      await patch({ stage: 'export', progress: Math.min(95, 40 + Math.round((60 * (index + 1)) / Math.max(1, clips.length))) });
+    }
+
+    await assertActive();
+    await patch({ stage: 'complete', progress: 100 });
+    const completed = await completeJob(id, { leaseId, workerId, workspaceId: ctx.workspaceId });
+    return { job: publicMediaJob(completed ?? await getJob(id, ctx.workspaceId)) };
+  } catch (error) {
+    const cancelled = error instanceof MediaJobCancelled || controller.signal.aborted;
+    const safe: { code: string; message: string } = cancelled
+      ? { code: 'CANCELLED', message: 'MEDIA_JOB_CANCELLED' }
+      : (() => {
+          const body = mediaErrorBody(error);
+          return { code: body.code, message: String('message' in body ? body.message : body.error) };
+        })();
+    await withWorkspaceTransaction(ctx.workspaceId, async (tx: any) => {
+      const fresh = await getJob(id, ctx.workspaceId);
+      if (!fresh) return;
+      await tx.job.update({
+        where: { id, workspaceId: ctx.workspaceId },
+        data: {
+          payload: {
+            ...((fresh.payload ?? {}) as Record<string, unknown>),
+            stage: cancelled ? 'cancelled' : 'failed',
+            error: cancelled ? null : safe,
+            result,
+          },
+        },
+      });
+    }).catch(() => undefined);
+    if (!cancelled) {
+      await failJob(id, { error: `${safe.code}: ${safe.message}`, retryable: false }, { leaseId, workerId, workspaceId: ctx.workspaceId });
+    }
+    const job = publicMediaJob(await getJob(id, ctx.workspaceId));
+    if (cancelled) return { job, cancelled: true };
+    return reply.code(502).send({ job, error: safe });
+  } finally {
+    activeMediaJobs.delete(id);
+  }
+});
+
+/** Authenticated basename-only download with optional bounded byte range. */
+app.get('/api/media/files/:name', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  let filePath: string;
+  try {
+    const { workspaceMediaPath } = await import('./media-workspace.js');
+    filePath = workspaceMediaPath(ctx.workspaceId, (req.params as any).name);
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+  const info = await stat(filePath).catch(() => null);
+  if (!info?.isFile()) return reply.code(404).send({ error: 'MEDIA_NOT_FOUND' });
+
+  const name = String((req.params as any).name);
+  const extension = extname(name).toLowerCase();
+  const contentType: Record<string, string> = {
+    '.mp4': 'video/mp4', '.webm': 'video/webm', '.wav': 'audio/wav', '.mp3': 'audio/mpeg',
+    '.flac': 'audio/flac', '.srt': 'application/x-subrip', '.txt': 'text/plain; charset=utf-8',
+  };
+  reply.header('content-type', contentType[extension] ?? 'application/octet-stream');
+  reply.header('content-disposition', `inline; filename="${name}"`);
+  reply.header('accept-ranges', 'bytes');
+
+  const rawRange = typeof req.headers.range === 'string' ? req.headers.range : null;
+  if (rawRange) {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(rawRange.trim());
+    if (!match || (!match[1] && !match[2])) {
+      reply.header('content-range', `bytes */${info.size}`);
+      return reply.code(416).send({ error: 'INVALID_RANGE' });
+    }
+    const startByte = match[1] ? Number(match[1]) : Math.max(0, info.size - Number(match[2] || 0));
+    const endByte = match[1] && match[2] ? Number(match[2]) : info.size - 1;
+    if (!Number.isFinite(startByte) || !Number.isFinite(endByte) || startByte < 0 || endByte < startByte || startByte >= info.size) {
+      reply.header('content-range', `bytes */${info.size}`);
+      return reply.code(416).send({ error: 'INVALID_RANGE' });
+    }
+    const cappedEnd = Math.min(endByte, startByte + 8 * 1024 * 1024 - 1, info.size - 1);
+    reply.code(206);
+    reply.header('content-range', `bytes ${startByte}-${cappedEnd}/${info.size}`);
+    reply.header('content-length', cappedEnd - startByte + 1);
+    return reply.send(createReadStream(filePath, { start: startByte, end: cappedEnd }));
+  }
+  reply.header('content-length', info.size);
+  return reply.send(createReadStream(filePath));
+});
+
+app.post('/api/media/upload', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  try {
+    const { workspaceMediaPath, workspaceMediaRoot, mediaUploadLimitBytes } = await import('./media-workspace.js');
+    const body = (req.body ?? {}) as any;
+    const name = Buffer.isBuffer(body)
+      ? String((req.query as any)?.name ?? req.headers['x-media-name'] ?? '')
+      : String(body.name ?? '');
+    const target = workspaceMediaPath(ctx.workspaceId, name);
+    const limit = mediaUploadLimitBytes();
+    let bytes: Buffer;
+    if (Buffer.isBuffer(body)) {
+      bytes = body;
+    } else {
+      const encoded = String(body.contentBase64 ?? '');
+      if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded) || encoded.length > (limit + 1024) * 2) {
+        return reply.code(400).send({ error: 'INVALID_UPLOAD' });
+      }
+      bytes = Buffer.from(encoded, 'base64');
+    }
+    if (bytes.length === 0 || bytes.length > limit) return reply.code(413).send({ error: 'UPLOAD_TOO_LARGE' });
+    await mkdir(workspaceMediaRoot(ctx.workspaceId), { recursive: true });
+    await writeFile(target, bytes);
+    return reply.code(201).send({
+      upload: {
+        name,
+        bytes: bytes.length,
+        previewUrl: `/api/media/files/${encodeURIComponent(name)}`,
+      },
+    });
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
   }
 });
 

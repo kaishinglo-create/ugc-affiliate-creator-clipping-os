@@ -1,4 +1,4 @@
-# EXTERNE BLOCKADEN (Stand 2026-11-25, finale Phase-D-QA)
+# EXTERNE BLOCKADEN (Stand 2026-11-26, Phase-E-QA)
 
 Gelöst / verifiziert:
 - RLS: `DATABASE_URL` verwendet die Nicht-Superuser-Rolle `ugc_os_app`
@@ -20,29 +20,40 @@ Gelöst / verifiziert:
 - Security-Härtung F-01..F-10 lokal geschlossen, inklusive Symlink-Schutz,
   Wegfall des statischen Dev-JWT-Fallbacks, zentraler Redaction in Logs/Audit,
   deterministischem `TRUST_PROXY` und DNS-/IP-Prüfung für Browser-URLs.
+- Phase E: statische Whisper-CLI (nur System-Libs, `1.9.6-dev`), echte DE/EN-
+  Samples, `SSIM All = 0.883772`; Playwright 8/8 mit Screenshots; ENV-Audit
+  97 Variablen (`SET 30 · MISSING 65 · EMPTY 2`), Secret-Scan 0 Treffer.
+  `.env` Modus 600, Backup vorhanden, `.gitignore` abgesichert.
+- Phase E.1: Full-Suite-Instabilität als Umgebungsursache nachgewiesen und
+  durch `npm run qa:full` (temporäre PostgreSQL, ein Worker, Watchdog,
+  Reports) behoben. Zwei Läufe **262/262** (64/64 Dateien), Watchdog nicht
+  ausgelöst; final Typecheck/ESLint/Build und Playwright 8/8 PASS. Details in
+  `docs/testing/`. Keine Produktions-Orchestrierungslogik geändert.
 
 Weiterhin extern blockiert (lokale Entwicklung läuft weiter):
-- Live-KI im Phase-D-Sinn: `GLOBAL_FREE_QUOTA`-Cooldowns bis
-  `2026-11-25T04:59:00.966Z`. Controller bleibt bewusst gestoppt; kein Start,
-  kein Workaround und kein kostenpflichtiger Fallback vor Ablauf und einem
-  erneuten begrenzten Free-Call.
-- `DISCOVERY_MCP_SERVER` / `DISCOVERY_MCP_CLIENT` nicht gesetzt: kein
-  konfigurierter MCP-Datenanbieter für Creator-/Produktdiscovery. Der eine
-  erlaubte Tier-1-Smoke scheiterte mit `UND_ERR_HEADERS_OVERFLOW`; kein Tier-2-
-  oder Paid-Fallback benutzt.
+- Live-KI: Doctor meldet `controller.status=stopped`,
+  `pauseReason=GLOBAL_FREE_QUOTA`, `cooldownActive=false`,
+  `resumeAt=1795582740966`. Ohne ausdrückliche Freigabe kein Start, kein
+  Workaround und kein kostenpflichtiger Fallback.
+- `DISCOVERY_MCP_SERVER` / `DISCOVERY_MCP_CLIENT` bewusst nicht gesetzt: Tests
+  stubben den Client, ein gesetzter Server würde echte Calls auslösen. Der
+  Header-Fix (`maxHeaderSize: 32768`) ist geprüft; der Tier-1-Live-Smoke steht
+  noch aus. Kein Tier-2- oder Paid-Fallback benutzt.
 - YouTube-Suche ohne API-Zugang/Cursor-Quelle nicht live prüfbar; Retry- und
   Budgetlogik ist lokal gegen einen Fake-MCP-Server getestet.
-- `ffmpeg` / `ffprobe` sind jetzt installiert (7.1.5) und mit echtem 11-s-Video
-  verifiziert; der frühere `NOT_CONFIGURED`-Blocker ist geschlossen. Die
-  Binaries liegen systemweit, das Whisper-Modell liegt unter `/tmp/opencode`
-  und muss bei einem neuen Host erneut bereitgestellt werden.
-- Lokales whisper.cpp (1.9.6-dev) + `ggml-tiny.en.bin` liefern echtes Transcript
-  mit SRT-Zeitstempeln; kein Cloud-/Kostenfallback.
+- `ffmpeg` / `ffprobe` sind systemweit installiert (7.1.5) und mit echtem Video
+  verifiziert; der frühere `NOT_CONFIGURED`-Blocker ist geschlossen.
+- Lokales whisper.cpp (1.9.6-dev) ist statisch gelinkt und dauerhaft unter
+  `$HOME/.local/share/ugc-media/whisper` installiert (Binary + `ggml-tiny.en.bin`
+  + `ggml-tiny.bin` + DE/EN-CC0-Samples); Hashes in `docs/media/WHISPER_ASSETS.md`.
+  Bei einem neuen Host müssen diese Assets erneut bereitgestellt werden. Kein
+  Cloud-/Kostenfallback.
 - Keine Plattform-Credentials: Publishing bleibt freigabepflichtig und ohne
   echten Upload; ohne Credentials `NOT_CONFIGURED`, mit Credentials
   `CREDENTIALS_ONLY` + `ADAPTER_NOT_IMPLEMENTED`. Keine erfundenen URLs/IDs.
 - Keine externen Analytics-Quellen; Analytics bleibt auf gespeicherte
   workspace-eigene Daten beschränkt und markiert Fehlendes explizit.
-- MECE-Chat: OpenCode-Server :4096 lässt sich wegen belegtem Port nicht starten;
-  der Startfehler wird sichtbar angezeigt, kein Fake-Erfolg.
+- MECE-Chat: Port 4096 ist fremd belegt und wird nicht bereinigt; lokal werden
+  `MECE_CONTROL_PORT=3031` und `MECE_OPENCODE_PORT=4097` verwendet. Startfehler
+  werden redactet sichtbar angezeigt, kein Fake-Erfolg.
 - Keine Deployment-Credentials: kein Push/Merge/Deploy.

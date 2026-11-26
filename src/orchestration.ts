@@ -17,6 +17,7 @@ import {
   persistCeoSynthesisInTx,
   validateCeoSynthesis,
 } from './company-agents.js';
+import { newSpan, trace } from './qa-trace.js';
 import {
   createJob,
   claimJobById,
@@ -220,9 +221,19 @@ export function departmentProduces(departmentKey: string, action: string, goal: 
 }
 
 function withRunLease<T>(lease: OrchestrationLease, work: (tx: any) => Promise<T>): Promise<T> {
+  const started = Date.now();
+  const span = newSpan();
+  trace('orchestration_tx.start', { span, workspaceId: lease.workspaceId, runId: lease.runId, epoch: lease.epoch, owner: lease.owner });
   return withWorkspaceTransaction(lease.workspaceId, async (tx) => {
     await assertOrchestrationLease(lease, tx);
-    return work(tx);
+    try {
+      const result = await work(tx);
+      trace('orchestration_tx.end', { span, runId: lease.runId, durationMs: Date.now() - started, ok: true });
+      return result;
+    } catch (error) {
+      trace('orchestration_tx.error', { span, runId: lease.runId, durationMs: Date.now() - started, error: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200) });
+      throw error;
+    }
   });
 }
 
@@ -463,6 +474,9 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
     // Approved: fall through and execute the task.
   }
 
+  const agentSpan = newSpan();
+  const agentStarted = Date.now();
+  trace('agent_task.start', { span: agentSpan, workspaceId, runId, taskId: String(task.id), jobId: String(jobId), workerId, department: String(task.departmentKey), action: String(action) });
   try {
     // The agent runtime enforces the task timeout on the provider request and
     // returns deterministic planner output only when AI is not configured.
@@ -475,6 +489,7 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
       deterministic: () => departmentProduces(String(task.departmentKey), action, taskRunGoal),
     });
 
+    trace('agent_task.end', { span: agentSpan, runId, taskId: String(task.id), durationMs: Date.now() - agentStarted, ok: true });
     await withRunLease(lease, async (tx) => {
       const job = await completeJob(jobId, { leaseId, workerId, workspaceId }, tx);
       if (job?.status !== 'SUCCEEDED') throw new Error('ORCHESTRATION_JOB_LEASE_LOST');
@@ -482,6 +497,7 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
       await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_task_succeeded', actor: null, data: { jobId, taskId: task.id, department: task.departmentKey } , tx });
     });
   } catch (error) {
+    trace('agent_task.end', { span: agentSpan, runId, taskId: String(task.id), durationMs: Date.now() - agentStarted, error: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200) });
     if (error instanceof Error && ['ORCHESTRATION_LEASE_LOST', 'ORCHESTRATION_JOB_LEASE_LOST'].includes(error.message)) throw error;
     const message = sanitizeError(error);
     // AI configuration and budget failures are not retryable; upstream timeouts are.
@@ -518,36 +534,54 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
 }
 
 export async function runOrchestration(workspaceId: string, runId: string): Promise<any> {
+  const driverSpan = newSpan();
+  const driverStarted = Date.now();
+  const owner = randomUUID();
+  trace('orchestration.driver.start', { span: driverSpan, workspaceId, runId, owner });
   await ensureDepartments(workspaceId);
   await ensureCompanyAgents(workspaceId);
 
-  const lease = await claimOrchestrationLease(workspaceId, runId, randomUUID());
+  const lease = await claimOrchestrationLease(workspaceId, runId, owner);
   if (!lease) {
     const run = await getRun(workspaceId, runId);
+    trace('orchestration.driver.no_lease', { span: driverSpan, workspaceId, runId, status: run?.status ?? null, durationMs: Date.now() - driverStarted });
     if (!run) throw new Error('RUN_NOT_FOUND');
     return run;
   }
+  trace('orchestration.driver.lease_claimed', { span: driverSpan, workspaceId, runId, epoch: lease.epoch, owner, claimDurationMs: Date.now() - driverStarted });
 
+  let heartbeats = 0;
   const heartbeat = setInterval(() => {
+    heartbeats += 1;
+    trace('orchestration.driver.heartbeat', { span: driverSpan, runId, count: heartbeats, epoch: lease.epoch });
     void heartbeatOrchestrationLease(lease).catch(() => undefined);
   }, 10_000);
   heartbeat.unref();
   try {
-    return await driveOrchestration(lease);
+    const result = await driveOrchestration(lease);
+    trace('orchestration.driver.end', { span: driverSpan, workspaceId, runId, status: result?.status ?? null, durationMs: Date.now() - driverStarted, heartbeats, epoch: lease.epoch });
+    return result;
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    trace('orchestration.driver.error', { span: driverSpan, workspaceId, runId, error: message.slice(0, 200), durationMs: Date.now() - driverStarted, heartbeats, epoch: lease.epoch });
     if (!(error instanceof Error) || !['ORCHESTRATION_LEASE_LOST', 'ORCHESTRATION_JOB_LEASE_LOST'].includes(error.message)) throw error;
     return getRun(workspaceId, runId);
   } finally {
     clearInterval(heartbeat);
     await releaseOrchestrationLease(lease);
+    trace('orchestration.driver.lease_released', { span: driverSpan, workspaceId, runId, epoch: lease.epoch, durationMs: Date.now() - driverStarted });
   }
 }
 
 async function driveOrchestration(lease: OrchestrationLease): Promise<any> {
   const { workspaceId, runId, owner: workerId } = lease;
+  const driveSpan = newSpan();
+  const driveStarted = Date.now();
   let guard = 0;
+  trace('orchestration.drive.start', { span: driveSpan, workspaceId, runId, workerId, epoch: lease.epoch });
   while (guard < 10000) {
     guard += 1;
+    trace('orchestration.drive.iteration', { span: driveSpan, runId, workerId, iteration: guard, elapsedMs: Date.now() - driveStarted, epoch: lease.epoch });
     if (await withRunLease(lease, (tx) => isKillSwitchActive(workspaceId, tx))) {
       return cancelOrchestrationRun(workspaceId, runId, 'KILL_SWITCH_ACTIVE', lease);
     }
@@ -555,6 +589,7 @@ async function driveOrchestration(lease: OrchestrationLease): Promise<any> {
     if (!run) throw new Error('RUN_NOT_FOUND');
     if (run.status === 'succeeded' || run.status === 'failed' || run.status === 'cancelled') return run;
     if (run.status === 'queued') {
+      trace('orchestration.state.transition', { span: driveSpan, runId, workerId, from: 'queued', to: 'running', iteration: guard });
       await withRunLease(lease, (tx) => tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'running', startedAt: now(), currentStage: 'executing' } }));
     }
 
@@ -586,6 +621,7 @@ async function driveOrchestration(lease: OrchestrationLease): Promise<any> {
       }
     }
     if (tasks.length > 0 && tasks.every((task) => task.status === 'succeeded')) {
+      trace('orchestration.state.transition', { span: driveSpan, runId, workerId, from: run.status, to: 'succeeded', iteration: guard });
       const validation = validateCeoSynthesis(run, tasks);
       await withRunLease(lease, async (tx) => {
         if (validation.status !== 'valid') throw new Error('CEO_SYNTHESIS_VALIDATION_FAILED');
@@ -597,14 +633,17 @@ async function driveOrchestration(lease: OrchestrationLease): Promise<any> {
     }
     if (tasks.some((task) => task.status === 'failed' || task.status === 'dead_letter')) {
       const first = tasks.find((task) => task.status === 'failed' || task.status === 'dead_letter');
+      trace('orchestration.state.transition', { span: driveSpan, runId, workerId, from: run.status, to: 'failed', iteration: guard, error: first?.error ? String(first.error).slice(0, 200) : null });
       await withRunLease(lease, (tx) => tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'failed', error: first?.error ?? 'TASK_FAILED', finishedAt: now(), currentStage: first?.departmentKey ?? 'failed' } }));
       return getRun(workspaceId, runId);
     }
     if (tasks.some((task) => task.status === 'waiting_for_approval')) {
+      trace('orchestration.state.transition', { span: driveSpan, runId, workerId, from: run.status, to: 'waiting_for_approval', iteration: guard });
       await withRunLease(lease, (tx) => tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'waiting_for_approval', currentStage: tasks.find((task) => task.status === 'waiting_for_approval')?.departmentKey } }));
       return getRun(workspaceId, runId);
     }
     if (tasks.some((task) => task.status === 'cancelled')) {
+      trace('orchestration.state.transition', { span: driveSpan, runId, workerId, from: run.status, to: 'cancelled', iteration: guard });
       await withRunLease(lease, (tx) => tx.orchestrationRun.update({ where: { id: runId }, data: { status: 'cancelled', finishedAt: now(), currentStage: 'cancelled' } }));
       return getRun(workspaceId, runId);
     }
@@ -612,8 +651,11 @@ async function driveOrchestration(lease: OrchestrationLease): Promise<any> {
     const readyTasks = tasks.filter((task) => task.status === 'queued' && (task.dependsOn ?? []).every((dep: string) => succeededIds.has(dep)))
       .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 
+    trace('orchestration.drive.tasks', { span: driveSpan, runId, workerId, iteration: guard, taskCount: tasks.length, statuses: tasks.map((task: any) => ({ id: task.id, status: task.status, jobId: task.jobId ? String(task.jobId) : null })), readyTasks: readyTasks.length });
+
     if (readyTasks.length === 0) {
       const pending = tasks.filter((task) => task.status === 'queued' || task.status === 'running');
+      trace('orchestration.drive.bounded_wait', { span: driveSpan, runId, workerId, iteration: guard, pending: pending.length, elapsedMs: Date.now() - driveStarted });
       if (pending.length === 0) break;
       // Wait for any retry backoff or other process; bounded wait.
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -693,6 +735,8 @@ export async function cancelOrchestrationRun(workspaceId: string, runId: string,
 }
 
 export async function decideOrchestrationTaskApproval(workspaceId: string, runId: string, taskId: string, approved: boolean, actor?: string | null, reason?: string | null): Promise<any> {
+  const span = newSpan();
+  trace('approval.transition.start', { span, workspaceId, runId, taskId, decision: approved ? 'approved' : 'rejected' });
   await ensureDepartments(workspaceId);
   const killActive = await withWorkspaceTransaction(workspaceId, (tx) => isKillSwitchActive(workspaceId, tx));
   if (killActive) throw Object.assign(new Error('KILL_SWITCH_ACTIVE'), { statusCode: 409 });
@@ -702,6 +746,7 @@ export async function decideOrchestrationTaskApproval(workspaceId: string, runId
     if (!task.approvalId) throw Object.assign(new Error('APPROVAL_NOT_FOUND'), { statusCode: 404 });
     const decision = await tx.approval.updateMany({ where: { id: task.approvalId, status: 'pending' }, data: { status: approved ? 'approved' : 'rejected', decidedBy: actor ?? null, decidedAt: now(), reason: reason ?? null } });
     if (decision.count !== 1) throw Object.assign(new Error('APPROVAL_NOT_PENDING'), { statusCode: 409 });
+    trace('approval.transition.decided', { span, workspaceId, runId, taskId, fromTaskStatus: task.status, toTaskStatus: approved ? 'queued' : 'failed', approval: approved ? 'approved' : 'rejected' });
     await tx.orchestrationTask.update({ where: { id: taskId }, data: { status: approved ? 'queued' : 'failed', error: approved ? null : (reason ?? 'APPROVAL_REJECTED'), finishedAt: approved ? null : now() } });
     if (task.jobId) {
       if (approved) {
@@ -715,7 +760,9 @@ export async function decideOrchestrationTaskApproval(workspaceId: string, runId
       }
     }
     await writeAuditEvent({ workspaceId, runId: null, type: 'orchestration_approval_decided', actor: actor ?? null, data: { taskId, approved, reason } , tx });
-    return tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true }, omit: { leaseToken: true } });
+    const result = await tx.orchestrationRun.findUnique({ where: { id: runId }, include: { tasks: true }, omit: { leaseToken: true } });
+    trace('approval.transition.end', { span, workspaceId, runId, taskId, runStatus: result?.status ?? null, ok: true });
+    return result;
   });
 }
 

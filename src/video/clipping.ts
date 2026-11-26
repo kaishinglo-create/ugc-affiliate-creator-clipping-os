@@ -127,6 +127,10 @@ export interface ExtractAudioOptions {
   sampleRate?: number;
   /** Optional workspace temp directory that must contain `output`. */
   allowedTempDir?: string;
+  /** Opt-in CPU limit for resource-conscious callers (appended only when set). */
+  threads?: 1;
+  /** Cooperative cancellation for workspace media jobs. */
+  signal?: AbortSignal;
 }
 
 export interface ExtractAudioResult {
@@ -157,24 +161,11 @@ export async function extractAudio(options: ExtractAudioOptions): Promise<Extrac
     throw new MediaNotFoundError(input);
   }
 
-  const args = [
-    '-hide_banner',
-    '-loglevel',
-    'error',
-    '-y',
-    '-i',
-    input,
-    '-vn',
-    '-ac',
-    '1',
-    '-ar',
-    String(sampleRate),
-    '-c:a',
-    'pcm_s16le',
-    output,
-  ];
+  const args = ['-hide_banner', '-loglevel', 'error', '-y'];
+  if (options.threads === 1) args.push('-threads', '1');
+  args.push('-i', input, '-vn', '-ac', '1', '-ar', String(sampleRate), '-c:a', 'pcm_s16le', output);
   await mkdir(path.dirname(output), { recursive: true });
-  await runBinary('ffmpeg', args);
+  await runBinary('ffmpeg', args, undefined, options.signal);
   const bytes = await verifyOutputFile(output);
   return { outputPath: output, bytes, args, durationMs: elapsedMs(startedAt) };
 }
@@ -217,7 +208,12 @@ function binaryTimeoutMs(): number {
 }
 
 /** Spawn a configured binary with an argument array; never use a shell. */
-export async function runBinary(binary: 'ffmpeg' | 'ffprobe', args: readonly string[], timeoutMs = binaryTimeoutMs()): Promise<BinaryRunResult> {
+export async function runBinary(
+  binary: 'ffmpeg' | 'ffprobe',
+  args: readonly string[],
+  timeoutMs = binaryTimeoutMs(),
+  signal?: AbortSignal,
+): Promise<BinaryRunResult> {
   const resolved = binaryName(binary);
   const failureCode = binary === 'ffprobe' ? 'FFPROBE_FAILED' : 'FFMPEG_FAILED';
   const boundedTimeout = Math.max(1000, Math.min(600_000, Math.trunc(timeoutMs) || DEFAULT_BINARY_TIMEOUT_MS));
@@ -226,12 +222,16 @@ export async function runBinary(binary: 'ffmpeg' | 'ffprobe', args: readonly str
     let settled = false;
     let stdout = '';
     let stderr = '';
-    let clearTimer: () => void = () => undefined;
+    if (signal?.aborted) {
+      reject(new VideoPipelineError(failureCode, `${binary.toUpperCase()}_ABORTED`, { binary, reason: 'aborted' }));
+      return;
+    }
 
     const finish = (error?: VideoPipelineError, result?: BinaryRunResult): void => {
       if (settled) return;
       settled = true;
-      clearTimer();
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       if (error) reject(error);
       else if (result) resolve(result);
     };
@@ -247,6 +247,11 @@ export async function runBinary(binary: 'ffmpeg' | 'ffprobe', args: readonly str
       return;
     }
 
+    const onAbort = (): void => {
+      if (settled) return;
+      child.kill('SIGKILL');
+      finish(new VideoPipelineError(failureCode, `${binary.toUpperCase()}_ABORTED`, { binary, reason: 'aborted' }));
+    };
     const timer = setTimeout(() => {
       if (settled) return;
       child.kill('SIGKILL');
@@ -256,8 +261,8 @@ export async function runBinary(binary: 'ffmpeg' | 'ffprobe', args: readonly str
         stderr: stderr.slice(-2000),
       }));
     }, boundedTimeout);
-    clearTimer = () => clearTimeout(timer);
     timer.unref();
+    signal?.addEventListener('abort', onAbort, { once: true });
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout = appendCapped(stdout, chunk);
@@ -396,6 +401,10 @@ export interface ClipSegmentOptions {
   codec?: string;
   /** Optional workspace temp directory that must contain `output`. */
   allowedTempDir?: string;
+  /** Opt-in CPU limit for re-encodes (appended only when set). */
+  threads?: 1;
+  /** Cooperative cancellation for workspace media jobs. */
+  signal?: AbortSignal;
 }
 
 export interface ClipSegmentResult {
@@ -452,15 +461,96 @@ export async function clipSegment(options: ClipSegmentOptions): Promise<ClipSegm
     const height = positiveDimension(options.height, 'height', 1920);
     const filter = `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}`;
     args.push('-vf', filter, '-c:v', resolveVideoCodec(options.codec), '-c:a', 'aac');
+    // Threads are only meaningful (and safe) on the re-encode path.
+    if (options.threads === 1) args.push('-threads', '1');
   } else {
     args.push('-c', 'copy');
   }
   args.push(output);
 
   await mkdir(path.dirname(output), { recursive: true });
-  await runBinary('ffmpeg', args);
+  await runBinary('ffmpeg', args, undefined, options.signal);
   const bytes = await verifyOutputFile(output);
   return { outputPath: output, bytes, args, durationMs: elapsedMs(startedAt) };
+}
+
+/** A timestamped highlight from a real transcript; untimed highlights are ignored. */
+export interface HighlightWindow {
+  startMs: number | null;
+  endMs: number | null;
+  text: string;
+  score?: number;
+}
+
+export interface HighlightClipPlanOptions {
+  /** Maximum number of exported clips (clamped to 1..12). */
+  maxClips?: number;
+  /** Maximum window length in ms (clamped to 1s..60s). */
+  maxDurationMs?: number;
+  /** Minimum window length in ms (clamped to 250ms..10s). */
+  minDurationMs?: number;
+  /** Padding around a transcript window, clamped to 0..2s. */
+  padMs?: number;
+  /** Real probed source duration; windows are clamped to it when supplied. */
+  sourceDurationSeconds?: number | null;
+}
+
+export interface PlannedClip {
+  start: number;
+  duration: number;
+  startMs: number;
+  endMs: number;
+  text: string;
+  score: number;
+}
+
+/**
+ * Turn real transcript timestamps into bounded, non-overlapping clip windows.
+ * Highlights without timestamps are skipped; no time is ever invented.
+ */
+export function planHighlightClips(highlights: HighlightWindow[], options: HighlightClipPlanOptions = {}): PlannedClip[] {
+  if (!Array.isArray(highlights)) throw invalidVideoInput('highlights must be an array');
+  const maxClips = Math.max(1, Math.min(12, Math.trunc(options.maxClips ?? 5) || 5));
+  const maxDurationMs = Math.max(1000, Math.min(60_000, Math.trunc(options.maxDurationMs ?? 20_000) || 20_000));
+  const minDurationMs = Math.max(250, Math.min(10_000, Math.trunc(options.minDurationMs ?? 1000) || 1000));
+  const padMs = Math.max(0, Math.min(2000, Math.trunc(options.padMs ?? 250) || 0));
+  const sourceMs = Number.isFinite(options.sourceDurationSeconds) && (options.sourceDurationSeconds ?? 0) > 0
+    ? Math.trunc((options.sourceDurationSeconds as number) * 1000)
+    : null;
+
+  const candidates = highlights
+    .map((highlight) => {
+      const start = highlight?.startMs;
+      const end = highlight?.endMs;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || (start as number) < 0 || (end as number) <= (start as number)) return null;
+      const clippedStart = Math.max(0, Math.trunc(start as number) - padMs);
+      let clippedEnd = Math.min(Math.trunc(end as number) + padMs, clippedStart + maxDurationMs);
+      if (sourceMs !== null) clippedEnd = Math.min(clippedEnd, sourceMs);
+      const span = clippedEnd - clippedStart;
+      if (span < minDurationMs) return null;
+      return {
+        startMs: clippedStart,
+        endMs: clippedEnd,
+        start: clippedStart / 1000,
+        duration: span / 1000,
+        text: typeof highlight.text === 'string' ? highlight.text.slice(0, 240) : '',
+        score: Number.isFinite(highlight.score) ? Number(highlight.score) : 0,
+      };
+    })
+    .filter((entry): entry is PlannedClip => entry !== null)
+    .sort((a, b) => b.score - a.score || a.startMs - b.startMs || b.endMs - a.endMs);
+
+  const accepted: PlannedClip[] = [];
+  const seenText = new Set<string>();
+  for (const candidate of candidates) {
+    if (accepted.length >= maxClips) break;
+    const key = candidate.text.trim().toLowerCase();
+    if (key && seenText.has(key)) continue;
+    if (accepted.some((existing) => candidate.startMs < existing.endMs && existing.startMs < candidate.endMs)) continue;
+    accepted.push(candidate);
+    if (key) seenText.add(key);
+  }
+  return accepted;
 }
 
 export interface ExportStep {
@@ -564,6 +654,8 @@ export async function exportVideo(options: ExportVideoOptions): Promise<ExportVi
       srt: srtPath as string,
       output: options.output,
       codec: options.codec,
+      threads: options.threads,
+      signal: options.signal,
     });
     steps.push({ name: 'subtitles', ok: true, durationMs: burned.durationMs, outputPath: burned.outputPath });
   } catch (error) {

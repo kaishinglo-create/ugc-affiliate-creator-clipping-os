@@ -626,3 +626,89 @@ at Tier 1 with the shared catalog disabled. See
 The worker accepts manual and one-time scheduled searches, applies a workspace
 request budget, and stores candidates under workspace RLS. Recurring schedules
 and verification on the target device are follow-up steps.
+
+## Phase E (2026-11-26) — funktionale Abnahme, weiterhin uncommitted
+
+- HEAD bleibt `d97f8ca`; alle Änderungen dieser Phase sind uncommitted. Kein
+  Push, Merge oder Deploy. Vorhandene Benutzerdateien bleiben unangetastet.
+- Neue/reparierte Module: `src/publishing-adapters.ts` (Opt-in
+  `PUBLISHING_LIVE_ADAPTERS`), `src/discovery.ts` (`maxHeaderSize: 32768`),
+  Frontend-401-/Controls-/Media-Verträge, MECE-Runtime mit konfigurierbaren
+  Ports, `scripts/controller-watchdog-scheduler.sh` (`RAN_ONCE`).
+- Keine bestehenden Tests verändert oder abgeschwächt (`git diff -- tests` leer);
+  sieben neue Testdateien hinzugefügt.
+- Regressionstests: `tests/publishing-adapters.test.ts` 10/10,
+  `tests/discovery-headers.test.ts` 4/4, `tests/frontend-controls.test.ts` 7/7,
+  `tests/controller-watchdog-schedule.test.ts` 3/3,
+  `tests/media-jobs.test.ts` 5/5, `tests/transcription-language.test.ts` 6/6,
+  `tests/mece-runtime.test.ts` 2/2 mit
+  `MECE_TEST_CONTROL_PORT=3132 MECE_TEST_OPENCODE_PORT=4098`.
+- Qualität: Typecheck PASS, `eslint .` PASS, Build `BUILD_OK`, Playwright 8/8
+  mit Screenshots unter `/tmp/opencode/phase-e-browser-audit/results`.
+- Medien: statische Whisper-CLI `1.9.6-dev` dauerhaft installiert, Hashes in
+  `docs/media/WHISPER_ASSETS.md`; `npm run verify:media` echt grün für EN und DE
+  mit `SSIM All = 0.883772`, Report
+  `/tmp/opencode/ugc-media-verify/verification.json`.
+- ENV-Audit: `docs/configuration/ENV_REFERENCE.md` (97 Variablen),
+  `docs/configuration/ENV_STATUS.json` (`SET 30 · MISSING 65 · EMPTY 2`, keine
+  Secret-Werte), `.env` Modus 600 mit Backup, `.env.example` secretsfrei,
+  `.gitignore` abgesichert. Secret-Scan `checkedValues=4`, `matches=0`.
+- Doctor: Ports 3000/3031/3200 HTTP 200, Medien und DB gesund, Controller
+  `stopped` / `GLOBAL_FREE_QUOTA`, `cooldownActive=false`,
+  `resumeAt=1795582740966`, Queue-Tiefe 12. `healthy=false` ist erwartet;
+  kein Controller-Start ohne Freigabe.
+- Full-Suite-Bedingung: UGC-Dev-Server und MECE-Control vor dem Vitest-Lauf
+  stoppen; nur den Browser-Runtime-Dienst (:3200) laufen lassen. Ein Dev-Server
+  mit `AUTOMATION_ENGINE=on` pollt alle 3 s dieselbe DB und konkurriert um
+  Jobs/Leases; ohne Browser-Dienst meldet `/api/browser/status` korrekt
+  `available=false`, während der Test bei gesetztem `BROWSER_RUNTIME_URL`
+  Verfügbarkeit erwartet. Beides sind Umgebungs-, keine Code-Fehler;
+  die betroffenen Tests sind isoliert jeweils grün. Danach alle Dienste
+  wieder starten.
+- Extern blockiert: keine Plattform-Credentials, kein `OLLAMA_API_KEY`, kein
+  konfigurierter Discovery-MCP-Provider, keine Deployment-Credentials.
+  Kein Paid-Fallback, keine erfundenen Kennzahlen oder Uploads.
+
+## Phase E.1: Ursachenanalyse und Reparatur der Full-Suite-Instabilität abgeschlossen (2026-11-26)
+
+- **Symptom:** sequenzielle Suite mit gemeinsamer Entwicklungs-DB 261/262
+  (63/64 Dateien); `tests/helpers/orchestration-engine.ts:21` sah `running`
+  statt `waiting_for_approval`, isoliert lief derselbe Test grün.
+- **Ursache nachgewiesen, kein Orchestrierungs-Codefehler:** konkurrierende
+  Engine-Poller (UGC-Dev-Server mit `AUTOMATION_ENGINE=on`, 3-s-Poll auf
+  derselben DB) und instabile Browser-Dienstverfügbarkeit bei gesetztem
+  `BROWSER_RUNTIME_URL`; die gemeinsame DB erhöhte die Timing-Varianz.
+  `activeOrchestrations` ist prozesslokal, die persistente DB-Lease fenced
+  korrekt über Prozesse hinweg. Ein erster Schema-Isolationsversuch scheiterte
+  mit 28/262 Fehlern (Prisma 7 Migration braucht `?schema=...`, der Client
+  schrieb trotz `search_path` nach `public`).
+- **Instrumentierung:** `src/qa-trace.ts` mit `QA_TRACE_FILE` in `lib/db.ts`,
+  `src/engine.ts`, `src/orchestration.ts`, `src/orchestration-lease.ts`,
+  `src/jobs.ts`, `src/index.ts`. Keine Secrets/Tokens in Logs; ohne Variable
+  inaktiv. Keine Produktions-Orchestrierungslogik geändert; bestehende Tests
+  und `tests/helpers/orchestration-engine.ts` unverändert.
+- **Messdaten beider Full-Suites:** je 29 Engine-Ticks und 9 Kicks ohne
+  Overlaps, 12 Lease-Claims (11 erfolgreich, 1 erwartet verweigert durch
+  Takeover), 0 `bounded_wait`, 66 Job-Claims (65 erfolgreich), DB-TX p50 25 ms
+  / p95 106–110 ms / max 471–545 ms, aktive Handles am Ende stabil. Die
+  `db_tx.error`-Einträge sind erwartete Negativpfade (`AI_BUDGET_EXCEEDED`,
+  `IDEMPOTENCY_KEY_PAYLOAD_MISMATCH`, `ORCHESTRATION_LEASE_LOST`).
+- **Regression stufenweise:** `tests/orchestration-lease-recovery.test.ts`
+  1/1 PASS; vier betroffene Dateien gemeinsam 22/22 PASS.
+- **Dauerhafte QA-Runtime:** `npm run qa:full` / `scripts/qa-full.mjs` mit
+  `flock`, `--maxWorkers=1`, temporärer PostgreSQL (`ugc_os_qa`, Rolle
+  `ugc_os_app` ohne Superuser/BYPASSRLS), Watchdog, Ressourcen-Sampling,
+  `latest-progress.json`, Crash-Recovery und JSON-/Markdown-Report.
+- **Zwei vollständige Suites grün:**
+  `qa-full-2026-11-26T17-33-21-901Z-29844` (262/262, 64/64, 522,59 s) und
+  `qa-full-2026-11-26T17-42-29-170Z-31926` (262/262, 64/64, 524,48 s);
+  `exitCode=0`, `outcome=passed`, Watchdog nicht ausgelöst, DB gestoppt.
+  Reports unter `/tmp/opencode/qa-full/<runId>/report.json`.
+- **Finale Prüfung nach allen Änderungen:** Typecheck PASS, `eslint .` PASS,
+  Build PASS, Playwright 8/8 (`node --env-file=.env`, :3031/:3000). Logs:
+  `/tmp/opencode/phase-e1-final-static.log`,
+  `/tmp/opencode/phase-e1-final-playwright.log`.
+- Nachweise: `docs/testing/ROOT_CAUSE_ANALYSIS.md`,
+  `docs/testing/FINAL_QA_REPORT.md`, `docs/testing/TEST_ISOLATION.md`.
+- Keine externen Dienste gestartet/publishiert, kein Push/Merge/Deploy.
+  Phase F bleibt bis ausdrücklicher Freigabe pausiert.

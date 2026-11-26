@@ -149,15 +149,33 @@ export function detectHighlights(text: string, options: HighlightOptions = {}): 
     .slice(0, limit);
 }
 
+/** Strict language allowlist. `auto` is Whisper's own language detection. */
+export const TRANSCRIPTION_LANGUAGES = ['de', 'en', 'auto'] as const;
+export type TranscriptionLanguage = (typeof TRANSCRIPTION_LANGUAGES)[number];
+
+/** Reject every language outside the allowlist instead of forwarding arbitrary CLI flags. */
+export function normalizeTranscriptionLanguage(value: unknown): TranscriptionLanguage | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') throw invalidInput('language must be one of de, en, auto');
+  const language = value.trim().toLowerCase();
+  if (!TRANSCRIPTION_LANGUAGES.includes(language as TranscriptionLanguage)) {
+    throw invalidInput('language must be one of de, en, auto');
+  }
+  return language as TranscriptionLanguage;
+}
+
 export interface TranscribeOptions {
   audioPath: string;
   outputDir: string;
+  /** Explicit model paths are only for trusted local callers; API clients cannot supply one. */
   modelPath?: string;
   binary?: string;
-  language?: string;
+  language?: TranscriptionLanguage;
   /** Bound CPU use; defaults to one thread on small hosts. */
   threads?: number;
   timeoutMs?: number;
+  /** Cooperative cancellation; aborts kill the live whisper process. */
+  signal?: AbortSignal;
 }
 
 export interface TranscriptionResult {
@@ -174,35 +192,104 @@ function binaryPath(explicit?: string): string {
   return explicit?.trim() || process.env.WHISPER_BIN?.trim() || 'whisper';
 }
 
-async function runWhisper(binary: string, args: string[], timeoutMs: number): Promise<void> {
+/** Bounded whisper timeout, configurable without ever becoming unbounded. */
+export function whisperTimeoutMs(explicit?: number): number {
+  const raw = explicit ?? Number(process.env.WHISPER_TIMEOUT_MS ?? 300_000);
+  return Number.isFinite(raw) ? Math.max(1000, Math.min(600_000, Math.trunc(raw))) : 300_000;
+}
+
+/** Threads stay conservative by default; raising the cap is an explicit operator choice. */
+export function whisperThreadCount(explicit?: number): number {
+  const configuredMax = Number(process.env.WHISPER_THREADS_MAX ?? 2);
+  const cap = Number.isFinite(configuredMax) && configuredMax > 0
+    ? Math.max(1, Math.min(8, Math.trunc(configuredMax)))
+    : 2;
+  const raw = explicit ?? Number(process.env.WHISPER_THREADS ?? 1);
+  return Number.isFinite(raw) ? Math.max(1, Math.min(cap, Math.trunc(raw))) : 1;
+}
+
+/** English-only weights must never silently satisfy a German request. */
+function assertMultilingualModel(model: string, language?: TranscriptionLanguage): void {
+  if ((language === 'de' || language === 'auto') && /(?:\.en|-en)\.bin$/i.test(path.basename(model))) {
+    throw new TranscriptionError('NOT_CONFIGURED', 'WHISPER_MULTILINGUAL_MODEL_REQUIRED', { path: model });
+  }
+}
+
+/**
+ * Server-side model selection. `de` requires an explicit multilingual model;
+ * `auto` prefers one but can use the English model when none is configured.
+ */
+export function resolveTranscriptionModel(language?: TranscriptionLanguage, explicitModelPath?: string): string {
+  if (explicitModelPath !== undefined) {
+    const model = assertTranscriptionPath(explicitModelPath, 'modelPath');
+    assertMultilingualModel(model, language);
+    return model;
+  }
+  const multilingual = process.env.WHISPER_MODEL_MULTILINGUAL?.trim();
+  if (language === 'de') {
+    if (!multilingual) {
+      throw new TranscriptionError('NOT_CONFIGURED', 'WHISPER_MULTILINGUAL_MODEL_NOT_CONFIGURED');
+    }
+    const model = assertTranscriptionPath(multilingual, 'WHISPER_MODEL_MULTILINGUAL');
+    assertMultilingualModel(model, language);
+    return model;
+  }
+  if (language === 'auto' && multilingual) {
+    const model = assertTranscriptionPath(multilingual, 'WHISPER_MODEL_MULTILINGUAL');
+    assertMultilingualModel(model, language);
+    return model;
+  }
+  const configured = process.env.WHISPER_MODEL?.trim();
+  if (!configured) throw new TranscriptionError('NOT_CONFIGURED', 'WHISPER_MODEL_NOT_CONFIGURED');
+  const model = assertTranscriptionPath(configured, 'WHISPER_MODEL');
+  assertMultilingualModel(model, language);
+  return model;
+}
+
+/** Spawn whisper with argument arrays only; abort kills the live child. */
+export async function runWhisper(binary: string, args: string[], timeoutMs: number, signal?: AbortSignal): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false;
     let stderr = '';
+    if (signal?.aborted) {
+      reject(new TranscriptionError('TRANSCRIBE_FAILED', 'TRANSCRIBE_ABORTED', { binary, reason: 'aborted' }));
+      return;
+    }
     const child = spawn(binary, args, { shell: false, stdio: ['ignore', 'ignore', 'pipe'] });
+    const finish = (error?: TranscriptionError): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onAbort = (): void => {
+      if (settled) return;
+      child.kill('SIGKILL');
+      finish(new TranscriptionError('TRANSCRIBE_FAILED', 'TRANSCRIBE_ABORTED', { binary, reason: 'aborted' }));
+    };
     const timer = setTimeout(() => {
       if (settled) return;
-      settled = true;
       child.kill('SIGKILL');
-      reject(new TranscriptionError('TRANSCRIBE_FAILED', 'TRANSCRIBE_TIMEOUT', { binary }));
+      finish(new TranscriptionError('TRANSCRIBE_FAILED', 'TRANSCRIBE_TIMEOUT', { binary }));
     }, timeoutMs);
     timer.unref();
+    signal?.addEventListener('abort', onAbort, { once: true });
     child.stderr?.on('data', (chunk: Buffer) => { stderr = (stderr + chunk.toString('utf8')).slice(-4000); });
     child.once('error', (error: NodeJS.ErrnoException) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
       if (error.code === 'ENOENT' || error.code === 'EACCES') {
-        reject(new TranscriptionError('NOT_CONFIGURED', 'WHISPER_NOT_CONFIGURED', { binary }));
+        finish(new TranscriptionError('NOT_CONFIGURED', 'WHISPER_NOT_CONFIGURED', { binary }));
       } else {
-        reject(new TranscriptionError('TRANSCRIBE_FAILED', 'WHISPER_SPAWN_FAILED', { binary, reason: error.message }));
+        finish(new TranscriptionError('TRANSCRIBE_FAILED', 'WHISPER_SPAWN_FAILED', { binary, reason: error.message }));
       }
     });
-    child.once('close', (code, signal) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (code === 0) resolve();
-      else reject(new TranscriptionError('TRANSCRIBE_FAILED', `WHISPER_EXIT_${code ?? `SIGNAL_${signal ?? 'UNKNOWN'}`}`, { binary, exitCode: code, stderr }));
+    child.once('close', (code, closeSignal) => {
+      if (code === 0) {
+        finish();
+      } else {
+        finish(new TranscriptionError('TRANSCRIBE_FAILED', `WHISPER_EXIT_${code ?? `SIGNAL_${closeSignal ?? 'UNKNOWN'}`}`, { binary, exitCode: code, stderr }));
+      }
     });
   });
 }
@@ -213,24 +300,30 @@ export async function transcribeAudio(options: TranscribeOptions): Promise<Trans
   const audio = assertTranscriptionPath(options.audioPath, 'audioPath');
   const outputDir = assertTranscriptionPath(options.outputDir, 'outputDir');
   const binary = binaryPath(options.binary);
-  const model = options.modelPath ? assertTranscriptionPath(options.modelPath, 'modelPath') : process.env.WHISPER_MODEL?.trim() || '';
+  const language = normalizeTranscriptionLanguage(options.language);
 
   const audioInfo = await stat(audio).catch(() => null);
   if (!audioInfo || !audioInfo.isFile()) throw new TranscriptionError('MEDIA_NOT_FOUND', 'MEDIA_NOT_FOUND', { path: audio });
-  if (!model) throw new TranscriptionError('NOT_CONFIGURED', 'WHISPER_MODEL_NOT_CONFIGURED', { binary });
-  if (model && !(await stat(model).catch(() => null))?.isFile()) {
-    throw new TranscriptionError('NOT_CONFIGURED', 'WHISPER_MODEL_NOT_FOUND', { path: model });
+  const model = resolveTranscriptionModel(language, options.modelPath);
+  const modelExists = (await stat(model).catch(() => null))?.isFile();
+  if (!modelExists) {
+    const configuredMultilingual = process.env.WHISPER_MODEL_MULTILINGUAL?.trim();
+    const missingMultilingual = !options.modelPath && configuredMultilingual && path.resolve(configuredMultilingual) === path.resolve(model);
+    throw new TranscriptionError(
+      'NOT_CONFIGURED',
+      missingMultilingual ? 'WHISPER_MULTILINGUAL_MODEL_NOT_FOUND' : 'WHISPER_MODEL_NOT_FOUND',
+      { path: model },
+    );
   }
   if (!/^[A-Za-z0-9_./-]{1,128}$/.test(binary)) throw invalidInput('invalid whisper binary path');
+  if (options.signal?.aborted) throw new TranscriptionError('TRANSCRIBE_FAILED', 'TRANSCRIBE_ABORTED', { binary, reason: 'aborted' });
 
   await mkdir(outputDir, { recursive: true });
   const outputBase = path.join(outputDir, `transcript-${randomUUID()}`);
   const args = ['-m', model, '-f', audio, '-otxt', '-osrt', '-of', outputBase];
-  if (options.language?.trim()) args.push('-l', options.language.trim().slice(0, 16));
-  const rawThreads = options.threads ?? Number(process.env.WHISPER_THREADS ?? 0);
-  const threads = Number.isFinite(rawThreads) ? Math.max(1, Math.min(4, Math.trunc(rawThreads))) : 1;
-  args.push('-t', String(threads));
-  await runWhisper(binary, args, Math.max(1000, Math.min(600_000, Number(options.timeoutMs) || 120_000)));
+  if (language) args.push('-l', language);
+  args.push('-t', String(whisperThreadCount(options.threads)));
+  await runWhisper(binary, args, whisperTimeoutMs(options.timeoutMs), options.signal);
 
   const transcriptPath = `${outputBase}.txt`;
   const produced = await stat(transcriptPath).catch(() => null);

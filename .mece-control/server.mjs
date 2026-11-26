@@ -14,8 +14,14 @@ const PROJECT_CONFIG = path.join(ROOT, ".opencode", "opencode.json");
 const GLOBAL_CONFIG = path.join(process.env.HOME || "/data/data/com.termux/files/home", ".config", "opencode", "opencode.jsonc");
 const CONFIG_FILE = path.join(BASE, "config.json");
 const STATUS_FILE = path.join(BASE, "runs.json");
-const PORT = 3031;
-const OC_PORT = 4096;
+function parsePort(value, fallback) {
+  const parsed = Number(String(value ?? "").trim());
+  return Number.isInteger(parsed) && parsed >= 1024 && parsed <= 65535 ? parsed : fallback;
+}
+
+const PORT = parsePort(process.env.MECE_CONTROL_PORT, 3031);
+const OC_PORT = parsePort(process.env.MECE_OPENCODE_PORT || process.env.OPENCODE_PORT, 4096);
+const OC_BASE_URL = `http://127.0.0.1:${OC_PORT}`;
 const ALLOWED_AUTOMATIONS = ["mece-audit", "mece-repair", "mece-regression", "mece-wave"];
 const DEFAULT_MODEL = "opencode/big-pickle";
 const DEFAULT_MAX_REPAIR_ROUNDS = 2;
@@ -152,7 +158,7 @@ try {
 } catch {}
 
 let job = { state: "idle", name: null, pid: null, log: null, started: null, exitCode: null, timeoutHandle: null };
-let oc = { process: null, url: null, startupError: null, starting: false };
+let oc = { process: null, url: null, startupError: null, starting: false, reusedExisting: false, serverPassword: null };
 
 function defaultConfig() {
   return {
@@ -484,6 +490,37 @@ function redact(value) {
   return String(value || "").replace(/(OPENCODE_SERVER_PASSWORD|api[_-]?key|secret|token|password)\s*[:=]\s*[^\s,}]+/gi, "$1=[redacted]");
 }
 
+function ocConfiguredPassword() {
+  return process.env.OPENCODE_SERVER_PASSWORD || process.env.OPENCODE_PASSWORD || null;
+}
+
+function ocAuthHeaders() {
+  const headers = { accept: "application/json" };
+  const password = oc.serverPassword || ocConfiguredPassword();
+  if (password) headers.authorization = "Basic " + Buffer.from("opencode:" + password).toString("base64");
+  return headers;
+}
+
+// Never kills or guesses a process: only a positive protocol probe makes an
+// existing compatible OpenCode server reusable.
+async function probeOpenCodeServer() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1500);
+  try {
+    const response = await fetch(new URL("/api/session", OC_BASE_URL), {
+      headers: ocAuthHeaders(),
+      signal: controller.signal,
+    });
+    if (!response.ok) return false;
+    const payload = await response.json();
+    return Array.isArray(payload) || Array.isArray(payload?.data) || Array.isArray(payload?.sessions);
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function startOpenCodeServer() {
   if (oc.url) return oc.url;
   if (oc.starting) {
@@ -493,35 +530,58 @@ async function startOpenCodeServer() {
   oc.starting = true;
   oc.startupError = null;
   try {
+    if (await probeOpenCodeServer()) {
+      oc.url = OC_BASE_URL;
+      oc.reusedExisting = true;
+      return oc.url;
+    }
+    // OpenCode v2 requires Basic auth. Without a configured password, create
+    // an ephemeral one in memory only: it is passed to the child and used by
+    // this process, never written to disk, logs, JSON responses or commits.
+    oc.serverPassword = ocConfiguredPassword() || crypto.randomBytes(24).toString("hex");
+    const childEnv = { ...process.env, OPENCODE_SERVER_PASSWORD: oc.serverPassword };
     const proc = spawn("opencode", ["serve", "--hostname=127.0.0.1", `--port=${OC_PORT}`], {
-      cwd: ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe"]
+      cwd: ROOT, env: childEnv, stdio: ["ignore", "pipe", "pipe"]
     });
     oc.process = proc;
     let output = "";
-    const url = await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("Timeout waiting for OpenCode server")), 8000);
-      proc.stdout.on("data", (chunk) => {
-        output += chunk.toString();
-        const lines = output.split("\n");
-        for (const line of lines) {
-          if (line.startsWith("opencode server listening")) {
-            const match = line.match(/on\s+(https?:\/\/[^\s]+)/);
-            if (match) {
-              clearTimeout(timer);
-              resolve(match[1]);
-              return;
-            }
-          }
-        }
-      });
-      proc.stderr.on("data", (chunk) => { output += chunk.toString(); });
-      proc.on("error", (error) => { clearTimeout(timer); reject(error); });
-      proc.on("exit", (code) => { clearTimeout(timer); reject(new Error(`OpenCode server exited with ${code}: ${output}`)); });
-    });
-    oc.url = url || `http://127.0.0.1:${OC_PORT}`;
+    let exitCode = null;
+    let spawnError = null;
+    proc.stdout.on("data", (chunk) => { output += chunk.toString(); });
+    proc.stderr.on("data", (chunk) => { output += chunk.toString(); });
+    proc.on("error", (error) => { spawnError = error; });
+    proc.on("exit", (code) => { exitCode = code; });
+
+    // Poll the authenticated API instead of depending on a stdout banner;
+    // piped child stdio does not always flush that banner promptly.
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      if (spawnError) throw spawnError;
+      if (exitCode !== null) throw new Error(`OpenCode server exited with ${exitCode}: ${output}`);
+      if (await probeOpenCodeServer()) {
+        oc.url = OC_BASE_URL;
+        oc.reusedExisting = false;
+        return oc.url;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error(`Timeout waiting for OpenCode server: ${output.slice(0, 500)}`);
   } catch (error) {
-    oc.startupError = String(error.message || error);
+    const raw = String(error?.message || error);
+    const conflict = /EADDRINUSE|address already in use/i.test(raw);
+    oc.startupError = redact(conflict
+      ? `Port ${OC_PORT} ist belegt. Vorhandenen kompatiblen Server weiterverwenden oder MECE_OPENCODE_PORT auf einen freien Port setzen. ${raw}`
+      : raw);
+    // If startup timed out but the child we spawned is still alive, terminate
+    // only that exact child. Leaving it would make the next probe unauthenticated
+    // and turn a slow start into a false port-conflict.
+    if (oc.process && oc.process.exitCode === null && !oc.process.killed) {
+      try { oc.process.kill("SIGTERM"); } catch {}
+    }
     oc.url = null;
+    oc.reusedExisting = false;
+    oc.process = null;
+    oc.serverPassword = null;
   } finally {
     oc.starting = false;
   }
@@ -539,16 +599,25 @@ function parseModelId(value) {
 async function ocFetch(route, { method = "GET", body, timeout = 20000 } = {}) {
   await startOpenCodeServer();
   if (!oc.url) throw new Error(oc.startupError || "OpenCode server nicht verfügbar");
-  const headers = { accept: "application/json" };
+  const headers = ocAuthHeaders();
   if (body !== undefined) headers["content-type"] = "application/json";
-  const password = process.env.OPENCODE_SERVER_PASSWORD || process.env.OPENCODE_PASSWORD;
-  if (password) headers.authorization = "Basic " + Buffer.from("opencode:" + password).toString("base64");
-  const response = await fetch(new URL(route, oc.url), {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(timeout)
-  });
+  let response;
+  try {
+    response = await fetch(new URL(route, oc.url), {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(timeout)
+    });
+  } catch (error) {
+    // A reused server may have disappeared. Forget the cached URL so the next
+    // call re-probes; never kill a process this server does not own.
+    if (oc.reusedExisting) {
+      oc.url = null;
+      oc.reusedExisting = false;
+    }
+    throw error;
+  }
   const text = await response.text();
   let data = {};
   try { data = JSON.parse(text); } catch { data = { raw: text.slice(0, 1000) }; }
@@ -633,7 +702,7 @@ button:focus-visible{outline:2px solid #8bb9ff}
 <pre id="mcpCommandOutput">Noch keine MCP-Pruefung.</pre></div></section>
 
 <section id="chat" class="panel">
-<h2>KI Chat</h2><p class="muted">Chat mit dem lokalen OpenCode-Server (Port 4096). Modell wird automatisch erkannt; Startfehler werden sichtbar angezeigt, keine stillen kostenpflichtigen Wechsel.</p>
+<h2>KI Chat</h2><p class="muted">Chat mit dem lokalen OpenCode-Server (konfigurierbar über MECE_OPENCODE_PORT). Ein bereits kompatibler Server wird sicher weiterverwendet; Modell wird automatisch erkannt; Startfehler werden sichtbar angezeigt, keine stillen kostenpflichtigen Wechsel.</p>
 <div class="card row">
 <label style="flex:1">Agent</label><select id="chatAgent"></select>
 <label style="flex:1">Modell (kostenlos)</label><select id="chatModel"></select>
@@ -1035,7 +1104,13 @@ const server = http.createServer(async (req, res) => {
       runs: readRuns(),
       ugc: await ugcHealth(),
       controller: controllerState(),
-      oc: { url: oc.url, startupError: oc.startupError, starting: oc.starting }
+      oc: {
+        url: oc.url,
+        port: OC_PORT,
+        startupError: oc.startupError ? redact(oc.startupError) : null,
+        starting: oc.starting,
+        reusedExisting: oc.reusedExisting,
+      }
     };
     return json(res, 200, data);
   }
@@ -1195,8 +1270,11 @@ const server = http.createServer(async (req, res) => {
     const versionResult = spawnSync("opencode", ["--version"], { encoding: "utf8", timeout: 5000 });
     return json(res, 200, {
       url: oc.url,
-      startupError: oc.startupError || null,
+      port: OC_PORT,
+      startedOnPort: PORT,
+      startupError: oc.startupError ? redact(oc.startupError) : null,
       starting: oc.starting,
+      reusedExisting: oc.reusedExisting,
       model: loadConfig().model,
       agents: CHAT_AGENTS,
       version: (versionResult.stdout || versionResult.stderr || "nicht erkannt").trim(),
@@ -1205,8 +1283,9 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "GET" && url.pathname === "/api/chat/sessions") {
     try {
-      const sessions = await ocFetch("/session");
-      return json(res, 200, { sessions: Array.isArray(sessions) ? sessions : [] });
+      const sessions = await ocFetch("/api/session");
+      const list = Array.isArray(sessions) ? sessions : Array.isArray(sessions?.data) ? sessions.data : Array.isArray(sessions?.sessions) ? sessions.sessions : [];
+      return json(res, 200, { sessions: list });
     } catch (error) {
       return json(res, 500, { error: redact(error.message) });
     }
@@ -1219,7 +1298,7 @@ const server = http.createServer(async (req, res) => {
     try { input = JSON.parse(body); } catch { return json(res, 400, { error: "Ungueltiges JSON" }); }
     const title = String(input.title || "MECE Chat").trim().slice(0, 120);
     try {
-      return json(res, 200, { session: await ocFetch("/session", { method: "POST", body: { title } }) });
+      return json(res, 200, { session: await ocFetch("/api/session", { method: "POST", body: { title } }) });
     } catch (error) {
       return json(res, 500, { error: redact(error.message) });
     }
@@ -1228,8 +1307,9 @@ const server = http.createServer(async (req, res) => {
     const sessionID = String(url.searchParams.get("session") || "").trim();
     if (!sessionID || !/^[A-Za-z0-9_-]{1,128}$/.test(sessionID)) return json(res, 400, { error: "session erforderlich" });
     try {
-      const messages = await ocFetch(`/session/${encodeURIComponent(sessionID)}/message`);
-      return json(res, 200, { messages: Array.isArray(messages) ? messages : [] });
+      const messages = await ocFetch(`/api/session/${encodeURIComponent(sessionID)}/message`);
+      const list = Array.isArray(messages) ? messages : Array.isArray(messages?.data) ? messages.data : Array.isArray(messages?.messages) ? messages.messages : [];
+      return json(res, 200, { messages: list });
     } catch (error) {
       return json(res, 500, { error: redact(error.message) });
     }
@@ -1249,7 +1329,7 @@ const server = http.createServer(async (req, res) => {
     if (!isAllowedAgent(agent)) return json(res, 400, { error: "Agent nicht erlaubt" });
     if (!isFreeModel(model)) return json(res, 400, { error: "Nur verifiziert kostenlose OpenCode-Modelle sind erlaubt" });
     try {
-      const response = await ocFetch(`/session/${encodeURIComponent(sessionID)}/message`, {
+      const response = await ocFetch(`/api/session/${encodeURIComponent(sessionID)}/message`, {
         method: "POST",
         body: { model: parseModelId(model), agent, parts: [{ type: "text", text }] },
         timeout: 120000
@@ -1268,7 +1348,7 @@ const server = http.createServer(async (req, res) => {
     const sessionID = String(input.sessionID || "").trim();
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionID)) return json(res, 400, { error: "sessionID erforderlich" });
     try {
-      return json(res, 200, { result: await ocFetch(`/session/${encodeURIComponent(sessionID)}/abort`, { method: "POST" }) });
+      return json(res, 200, { result: await ocFetch(`/api/session/${encodeURIComponent(sessionID)}/abort`, { method: "POST" }) });
     } catch (error) {
       return json(res, 500, { error: redact(error.message) });
     }
@@ -1284,8 +1364,10 @@ server.listen(PORT, "127.0.0.1", () => {
 
 function shutdown() {
   try { server.close(); } catch {}
-  if (oc.process && !oc.process.killed) {
-    try { process.kill(-oc.process.pid, "SIGTERM"); } catch { try { oc.process.kill("SIGTERM"); } catch {} }
+  // Only signal the exact child this server spawned. A reused external server
+  // is never touched, and negative-PID group kills are not used.
+  if (oc.process && oc.process.exitCode === null && !oc.process.killed) {
+    try { oc.process.kill("SIGTERM"); } catch {}
   }
   if (job.state === "running" && job.pid) {
     try { process.kill(-job.pid, "SIGTERM"); } catch { try { process.kill(job.pid, "SIGTERM"); } catch {} }

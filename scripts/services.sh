@@ -279,23 +279,36 @@ function findBinary(candidates, executable) {
 }
 
 function checkMedia() {
+  const whisperHome = path.join(process.env.HOME || '', '.local/share/ugc-media/whisper');
   const ffmpeg = findBinary([config('FFMPEG_BIN'), '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/data/data/com.termux/files/usr/bin/ffmpeg'], true);
   const ffprobe = findBinary([config('FFPROBE_BIN'), '/usr/bin/ffprobe', '/usr/local/bin/ffprobe', '/data/data/com.termux/files/usr/bin/ffprobe'], true);
+  // Permanent assets are preferred; /tmp entries are legacy fallbacks only.
   const whisperBinary = findBinary([
     config('WHISPER_BIN'),
+    path.join(whisperHome, 'whisper-cli'),
     '/tmp/opencode/whisper.cpp/build/bin/whisper-cli',
     '/tmp/opencode/whisper.cpp/build/bin/main',
     '/usr/local/bin/whisper-cli',
   ], true);
   const whisperModel = findBinary([
     config('WHISPER_MODEL'),
+    path.join(whisperHome, 'ggml-tiny.en.bin'),
     '/tmp/opencode/whisper.cpp/models/ggml-tiny.en.bin',
-    '/tmp/opencode/whisper.cpp/models/ggml-tiny.bin',
     '/tmp/opencode/whisper.cpp/models/ggml-base.en.bin',
+  ], false);
+  // Optional: German/auto requests fail closed without this model.
+  const whisperMultilingual = findBinary([
+    config('WHISPER_MODEL_MULTILINGUAL'),
+    path.join(whisperHome, 'ggml-tiny.bin'),
+    '/tmp/opencode/whisper.cpp/models/ggml-tiny.bin',
     '/tmp/opencode/whisper.cpp/models/ggml-base.bin',
   ], false);
   const items = { ffmpeg, ffprobe, whisperBinary, whisperModel };
-  return { healthy: Object.values(items).every((item) => item.available), ...items };
+  return {
+    healthy: Object.values(items).every((item) => item.available),
+    ...items,
+    whisperMultilingual: { ...whisperMultilingual, required: false },
+  };
 }
 
 function checkMece() {

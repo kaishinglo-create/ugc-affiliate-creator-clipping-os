@@ -8,42 +8,153 @@ const state = {
     workflows: [], ideas: [], insights: [], experiments: [], agents: [],
     agentTasks: [], contentPosts: [], incidents: [], approvals: [],
     analytics: null, integrations: [], systemStatus: null, summary: null,
-    browser: null, niches: [], items: []
+    browser: null, niches: [], items: [], candidates: [], discoveryError: null,
+    controlStatus: null, media: null
   },
   loading: false,
   error: null,
-  browserSessionId: ""
+  browserSessionId: "",
+  authMessage: ""
 };
 
 const titles = {overview:"Overview",radar:"Product Radar",creators:"Creators",campaigns:"Campaigns",scripts:"Script Studio",clipping:"Clipping Studio",youtube:"YouTube Intelligence",content:"Content Factory",calendar:"Publishing Calendar",analytics:"Analytics & Revenue",agents:"Agent Control",integrations:"Integrations","agent-browser":"Agent Browser"};
+const CONTROL_FALLBACK_URL = "http://127.0.0.1:3031/";
+const WORKFLOW_ACTIONS = ["echo", "delay"];
+const MEDIA_LANGUAGES = ["de", "en", "auto"];
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
-function toast(message) { const el=$("#toast"); el.textContent=message; el.classList.add("show"); clearTimeout(toast.timer); toast.timer=setTimeout(()=>el.classList.remove("show"),2300); }
+function toast(message) {
+  const el = $("#toast");
+  if (!el) return;
+  el.textContent = message;
+  el.classList.add("show");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => el.classList.remove("show"), 2300);
+}
+
+function errorText(err) {
+  const code = err && (err.code || (err.details && err.details.code));
+  return code ? code + ": " + (err && err.message ? err.message : code) : String(err && err.message || err || "Unknown error");
+}
 
 function tag(text, color) { return '<span class="tag '+(color||"")+'">'+esc(text)+"</span>"; }
 function heading(title, desc, action) { return '<div class="heading"><div><div class="eyebrow">CREATOR OPERATIONS</div><h1>'+title+'</h1><p>'+desc+'</p></div>'+(action||"")+'</div>'; }
 function button(text, action, primary) { return '<button class="btn '+(primary?"primary":"")+'" data-action="'+action+'">'+text+'</button>'; }
 function stat(label, value, note, symbol) { return '<article class="stat"><div class="stat-label">'+label+'<span class="symbol">'+symbol+'</span></div><div class="value">'+value+'</div><div class="sub">'+note+'</div></article>'; }
 
+function clearSession() {
+  state.user = null;
+  state.workspaces = [];
+  state.workspaceId = null;
+  state.authMessage = "Session expired. Sign in again.";
+  try { localStorage.removeItem("ugc_workspaceId"); } catch {}
+}
+
+function apiError(res, payload, status) {
+  const code = payload && payload.error ? String(payload.error) : null;
+  const err = new Error(code || (res && res.statusText) || "HTTP " + status);
+  err.status = status;
+  err.code = code;
+  err.payload = payload;
+  return err;
+}
+
 async function api(path, opts) {
   opts = opts || {};
+  const asBlob = opts.asBlob === true;
   // Only declare JSON when a body exists; Fastify rejects a bare JSON header
   // without a body (this broke /api/auth/logout).
   const headers = Object.assign({}, opts.headers || {});
   if (opts.body !== undefined && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
   if (state.workspaceId && !path.startsWith("/api/auth")) headers["X-Workspace-Id"] = state.workspaceId;
-  const res = await fetch(path, Object.assign({}, opts, { credentials:"include", headers }));
+  const fetchOpts = Object.assign({}, opts, { credentials:"include", headers });
+  delete fetchOpts.asBlob;
+  const res = await fetch(path, fetchOpts);
   if (!res.ok) {
-    let msg = res.statusText;
-    try { const j = await res.json(); if (j && j.error) msg = j.error; } catch {}
-    throw new Error(msg);
+    let payload = null;
+    try { payload = await res.json(); } catch {}
+    // An expired session is an auth transition, not stale data. Do not let the
+    // caller paint an error banner over data that no longer belongs to a user.
+    const loginRequest = path === "/api/auth/login" || path === "/api/auth/signup";
+    if (res.status === 401 && !loginRequest) {
+      clearSession();
+      renderAuth();
+    }
+    throw apiError(res, payload, res.status);
   }
+  if (asBlob) return res.blob();
   if (res.status === 204) return null;
-  const ct = res.headers.get("content-type") || "";
+  const ct = (res.headers && res.headers.get ? res.headers.get("content-type") : "") || "";
   if (ct.includes("application/json")) return res.json();
   return res.text();
+}
+
+function formatCents(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  return "€" + (n / 100).toFixed(2);
+}
+
+function parseCents(raw, label) {
+  if (raw === undefined || raw === null || String(raw).trim() === "") return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) throw new Error((label || "Amount") + " must be a non-negative whole number of cents");
+  return value;
+}
+
+function centsField(data, key, label) {
+  const value = parseCents(data[key], label);
+  return value === undefined ? {} : { [key]: value };
+}
+
+function parseNumberField(raw, label, opts) {
+  if (raw === undefined || raw === null || String(raw).trim() === "") return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) throw new Error(label + " must be a number");
+  if (opts && opts.integer && !Number.isInteger(n)) throw new Error(label + " must be a whole number");
+  if (opts && opts.min !== undefined && n < opts.min) throw new Error(label + " must be at least " + opts.min);
+  return n;
+}
+
+function initials(text) {
+  const parts = String(text || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "—";
+  return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
+}
+
+function updateProfile() {
+  const user = state.user;
+  const workspace = state.workspaces[0];
+  const name = user ? (user.name || user.email || "Workspace user") : "Not signed in";
+  const detail = user
+    ? (workspace ? workspace.name + (workspace.role ? " · " + workspace.role : "") : (state.workspaceId ? "Workspace " + state.workspaceId : "No workspace selected"))
+    : "Sign in to load workspace data";
+  const nameEl = $("#profile-name"); if (nameEl) nameEl.textContent = name;
+  const detailEl = $("#profile-detail"); if (detailEl) detailEl.textContent = detail;
+  const avatar = $("#profile-avatar"); if (avatar) avatar.textContent = initials(name);
+}
+
+function updateRadarBadge() {
+  const badge = $("#radar-count");
+  if (!badge) return;
+  const products = state.data.products;
+  if (!Array.isArray(products)) { badge.textContent = ""; badge.hidden = true; return; }
+  badge.textContent = String(products.length);
+  badge.hidden = products.length === 0;
+}
+
+function updateControlLink() {
+  const link = $("#control-link");
+  if (!link) return;
+  const status = state.data.controlStatus;
+  const url = status && typeof status.url === "string" && /^https?:\/\//.test(status.url) ? status.url : CONTROL_FALLBACK_URL;
+  link.href = url;
+  link.title = status && status.reachable
+    ? "MECE Control Center (reachable; URL from /api/control/status)"
+    : "MECE Control Center (separate loopback service; default URL, status not confirmed)";
 }
 
 async function loadMe() {
@@ -54,43 +165,70 @@ async function loadMe() {
     if (!state.workspaces.some((w)=>w.id===state.workspaceId)) state.workspaceId = state.workspaces.length ? state.workspaces[0].id : null;
     if (state.workspaceId) localStorage.setItem("ugc_workspaceId", state.workspaceId);
     else localStorage.removeItem("ugc_workspaceId");
+    state.authMessage = "";
+    updateProfile();
     return true;
-  } catch {
-    state.user = null;
-    state.workspaces = [];
+  } catch (e) {
+    if (e && e.status !== 401) { state.user = null; state.workspaces = []; }
+    updateProfile();
     return false;
   }
 }
 
+async function loadProductCount() {
+  try {
+    state.data.products = (await api("/api/products")).products || [];
+  } catch (e) {
+    if (e && e.status === 401) return;
+    state.data.products = null;
+  }
+  updateRadarBadge();
+}
+
+async function loadControlStatus() {
+  try { state.data.controlStatus = await api("/api/control/status"); }
+  catch (e) { if (e && e.status === 401) return; state.data.controlStatus = null; }
+  updateControlLink();
+}
+
 function authScreen() {
-  return '<div class="page auth-wrap"><section class="panel"><h2>Sign in</h2><form id="login-form" class="field-grid"><div class="field full"><label>Email</label><input name="email" type="email" required></div><div class="field full"><label>Password</label><input name="password" type="password" required></div><div class="field full"><button class="btn primary" type="submit">Login</button></div></form><p class="sub">No account? <a href="#" id="show-signup">Sign up</a></p><div id="auth-msg" class="sub"></div></section></div>';
+  return '<div class="page auth-wrap"><section class="panel"><h2>Sign in</h2><form id="login-form" class="field-grid"><div class="field full"><label>Email</label><input name="email" type="email" required></div><div class="field full"><label>Password</label><input name="password" type="password" required></div><div class="field full"><button class="btn primary" type="submit">Login</button></div></form><p class="sub">No account? <a href="#" id="show-signup">Sign up</a></p><div id="auth-msg" class="sub" role="status">'+esc(state.authMessage)+'</div></section></div>';
 }
 
 function signupScreen() {
-  return '<div class="page auth-wrap"><section class="panel"><h2>Sign up</h2><form id="signup-form" class="field-grid"><div class="field full"><label>Email</label><input name="email" type="email" required></div><div class="field full"><label>Password (min 10)</label><input name="password" type="password" required minlength="10"></div><div class="field full"><label>Name</label><input name="name"></div><div class="field full"><label>Workspace name</label><input name="workspaceName" required></div><div class="field full"><label>Workspace slug</label><input name="workspaceSlug" required></div><div class="field full"><button class="btn primary" type="submit">Create account</button></div></form><p class="sub">Already have an account? <a href="#" id="show-login">Login</a></p><div id="auth-msg" class="sub"></div></section></div>';
+  return '<div class="page auth-wrap"><section class="panel"><h2>Sign up</h2><form id="signup-form" class="field-grid"><div class="field full"><label>Email</label><input name="email" type="email" required></div><div class="field full"><label>Password (min 10)</label><input name="password" type="password" required minlength="10"></div><div class="field full"><label>Name</label><input name="name"></div><div class="field full"><label>Workspace name</label><input name="workspaceName" required></div><div class="field full"><label>Workspace slug</label><input name="workspaceSlug" required></div><div class="field full"><button class="btn primary" type="submit">Create account</button></div></form><p class="sub">Already have an account? <a href="#" id="show-login">Login</a></p><div id="auth-msg" class="sub" role="status">'+esc(state.authMessage)+'</div></section></div>';
 }
 
 let authMode = "login";
 
+async function afterAuth() {
+  const ok = await loadMe();
+  if (!ok) { renderAuth(); return; }
+  state.error = null;
+  await loadProductCount();
+  await loadControlStatus();
+  await loadView(state.view);
+}
+
 async function handleLogin(e) {
   e.preventDefault();
   const d = Object.fromEntries(new FormData(e.target));
+  state.authMessage = "";
   try {
     await api("/api/auth/login", { method:"POST", body: JSON.stringify(d) });
-    await loadMe();
-    await loadView(state.view);
-  } catch (err) { const m=$("#auth-msg"); if (m) m.textContent = err.message; }
+    await afterAuth();
+  } catch (err) { const m=$("#auth-msg"); if (m) m.textContent = errorText(err); }
 }
 
 async function handleSignup(e) {
   e.preventDefault();
   const d = Object.fromEntries(new FormData(e.target));
   if (!d.name) delete d.name;
+  state.authMessage = "";
   try {
     await api("/api/auth/signup", { method:"POST", body: JSON.stringify(d) });
-    await loadMe();
-    await loadView(state.view);
-  } catch (err) { const m=$("#auth-msg"); if (m) m.textContent = err.message; }
+    await afterAuth();
+  } catch (err) { const m=$("#auth-msg"); if (m) m.textContent = errorText(err); }
 }
 
 async function doLogout() {
@@ -99,11 +237,11 @@ async function doLogout() {
   try {
     await api("/api/auth/logout", { method:"POST", body: JSON.stringify({}) });
   } catch (err) {
-    toast("Logout failed: " + err.message);
+    toast("Logout failed: " + errorText(err));
     return;
   }
-  state.user = null; state.workspaces = []; state.workspaceId = null;
-  localStorage.removeItem("ugc_workspaceId");
+  clearSession();
+  state.authMessage = "Signed out.";
   renderAuth();
 }
 
@@ -123,35 +261,74 @@ async function loadView(view) {
         state.data.systemStatus = status;
         state.data.summary = summary;
         state.data.ops = ops;
+        await loadControlStatus();
         break;
       }
-      case "radar": state.data.products = (await api("/api/products")).products; break;
-      case "creators": state.data.creators = (await api("/api/creators")).creators; break;
-      case "campaigns": state.data.campaigns = (await api("/api/campaigns")).campaigns; break;
-      case "analytics": state.data.analytics = await api("/api/analytics/summary"); break;
-      case "integrations": state.data.integrations = (await api("/api/integrations")).integrations; break;
-      case "agents": {
-        state.data.agents = (await api("/api/agents")).agents;
-        state.data.agentTasks = (await api("/api/agent-tasks")).tasks;
-        state.data.engine = await api("/api/engine/status").catch(()=>null);
-        state.data.ai = await api("/api/ai/status").catch(()=>null);
-        break;
-      }
-      case "content": state.data.contentPosts = (await api("/api/content-posts")).posts; break;
-      case "scripts": state.data.ideas = (await api("/api/ideas")).ideas; break;
-      case "clipping": state.data.workflows = (await api("/api/workflows")).workflows; break;
-      case "youtube": state.data.contentPosts = (await api("/api/content-posts")).posts; break;
-      case "calendar": state.data.tasks = (await api("/api/tasks")).tasks; break;
-      case "analytics": state.data.analytics = await api("/api/analytics/summary"); break;
+      case "radar": state.data.products = (await api("/api/products")).products || []; updateRadarBadge(); break;
+      case "creators": state.data.creators = (await api("/api/creators")).creators || []; break;
+      case "campaigns": state.data.campaigns = (await api("/api/campaigns")).campaigns || []; break;
+      case "analytics": await loadAnalyticsData(); break;
+      case "integrations": state.data.integrations = (await api("/api/integrations")).integrations || []; break;
+      case "agents": await loadAgentsData(); break;
+      case "content": state.data.contentPosts = (await api("/api/content-posts")).posts || []; break;
+      case "scripts": state.data.ideas = (await api("/api/ideas")).ideas || []; break;
+      case "clipping": await loadClippingData(); break;
+      case "youtube": await loadDiscoveryData(); break;
+      case "calendar": state.data.tasks = (await api("/api/tasks")).tasks || []; break;
       case "agent-browser": state.data.browser = await loadBrowserData(); break;
     }
   } catch (e) {
-    state.error = e.message;
-    toast("Error: " + e.message);
+    // 401 already switched to the login screen inside api(). Never call it
+    // "STALE DATA" — that would invite the user to trust another workspace.
+    if (e && e.status === 401) return;
+    state.error = errorText(e);
+    toast("Error: " + errorText(e));
   } finally {
     state.loading = false;
     render();
   }
+}
+
+async function loadAgentsData() {
+  const [agents, tasks, engine, ai] = await Promise.all([
+    api("/api/agents").then((r)=>r.agents || []),
+    api("/api/agent-tasks").then((r)=>r.tasks || []),
+    api("/api/engine/status").catch(()=>null),
+    api("/api/ai/status").catch(()=>null)
+  ]);
+  state.data.agents = agents;
+  state.data.agentTasks = tasks;
+  state.data.engine = engine;
+  state.data.ai = ai;
+}
+
+async function loadClippingData() {
+  state.data.workflows = (await api("/api/workflows")).workflows || [];
+  const media = mediaState();
+  if (media.job && media.job.id) {
+    try { await pollMediaJob(media.job.id); }
+    catch (e) { media.error = mediaErrorText(e); }
+  }
+}
+
+async function loadDiscoveryData() {
+  try {
+    state.data.candidates = (await api("/api/discovery/candidates")).candidates || [];
+    state.data.discoveryError = null;
+  } catch (e) {
+    if (e && e.status === 401) throw e;
+    state.data.candidates = [];
+    state.data.discoveryError = errorText(e);
+  }
+}
+
+async function loadAnalyticsData() {
+  const [summary, posts] = await Promise.all([
+    api("/api/analytics/summary").catch(()=>null),
+    api("/api/content-posts").catch(()=>({posts:[]}))
+  ]);
+  state.data.analytics = summary;
+  state.data.contentPosts = (posts && posts.posts) || [];
 }
 
 function loadingBlock() { return state.loading ? '<p class="sub">Loading…</p>' : ''; }
@@ -161,7 +338,7 @@ function overview() {
   const o = state.data.ops || state.data.summary;
   return heading("Your creator engine, at a glance","Live data from backend. Products, creators, campaigns and tasks are persisted in PostgreSQL.", button("Refresh","refresh",true)) +
   '<div class="stats">' +
-    stat("DB status", s ? s.status : "—", s ? "version "+s.version : "checking", " ") +
+    stat("DB status", s ? s.status : "—", s ? "version "+s.version : "checking", " ") +
     stat("Workflows", o && o.summary ? o.summary.workflows : "0", "Persisted", "◈") +
     stat("Open incidents", o && o.summary ? o.summary.incidents : "0", "Reliability", "⚠") +
     stat("Content ideas", o && o.summary ? o.summary.ideas : "0", "Persisted", "✳") +
@@ -172,7 +349,7 @@ function overview() {
 
 function radar() {
   const items = state.data.products || [];
-  const cards = items.length ? items.map(p=>'<article class="card"><div class="card-top">'+tag(p.category||"product","purple")+'<span class="score">'+(p.priceCents!=null?'€'+(p.priceCents/100).toFixed(2):"—")+'</span></div><h3>'+esc(p.name)+'</h3><p>Persisted product opportunity.</p><div class="metrics"><div><small>Source</small><b>'+esc(p.source||"—")+'</b></div><div><small>Status</small><b>'+esc(p.status||"new")+'</b></div></div></article>').join("") : '<div class="panel">No products yet. Add one.</div>';
+  const cards = items.length ? items.map(p=>'<article class="card"><div class="card-top">'+tag(p.category||"product","purple")+'<span class="score">'+formatCents(p.priceCents)+'</span></div><h3>'+esc(p.name)+'</h3><p>Persisted product opportunity.</p><div class="metrics"><div><small>Source</small><b>'+esc(p.source||"—")+'</b></div><div><small>Status</small><b>'+esc(p.status||"new")+'</b></div></div></article>').join("") : '<div class="panel">No products yet. Add one.</div>';
   return heading("Product Radar","Persisted products from /api/products.", button("＋ Add product","add-product",true)) + '<div class="cards">'+cards+'</div>' + loadingBlock();
 }
 
@@ -184,7 +361,7 @@ function creators() {
 
 function campaigns() {
   const rows = state.data.campaigns || [];
-  const body = rows.length ? '<section class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Campaign</th><th>Goal</th><th>Status</th><th>Budget</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+esc(r.name)+'</td><td>'+esc(r.goal||"—")+'</td><td>'+tag(r.status||"draft")+'</td><td>'+esc(r.budgetCents!=null?r.budgetCents/100:"—")+'</td></tr>').join("")+'</tbody></table></div></section>' : '<div class="panel">No campaigns yet.</div>';
+  const body = rows.length ? '<section class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Campaign</th><th>Goal</th><th>Status</th><th>Budget</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+esc(r.name)+'</td><td>'+esc(r.goal||"—")+'</td><td>'+tag(r.status||"draft")+'</td><td>'+formatCents(r.budgetCents)+'</td></tr>').join("")+'</tbody></table></div></section>' : '<div class="panel">No campaigns yet.</div>';
   return heading("Campaigns","Persisted campaigns from /api/campaigns.", button("＋ Add campaign","add-campaign",true)) + body + loadingBlock();
 }
 
@@ -194,10 +371,16 @@ function scripts() {
   return heading("Script Studio / Ideas","Persisted content ideas from /api/ideas.", button("＋ Add idea","add-idea",true)) + body + loadingBlock();
 }
 
+function workflowStepsHtml(steps) {
+  if (!Array.isArray(steps) || !steps.length) return "keine";
+  return esc(steps.map((s) => (s && s.name ? s.name : "—") + ":" + (s && s.action ? s.action : "—")).join(", "));
+}
+
 function clipping() {
   const rows = state.data.workflows || [];
-  const body = rows.length ? '<section class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Workflow</th><th>Steps</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+esc(r.name)+'</td><td>'+esc(Array.isArray(r.steps)&&r.steps.length?JSON.stringify(r.steps):'keine (kein Editor in diesem Build)')+'</td></tr>').join("")+'</tbody></table></div></section>' : '<div class="panel">No workflows yet.</div>';
-  return heading("Clipping Studio / Workflows","Persisted workflows from /api/workflows. Video processing is not connected to this UI.", button("＋ Add workflow","add-workflow",true)) + body + loadingBlock();
+  const body = rows.length ? '<section class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Workflow</th><th>Steps</th><th>Run</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+esc(r.name)+'</td><td>'+workflowStepsHtml(r.steps)+'</td><td><button class="btn" data-action="workflow-run" data-workflow-id="'+esc(r.id)+'">Run</button></td></tr>').join("")+'</tbody></table></div></section>' : '<div class="panel">No workflows yet.</div>';
+  const workflowForm = '<section class="panel"><h2>Workflow step editor</h2><form id="workflow-form" class="field-grid"><div class="field full"><label>Name</label><input name="name" required></div><div class="field"><label>Step name</label><input name="stepName"></div><div class="field"><label>Action</label><select name="action">'+WORKFLOW_ACTIONS.map(a=>'<option value="'+a+'">'+a+'</option>').join("")+'</select></div><div class="field"><button class="btn primary" type="submit">Create workflow</button></div></form><p class="sub">Steps use only registered backend actions ('+esc(WORKFLOW_ACTIONS.join(", "))+'). This build has no update route: create a new definition to change steps.</p></section>';
+  return heading("Clipping Studio","Persisted workflows via /api/workflows. Media jobs are shown only when the backend returns them.", button("Refresh","refresh",true)) + workflowForm + body + mediaPanel() + loadingBlock();
 }
 
 function content() {
@@ -207,7 +390,13 @@ function content() {
 }
 
 function youtube() {
-  return heading("YouTube Intelligence","Manual research only. No YouTube API configured.") + '<div class="notice">No YouTube API or transcript provider is configured. This build has no notes form; record manual findings with Content Factory or through the API. It does not download videos.</div>' + loadingBlock();
+  const rows = state.data.candidates || [];
+  const notice = state.data.discoveryError
+    ? '<div class="notice" role="alert">'+esc(state.data.discoveryError)+'. Stored candidates below are the only discovery data shown.</div>'
+    : '<div class="notice">Candidates are stored rows from /api/discovery/candidates. A search needs the server-side discovery MCP client/server.</div>';
+  const form = '<section class="panel"><h2>Run discovery search</h2><form id="discovery-form" class="field-grid"><div class="field full"><label>Query</label><input name="query" required></div><div class="field"><button class="btn primary" type="submit">Queue search</button></div></form><p class="sub">POST /api/discovery/searches returns 503 DISCOVERY_NOT_CONFIGURED when no provider is configured.</p></section>';
+  const body = rows.length ? '<section class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Title</th><th>Channel</th><th>Link</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+esc(r.title)+'</td><td>'+esc(r.channel||"—")+'</td><td><a href="'+esc(r.url||"#")+'" target="_blank" rel="noopener noreferrer">Open</a></td></tr>').join("")+'</tbody></table></div></section>' : '<div class="panel">No discovery candidates stored yet.</div>';
+  return heading("YouTube Intelligence","Real discovery candidates and searches; no fabricated research.") + notice + form + body + loadingBlock();
 }
 
 function calendar() {
@@ -221,9 +410,14 @@ function analytics() {
   const m = a && a.summary ? a.summary.metrics : {};
   const clicks = a && a.summary ? a.summary.clicks : 0;
   const convs = a && a.summary ? a.summary.conversions : 0;
+  const posts = state.data.contentPosts || [];
+  const postOptions = posts.length ? posts.map(p=>'<option value="'+esc(p.id)+'">'+esc(p.platform+": "+(p.title||p.externalId))+'</option>').join("") : '';
   return heading("Analytics & Revenue","Aggregated from persisted snapshots/clicks. No external analytics connected.") +
-  '<div class="notice">No external analytics or affiliate network is connected. Values reflect manually recorded data only.</div>' +
+  '<div class="notice">Values reflect manually recorded snapshots and clicks only. No affiliate network or analytics provider is connected.</div>' +
   '<div class="stats">'+stat("Clicks", clicks, "Recorded", "↗")+stat("Conversions", convs, "Recorded", "✓")+stat("Metrics", Object.keys(m).length, "Distinct", "⌁")+'</div>' +
+  '<section class="panel"><h2>Record a metric snapshot</h2><form id="analytics-snapshot-form" class="field-grid"><div class="field"><label>Metric</label><input name="metric" required></div><div class="field"><label>Value</label><input name="value" type="number" step="any" required></div><div class="field full"><label>Source</label><input name="source" value="manual"></div><div class="field"><button class="btn primary" type="submit">Save snapshot</button></div></form></section>' +
+  '<section class="panel"><h2>Record an affiliate click</h2><form id="analytics-click-form" class="field-grid"><div class="field"><label>Content post ID</label><input name="contentId"></div><div class="field"><label>Offer ID</label><input name="offerId"></div><div class="field full"><label>Idempotency key (optional)</label><input name="idempotencyKey"></div><div class="field"><button class="btn" type="submit">Save click</button></div></form></section>' +
+  '<section class="panel"><h2>Content post snapshot</h2>' + (postOptions ? '<form id="content-snapshot-form" class="field-grid"><div class="field full"><label>Post</label><select name="postId" required>'+postOptions+'</select></div><div class="field"><label>Views</label><input name="views" type="number" min="0" step="1" value="0"></div><div class="field"><label>Likes</label><input name="likes" type="number" min="0" step="1" value="0"></div><div class="field"><label>Comments</label><input name="comments" type="number" min="0" step="1" value="0"></div><div class="field"><label>Shares</label><input name="shares" type="number" min="0" step="1" value="0"></div><div class="field"><label>Watch time (sec)</label><input name="watchTimeSec" type="number" min="0" step="any"></div><div class="field"><button class="btn" type="submit">Save post snapshot</button></div></form>' : '<p class="sub">Add a content post in Content Factory first; snapshots need a real post ID.</p>') + '</section>' +
   (Object.keys(m).length ? '<section class="panel"><h2>Metrics</h2><pre>'+esc(JSON.stringify(m,null,2))+'</pre></section>' : '') + loadingBlock();
 }
 
@@ -266,33 +460,238 @@ function aiPanel() {
 function agents() {
   const agents = state.data.agents || [];
   const tasks = state.data.agentTasks || [];
+  const agentOptions = agents.map(a=>'<option value="'+esc(a.id)+'">'+esc(a.name)+'</option>').join("");
   return heading("Agent Control","Persisted agents/tasks from /api/agents and /api/agent-tasks.") +
   enginePanel() +
   aiPanel() +
-  '<section class="panel"><h2>Agents</h2>' + (agents.length ? agents.map(a=>'<p>'+esc(a.name)+' — '+esc(a.role)+'</p>').join("") : '<p class="sub">No agents yet.</p>') + '</section>' +
-  '<section class="panel"><h2>Tasks</h2>' + (tasks.length ? tasks.map(t=>'<p>'+esc(t.name)+' — '+esc(t.status)+'</p>').join("") : '<p class="sub">No tasks yet.</p>') + '</section>' + loadingBlock();
+  '<section class="panel"><h2>Add agent</h2><form id="agent-form" class="field-grid"><div class="field"><label>Name</label><input name="name" required></div><div class="field"><label>Role</label><input name="role" required></div><div class="field"><button class="btn primary" type="submit">Create agent</button></div></form>' + (agents.length ? agents.map(a=>'<p>'+esc(a.name)+' — '+esc(a.role)+'</p>').join("") : '<p class="sub">No agents yet.</p>') + '</section>' +
+  '<section class="panel"><h2>Add agent task</h2><form id="agent-task-form" class="field-grid"><div class="field"><label>Name</label><input name="name" required></div><div class="field"><label>Agent</label><select name="agentId"><option value="">(none)</option>'+agentOptions+'</select></div><div class="field full"><label>Input (optional)</label><input name="input"></div><div class="field"><button class="btn" type="submit">Create task</button></div></form>' + (tasks.length ? tasks.map(t=>'<p>'+esc(t.name)+' — '+esc(t.status)+'</p>').join("") : '<p class="sub">No tasks yet.</p>') + '<p class="sub">No run button is offered: POST /api/agent-tasks/:id/run currently returns 501 AGENT_RUNTIME_NOT_CONNECTED.</p>' + '</section>' + loadingBlock();
 }
 
 function integrations() {
   const rows = state.data.integrations || [];
-  const cards = rows.length ? rows.map(i=>'<article class="card">'+tag(i.status==="CREDENTIALS_ONLY"?"CREDENTIALS ONLY":"NOT CONFIGURED","orange")+'<h3>'+esc(i.name)+'</h3><p>'+esc(i.description)+'</p><p class="sub">env: '+esc(i.envKey)+'</p><p class="sub">No live adapter connected; status reflects stored credentials only.</p></article>').join("") : '<div class="panel">No integrations.</div>';
-  return heading("Integrations","Honest status from /api/integrations. No secrets stored in browser.") + '<div class="notice">Credentials are never stored in browser code. Set API keys server-side via env or POST /api/integrations/:provider.</div><div class="cards">'+cards+'</div>' + loadingBlock();
+  const cards = rows.length ? rows.map(i=>{
+    const status = String(i.status || "NOT_CONFIGURED");
+    const liveAdapter = i.liveAdapter === true ? "liveAdapter: true" : "liveAdapter: false";
+    return '<article class="card">'+tag(status, status==="CREDENTIALS_ONLY"||status==="CONFIGURED"?"orange":"")+'<h3>'+esc(i.name||i.provider)+'</h3><p>'+esc(i.description||"")+'</p><p class="sub">provider: '+esc(i.provider||"")+' · '+esc(liveAdapter)+'</p><p class="sub">No live adapter connected; status reflects stored credentials only.</p></article>';
+  }).join("") : '<div class="panel">No integrations.</div>';
+  const options = rows.map(i=>'<option value="'+esc(i.provider)+'">'+esc(i.name||i.provider)+'</option>').join("");
+  const form = rows.length ? '<section class="panel"><h2>Save a credential</h2><form id="integration-form" class="field-grid"><div class="field"><label>Provider</label><select name="provider" required>'+options+'</select></div><div class="field"><label>API key</label><input name="apiKey" type="password" autocomplete="off" required></div><div class="field"><button class="btn primary" type="submit">Save credential</button></div></form><p class="sub">POST /api/integrations/:provider stores only a masked hint server-side. liveAdapter:false — this does not establish a live connection.</p></section>' : '<section class="panel"><p class="sub">No providers available for credential entry.</p></section>';
+  return heading("Integrations","Honest status from /api/integrations. No secrets stored in browser.") + '<div class="notice">Credentials are never stored in browser code. Set API keys server-side via env or POST /api/integrations/:provider.</div>' + form + '<div class="cards">'+cards+'</div>' + loadingBlock();
 }
 
+function mediaState() {
+  if (!state.data.media) state.data.media = { asset:null, job:null, clips:[], highlights:[], subtitles:"", subtitlesCues:[], subtitlesName:"", previewUrl:null, selectedClips:[], selectedHighlights:[], exports:[], error:null };
+  return state.data.media;
+}
+
+function mediaErrorText(err) {
+  const code = err && (err.code || (err.details && err.details.code));
+  if (code === "NOT_CONFIGURED") return "NOT_CONFIGURED: media runtime is not configured on the server.";
+  return errorText(err);
+}
+
+function fileNameFrom(file) {
+  const raw = typeof file === "string" ? file : (file && file.name || "");
+  return String(raw).split(/[\\/]/).pop() || "";
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    if (typeof file.content === "string") { resolve(file.content); return; }
+    if (typeof FileReader === "undefined") { reject(new Error("FILE_READER_UNAVAILABLE")); return; }
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || "").split(",").pop() || "");
+    reader.onerror = () => reject(reader.error || new Error("FILE_READ_FAILED"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function extractMediaResult(result) {
+  const media = mediaState();
+  media.clips = result && Array.isArray(result.clips) ? result.clips : [];
+  media.highlights = result && Array.isArray(result.highlights) ? result.highlights : [];
+  media.subtitles = result && typeof result.subtitles === "string" ? result.subtitles : (result && result.transcript && typeof result.transcript.text === "string" ? result.transcript.text : "");
+  media.subtitlesCues = result && Array.isArray(result.cues) ? result.cues : [];
+  media.selectedClips = media.selectedClips.filter((i) => i < media.clips.length);
+}
+
+async function uploadMedia(file) {
+  const basename = fileNameFrom(file);
+  if (!basename) throw new Error("INVALID_FILE_NAME");
+  const content = await readFileAsBase64(file);
+  const res = await api("/api/media/upload", { method:"POST", body: JSON.stringify({ basename, file: content }) });
+  const media = mediaState();
+  media.asset = res && (res.asset || res.file) || null;
+  media.error = null;
+  return media.asset;
+}
+
+async function createMediaJob(name, language) {
+  const clean = String(name || "").trim();
+  if (!clean) throw new Error("FILE_NAME_REQUIRED");
+  const lang = MEDIA_LANGUAGES.indexOf(language) >= 0 ? language : "auto";
+  const res = await api("/api/media/jobs", { method:"POST", body: JSON.stringify({ name: clean, language: lang }) });
+  const media = mediaState();
+  media.job = res && (res.job || res) || null;
+  media.error = null;
+  return media.job;
+}
+
+async function processMediaJob(id) {
+  const jobId = String(id || "").trim();
+  if (!jobId) throw new Error("JOB_ID_REQUIRED");
+  const res = await api("/api/media/jobs/" + encodeURIComponent(jobId) + "/process", { method:"POST", body: JSON.stringify({}) });
+  const media = mediaState();
+  media.job = res && (res.job || res) || media.job;
+  if (media.job && media.job.result) extractMediaResult(media.job.result);
+  return media.job;
+}
+
+async function pollMediaJob(id) {
+  const jobId = String(id || "").trim();
+  if (!jobId) throw new Error("JOB_ID_REQUIRED");
+  const res = await api("/api/media/jobs/" + encodeURIComponent(jobId));
+  const media = mediaState();
+  media.job = res && (res.job || res) || null;
+  if (media.job && media.job.result) extractMediaResult(media.job.result);
+  return media.job;
+}
+
+async function previewMediaFile(name) {
+  const clean = String(name || "").trim();
+  if (!clean) throw new Error("FILE_NAME_REQUIRED");
+  const blob = await api("/api/media/files/" + encodeURIComponent(clean), { asBlob:true });
+  const media = mediaState();
+  if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+    if (media.previewUrl && typeof URL.revokeObjectURL === "function") URL.revokeObjectURL(media.previewUrl);
+    media.previewUrl = URL.createObjectURL(blob);
+  }
+  return media.previewUrl;
+}
+
+async function cancelMediaJob(id) {
+  const jobId = String(id || "").trim();
+  if (!jobId) throw new Error("JOB_ID_REQUIRED");
+  return api("/api/jobs/" + encodeURIComponent(jobId) + "/cancel", { method:"POST", body: JSON.stringify({}) });
+}
+
+async function retryMediaJob(id) {
+  const jobId = String(id || "").trim();
+  if (!jobId) throw new Error("JOB_ID_REQUIRED");
+  return api("/api/jobs/" + encodeURIComponent(jobId) + "/retry", { method:"POST", body: JSON.stringify({}) });
+}
+
+async function detectHighlights() {
+  const media = mediaState();
+  const text = media.subtitles || (media.job && media.job.result && media.job.result.text) || "";
+  if (!String(text).trim()) throw new Error("NO_TRANSCRIPT_TO_ANALYZE");
+  const keywords = $("#media-keywords") ? String($("#media-keywords").value || "").split(",").map((k) => k.trim()).filter(Boolean) : [];
+  const res = await api("/api/media/transcription/highlights", { method:"POST", body: JSON.stringify({ text:String(text), keywords:keywords, limit:5 }) });
+  media.highlights = res && Array.isArray(res.highlights) ? res.highlights : [];
+  return media.highlights;
+}
+
+async function writeSubtitles() {
+  const media = mediaState();
+  if (!media.subtitlesCues.length) throw new Error("NO_CUES_IN_JOB_RESULT");
+  const base = fileNameFrom(media.asset && (media.asset.name || media.asset.basename) || (media.job && media.job.name) || "captions");
+  const name = String(base || "captions").replace(/\.[^.]+$/, "") + ".srt";
+  const res = await api("/api/media/subtitles", { method:"POST", body: JSON.stringify({ name, cues: media.subtitlesCues }) });
+  media.subtitlesName = res && res.subtitles && res.subtitles.path ? name : media.subtitlesName;
+  return res;
+}
+
+function clipTime(clip, key) {
+  const ms = Number(clip && clip[key + "Ms"]);
+  if (Number.isFinite(ms)) return ms / 1000;
+  const sec = Number(clip && clip[key + "Sec"]);
+  if (Number.isFinite(sec)) return sec;
+  return 0;
+}
+
+async function exportSelectedClips() {
+  const media = mediaState();
+  const indices = media.selectedClips.filter((i) => media.clips[i]);
+  if (!indices.length) throw new Error("SELECT_AT_LEAST_ONE_CLIP");
+  const inputName = fileNameFrom(media.asset && (media.asset.name || media.asset.basename) || (media.job && media.job.inputName) || "");
+  if (!inputName) throw new Error("UPLOAD_A_FILE_FIRST");
+  const exports = [];
+  for (const i of indices) {
+    const clip = media.clips[i];
+    const start = clipTime(clip, "start");
+    const end = clipTime(clip, "end");
+    const duration = end > start ? end - start : Number(clip && clip.durationSec || clip && clip.duration);
+    if (!Number.isFinite(duration) || duration <= 0) throw new Error("CLIP_" + i + "_HAS_NO_DURATION");
+    const outputName = fileNameFrom(clip.name || clip.fileName || "clip-" + (i + 1) + ".mp4") || "clip-" + (i + 1) + ".mp4";
+    const body = { inputName, outputName, start, duration, vertical:true };
+    if (media.subtitlesName) body.subtitlesName = media.subtitlesName;
+    exports.push(await api("/api/media/export", { method:"POST", body: JSON.stringify(body) }));
+  }
+  media.exports = exports;
+  return exports;
+}
+
+function mediaPanel() {
+  const media = mediaState();
+  const job = media.job;
+  const assetName = fileNameFrom(media.asset && (media.asset.name || media.asset.basename) || (job && job.name) || "");
+  const stage = job && job.stage !== undefined && job.stage !== null ? esc(job.stage) : "—";
+  const progress = job && typeof job.progress === "number" && Number.isFinite(job.progress) ? esc(Math.round(job.progress * 100) + "%") : "—";
+  const clips = Array.isArray(media.clips) && media.clips.length ? media.clips.map((c, i) => {
+    const range = c && c.startMs !== undefined && c.startMs !== null && c.endMs !== undefined && c.endMs !== null
+      ? c.startMs + "–" + c.endMs + " ms" : "times unavailable";
+    return '<label class="task"><input type="checkbox" data-action="clip-toggle" data-clip-index="'+i+'"'+(media.selectedClips.indexOf(i) >= 0 ? ' checked' : '')+'><span class="task-text"><b>'+esc(c.name || c.fileName || "clip-" + (i + 1))+'</b><small>'+esc(range)+'</small></span></label>';
+  }).join("") : '<p class="sub">No clips returned by the job result yet.</p>';
+  const highlights = Array.isArray(media.highlights) && media.highlights.length ? media.highlights.map((h, i) => '<label class="task"><input type="checkbox" data-action="highlight-toggle" data-highlight-index="'+i+'"'+(media.selectedHighlights.indexOf(i) >= 0 ? ' checked' : '')+'><span class="task-text"><b>'+esc(String(h.text || "").slice(0, 120))+'</b><small>score '+esc(h.score)+' · '+esc((h.reasons || []).join(", "))+'</small></span></label>').join("") : '<p class="sub">No highlights returned yet.</p>';
+  const controls = job && job.id ? '<p><button class="btn" data-action="media-process">Process</button> <button class="btn" data-action="media-poll">Poll status</button> <button class="btn" data-action="media-cancel">Cancel</button> <button class="btn" data-action="media-retry">Retry</button></p>' : '<p class="sub">Start a job to enable process/poll/cancel/retry.</p>';
+  return '<section class="panel"><h2>Media jobs</h2>' +
+    (media.error ? '<div class="notice" role="alert">'+esc(media.error)+'</div>' : '') +
+    '<form id="media-upload-form" class="field-grid"><div class="field full"><label>Video/audio file</label><input id="media-file" name="file" type="file" accept="video/*,audio/*" required></div><div class="field"><button class="btn primary" type="submit">Upload</button></div></form>' +
+    '<form id="media-job-form" class="field-grid"><div class="field full"><label>Uploaded file name</label><input id="media-name" name="name" value="'+esc(assetName)+'" required></div><div class="field"><label>Language</label><select id="media-language" name="language">'+MEDIA_LANGUAGES.map((l) => '<option value="'+l+'"'+(l === "auto" ? ' selected' : '')+'>'+l+'</option>').join("")+'</select></div><div class="field"><button class="btn" type="submit">Start transcription job</button></div><div class="field"><button class="btn" type="button" data-action="media-preview">Preview file</button></div></form>' +
+    '<div class="metrics"><div><small>Job</small><b>'+esc(job && job.id || "—")+'</b></div><div><small>Stage</small><b>'+stage+'</b></div><div><small>Progress</small><b>'+progress+'</b></div></div>' + controls +
+    (media.previewUrl ? '<video controls style="max-width:100%" src="'+esc(media.previewUrl)+'"></video>' : '<p class="sub">No preview loaded. Preview uses GET /api/media/files/:name.</p>') +
+    '<h3>Subtitle preview</h3><textarea id="media-subtitle-text" rows="5" readonly>'+esc(media.subtitles || "")+'</textarea>' +
+    '<form id="media-highlights-form" class="field-grid"><div class="field full"><label>Keywords (comma separated)</label><input id="media-keywords" name="keywords"></div><div class="field"><button class="btn" type="submit">Detect highlights</button></div><div class="field"><button class="btn" type="button" data-action="media-subtitles">Write SRT</button></div></form>' +
+    '<h3>Highlight selection</h3>'+highlights+
+    '<h3>Clip selection (multiple)</h3>'+clips+
+    '<p><button class="btn primary" data-action="media-export">Export selected clips</button></p>' +
+    '<p class="sub">All stages, clips and subtitles come from the media job result. NOT_CONFIGURED and missing credentials are shown as returned by the backend.</p></section>';
+}
+
+async function runMediaAction(action, message) {
+  const media = mediaState();
+  try {
+    const result = await action();
+    media.error = null;
+    if (message) toast(message);
+    render();
+    return result;
+  } catch (e) {
+    media.error = mediaErrorText(e);
+    toast(media.error);
+    render();
+    return null;
+  }
+}
 
 async function loadBrowserData() {
-  const status = await api('/api/browser/status').catch(()=>({runtime:{available:false,message:'status unavailable'}}));
+  const status = await api('/api/browser/status').catch(()=>({runtime:{available:false,message:'status unavailable'}, tools:[]}));
   const sessions = await api('/api/browser/sessions').catch(()=>({sessions:[]}));
+  const toolList = await api('/api/browser/mcp/tools').catch(()=>({tools:[]}));
   const list = sessions.sessions || [];
   const sid = state.browserSessionId || (list[0] && list[0].id) || '';
   state.browserSessionId = sid;
   const session = sid ? await api('/api/browser/sessions/'+sid).then(r=>r.session).catch(()=>null) : null;
   const screen = session && session.runtimeSessionId ? await api('/api/browser/sessions/'+sid+'/screenshot').catch(()=>null) : null;
-  return { status, list, sid, session, screen };
+  const tools = Array.isArray(toolList.tools) ? toolList.tools.map((t) => t.name || t).filter(Boolean) : (Array.isArray(status.tools) ? status.tools : []);
+  return { status, list, sid, session, screen, tools, read:null, result:null };
 }
 
+function browserActor() { return { actorType:"human", actorId:(state.user && state.user.id) || "human" }; }
+
 function agentBrowser() {
-  const b = state.data.browser || { status:{runtime:{available:false,message:'not loaded'}}, list:[], sid:'', session:null, screen:null };
+  const b = state.data.browser || { status:{runtime:{available:false,message:'not loaded'}}, list:[], sid:'', session:null, screen:null, tools:[], read:null, result:null };
   const status = b.status;
   const sid = b.sid;
   const session = b.session;
@@ -307,6 +706,8 @@ function agentBrowser() {
       '<button class="btn '+(t.id===session.activeTabId?'primary':'')+'" data-action="browser-switch-tab" data-tab-id="'+esc(t.id)+'">Switch</button> ' +
       '<button class="btn" data-action="browser-close-tab" data-tab-id="'+esc(t.id)+'">Close</button> ';
   }).join('<br>') : '<div class="panel">No tabs yet.</div>';
+  const tools = Array.isArray(b.tools) ? b.tools : [];
+  const toolOptions = tools.length ? tools.map((t) => '<option value="'+esc(t)+'">'+esc(t)+'</option>').join("") : '';
   return heading("Agent Browser","Shared human/agent browser workspace. Runtime: "+statusText) +
     '<section class="panel"><div class="field-grid">' +
       '<div class="field full"><label>Workspace</label><input value="'+esc(workspaceText)+'" readonly></div>' +
@@ -315,7 +716,7 @@ function agentBrowser() {
       '<div class="field full"><label>Controller</label><input value="'+esc(controllerText)+'" readonly></div>' +
       '<div class="field full"><label>Address</label><input id="browser-url" value="'+esc(session ? session.url : 'https://example.com')+'"></div>' +
       '<div class="field"><button class="btn primary" data-action="browser-create">New session</button></div>' +
-      '<div class="field"><button class="btn" data-action="browser-home">Home</button></div>' +
+      '<div class="field"><button class="btn" data-action="browser-home" title="Fills the address field with the session URL or an allowed example URL; press Navigate to request navigation.">Home shortcut</button></div>' +
       '<div class="field"><button class="btn" data-action="browser-navigate">Navigate</button></div>' +
       '<div class="field"><button class="btn" data-action="browser-back">Back</button></div>' +
       '<div class="field"><button class="btn" data-action="browser-forward">Forward</button></div>' +
@@ -323,31 +724,64 @@ function agentBrowser() {
       '<div class="field"><button class="btn" data-action="browser-new-tab">New tab</button></div>' +
       '<div class="field"><button class="btn" data-action="browser-screenshot">Screenshot</button></div>' +
       '<div class="field"><button class="btn" data-action="browser-takeover">Take over</button></div>' +
+      '<div class="field"><button class="btn" data-action="browser-close-session">Close session</button></div>' +
     '</div>' +
     '<div class="panel"><h3>Tabs</h3>'+tabsHtml+'</div>' +
     (screen && screen.base64 ? '<img alt="browser screenshot" style="max-width:100%;border:1px solid #333" src="data:'+esc(screen.mimeType||'image/png')+';base64,'+screen.base64+'">' : '<div class="panel">No screenshot (runtime may be blocked).</div>') +
-    '</section>' + loadingBlock();
+    '</section>' +
+    '<section class="panel"><h2>Page actions</h2><div class="field-grid">' +
+      '<div class="field full"><label>Selector</label><input id="browser-selector" placeholder="css selector"></div>' +
+      '<div class="field full"><label>Text to type</label><input id="browser-text"></div>' +
+      '<div class="field"><label>Wait ms</label><input id="browser-ms" type="number" min="0" step="100" value="500"></div>' +
+      '<div class="field"><label>Download URL</label><input id="browser-download-url"></div>' +
+      '<div class="field"><button class="btn" data-action="browser-read">Read</button></div>' +
+      '<div class="field"><button class="btn" data-action="browser-click">Click</button></div>' +
+      '<div class="field"><button class="btn" data-action="browser-type">Type</button></div>' +
+      '<div class="field"><button class="btn" data-action="browser-wait">Wait</button></div>' +
+      '<div class="field"><button class="btn" data-action="browser-download">Download</button></div>' +
+    '</div>' + (b.read ? '<h3>Read result (untrusted page content)</h3><pre>'+esc(JSON.stringify(b.read,null,2))+'</pre>' : '<p class="sub">No read result yet. Page content is untrusted data.</p>') + '</section>' +
+    '<section class="panel"><h2>Control handoff</h2><div class="field-grid"><div class="field full"><label>Agent ID</label><input id="browser-agent-id"></div>' +
+      '<div class="field"><button class="btn" data-action="browser-control-request">Request control</button></div>' +
+      '<div class="field"><button class="btn" data-action="browser-control-approve">Approve control</button></div>' +
+      '<div class="field"><button class="btn" data-action="browser-control-release">Release control</button></div></div></section>' +
+    '<section class="panel"><h2>MCP tool call</h2>' + (toolOptions ? '<form id="browser-mcp-form" class="field-grid"><div class="field full"><label>Tool</label><select name="tool" required>'+toolOptions+'</select></div><div class="field full"><label>Arguments (JSON object; sessionId added automatically)</label><textarea name="arguments" rows="4">{}</textarea></div><div class="field"><button class="btn primary" type="submit">Call tool</button></div></form>' : '<p class="sub">No MCP tools reported by /api/browser/mcp/tools.</p>') +
+      (b.result ? '<h3>Last tool result</h3><pre>'+esc(JSON.stringify(b.result,null,2))+'</pre>' : '') + '</section>' + loadingBlock();
 }
 
 const views = {overview,radar,creators,campaigns,scripts,clipping,youtube,content,calendar,analytics,agents,integrations,"agent-browser":agentBrowser};
 
 function renderAuth() {
-  document.body.innerHTML = authMode==="login" ? authScreen() : signupScreen();
+  const auth = $("#auth-container");
+  const markup = authMode === "login" ? authScreen() : signupScreen();
+  if (auth) {
+    auth.innerHTML = markup;
+    auth.hidden = false;
+    const page = $("#page"); if (page) page.hidden = true;
+  } else {
+    // Never replace document.body: keep the shell and all event wiring intact.
+    const page = $("#page");
+    if (page) { page.innerHTML = markup; page.hidden = false; }
+  }
   const lf = $("#login-form"); if (lf) lf.addEventListener("submit", handleLogin);
   const sf = $("#signup-form"); if (sf) sf.addEventListener("submit", handleSignup);
   const sl = $("#show-login"); if (sl) sl.addEventListener("click", (e)=>{e.preventDefault(); authMode="login"; renderAuth();});
   const ss = $("#show-signup"); if (ss) ss.addEventListener("click", (e)=>{e.preventDefault(); authMode="signup"; renderAuth();});
 }
 
-// We rely on original index.html shell. Re-render into #page only.
+// Renders into #page only; the auth screen has its own container.
 function renderPage() {
   if (!state.user) { renderAuth(); return; }
+  const auth = $("#auth-container"); if (auth) auth.hidden = true;
   const page = $("#page");
-  if (!page) { window.location.reload(); return; }
+  if (!page) { if (window && window.location) window.location.reload(); return; }
+  page.hidden = false;
   const errorBanner = state.error
-    ? '<div class="notice" role="alert">Daten konnten nicht aktualisiert werden: '+esc(state.error)+'. Angezeigte Werte können veraltet sein.</div>'
+    ? '<div class="notice" role="alert">Data could not be refreshed: '+esc(state.error)+'. Displayed values may be out of date.</div>'
     : '';
   page.innerHTML = errorBanner + (views[state.view]||overview)();
+  updateProfile();
+  updateRadarBadge();
+  updateControlLink();
   const badge = $("#live-badge");
   if (badge) {
     badge.textContent = state.error ? '● STALE DATA' : state.loading ? '● LOADING' : '● LIVE DATA';
@@ -358,94 +792,85 @@ function renderPage() {
   const sb = $("#sidebar"); if (sb) sb.classList.remove("open");
 }
 
-// Override render
 function render() { renderPage(); }
 
-// Event wiring (once)
-function wireEvents() {
+async function browserPost(path, body, message, beforeReload) {
+  try {
+    const res = await api(path, { method:"POST", body: JSON.stringify(Object.assign(browserActor(), body || {})) });
+    if (message) toast(message);
+    if (beforeReload) beforeReload(res);
+    await loadView("agent-browser");
+    return res;
+  } catch (err) { toast("Browser action failed: " + errorText(err)); return null; }
+}
+
+async function browserRead() {
+  if (!state.browserSessionId) { toast("Create a session first"); return; }
+  try {
+    const res = await api('/api/browser/sessions/' + encodeURIComponent(state.browserSessionId) + '/read');
+    await loadView("agent-browser");
+    if (state.data.browser) state.data.browser.read = res;
+    render();
+  } catch (err) { toast("Browser read failed: " + errorText(err)); }
+}
+
+async function browserScreenshot() {
+  if (!state.browserSessionId) { toast("Create a session first"); return; }
+  try {
+    const res = await api('/api/browser/sessions/' + encodeURIComponent(state.browserSessionId) + '/screenshot');
+    await loadView("agent-browser");
+    if (state.data.browser) state.data.browser.screen = res;
+    render();
+  } catch (err) { toast("Browser screenshot failed: " + errorText(err)); }
+}
+
+async function wireEvents() {
   document.addEventListener("click", async (e)=>{
-    const v = e.target.closest("[data-view]");
+    const target = e && e.target;
+    const v = target && target.closest ? target.closest("[data-view]") : null;
     if (v) { e.preventDefault(); await loadView(v.dataset.view); return; }
-    const a = e.target.closest("[data-action]");
-    if (a) {
-      const name = a.dataset.action;
+    const a = target && target.closest ? target.closest("[data-action]") : null;
+    if (!a) return;
+    const name = a.dataset.action;
+    try {
       if (name === "refresh") { await loadView(state.view); return; }
       if (name === "logout") { await doLogout(); return; }
       if (name === "engine-tick") {
-        try {
-          const res = await api('/api/engine/tick', {method:'POST', body: JSON.stringify({})});
-          const s = (res && res.summary) || {};
-          toast('Engine ran: ' + (s.succeeded||0) + ' done, ' + (s.retried||0) + ' retried, ' + (s.awaitingApproval||0) + ' awaiting approval');
-        } catch (err) {
-          toast('Engine tick failed: ' + err.message);
-        }
+        const res = await api('/api/engine/tick', {method:'POST', body: JSON.stringify({})});
+        const s = (res && res.summary) || {};
+        toast('Engine ran: ' + (s.succeeded||0) + ' done, ' + (s.retried||0) + ' retried, ' + (s.awaitingApproval||0) + ' awaiting approval');
         await loadView(state.view);
         return;
       }
-      if (name === "browser-create") {
-        const res = await api('/api/browser/sessions', {method:'POST', body: JSON.stringify({initialUrl: document.getElementById('browser-url').value})});
-        state.browserSessionId = res.session.id;
-        toast('Browser session created');
+      if (name === "workflow-run") {
+        const res = await api('/api/workflows/' + encodeURIComponent(a.dataset.workflowId) + '/run', { method:"POST", body: JSON.stringify({ input:{} }) });
+        toast('Workflow run: ' + ((res && res.run && res.run.status) || 'requested'));
         await loadView(state.view);
         return;
       }
-      if (name === "browser-navigate") {
-        if (!state.browserSessionId) { toast('Create a session first'); return; }
-        await api('/api/browser/sessions/'+state.browserSessionId+'/navigate', {method:'POST', body: JSON.stringify({url: document.getElementById('browser-url').value, actorType:'human', actorId: state.user && state.user.id ? state.user.id : 'human'})});
-        toast('Navigation requested');
-        await loadView(state.view);
+      if (name === "clip-toggle") {
+        const m = mediaState(); const i = Number(a.dataset.clipIndex);
+        const pos = m.selectedClips.indexOf(i);
+        if (pos >= 0) m.selectedClips.splice(pos, 1); else m.selectedClips.push(i);
         return;
       }
-      if (name === "browser-back") {
-        if (!state.browserSessionId) return;
-        await api('/api/browser/sessions/'+state.browserSessionId+'/back', {method:'POST', body: JSON.stringify({})});
-        await loadView(state.view); return;
-      }
-      if (name === "browser-forward") {
-        if (!state.browserSessionId) return;
-        await api('/api/browser/sessions/'+state.browserSessionId+'/forward', {method:'POST', body: JSON.stringify({})});
-        await loadView(state.view); return;
-      }
-      if (name === "browser-reload") {
-        if (!state.browserSessionId) return;
-        await api('/api/browser/sessions/'+state.browserSessionId+'/reload', {method:'POST', body: JSON.stringify({})});
-        await loadView(state.view); return;
-      }
-      if (name === "browser-new-tab") {
-        if (!state.browserSessionId) return;
-        const url = document.getElementById('browser-url').value;
-        await api('/api/browser/sessions/'+state.browserSessionId+'/tabs', {method:'POST', body: JSON.stringify({url})});
-        await loadView(state.view); return;
-      }
-      if (name === "browser-screenshot") {
-        await loadView(state.view); return;
-      }
-      if (name === "browser-home") {
-        const input = document.getElementById('browser-url');
-        if (input) input.value = 'https://example.com';
+      if (name === "highlight-toggle") {
+        const m = mediaState(); const i = Number(a.dataset.highlightIndex);
+        const pos = m.selectedHighlights.indexOf(i);
+        if (pos >= 0) m.selectedHighlights.splice(pos, 1); else m.selectedHighlights.push(i);
         return;
       }
-      if (name === "browser-switch-tab") {
-        if (!state.browserSessionId) return;
-        const tabId = a.dataset.tabId;
-        await api('/api/browser/sessions/'+state.browserSessionId+'/tabs/'+encodeURIComponent(tabId)+'/activate', {method:'POST', body: JSON.stringify({})});
-        await loadView(state.view);
+      if (name === "media-preview") { const input = $("#media-name"); await runMediaAction(()=>previewMediaFile(input && input.value), "Preview loaded"); return; }
+      if (name === "media-process") {
+        const jobId = mediaState().job && mediaState().job.id;
+        await runMediaAction(async () => { const job = await processMediaJob(jobId); return await pollMediaJob(job && job.id || jobId); }, "Job processed");
         return;
       }
-      if (name === "browser-close-tab") {
-        if (!state.browserSessionId) return;
-        const tabId = a.dataset.tabId;
-        await api('/api/browser/sessions/'+state.browserSessionId+'/tabs/'+encodeURIComponent(tabId)+'/close', {method:'POST', body: JSON.stringify({})});
-        await loadView(state.view);
-        return;
-      }
-      if (name === "browser-takeover") {
-        if (!state.browserSessionId) return;
-        await api('/api/browser/sessions/'+state.browserSessionId+'/control/takeover', {method:'POST', body: JSON.stringify({})});
-        toast('Control taken over');
-        await loadView(state.view);
-        return;
-      }
+      if (name === "media-poll") { const jobId = mediaState().job && mediaState().job.id; await runMediaAction(()=>pollMediaJob(jobId), "Status refreshed"); return; }
+      if (name === "media-cancel") { const jobId = mediaState().job && mediaState().job.id; await runMediaAction(()=>cancelMediaJob(jobId), "Cancel requested"); return; }
+      if (name === "media-retry") { const jobId = mediaState().job && mediaState().job.id; await runMediaAction(()=>retryMediaJob(jobId), "Retry requested"); return; }
+      if (name === "media-subtitles") { await runMediaAction(()=>writeSubtitles(), "SRT written"); return; }
+      if (name === "media-export") { await runMediaAction(()=>exportSelectedClips(), "Export requested"); return; }
       if (name === "add-product") { openForm("Add product", [{n:"name",l:"Name"},{n:"category",l:"Category"},{n:"source",l:"Source"},{n:"priceCents",l:"Price (cents)",optional:true}], "product"); return; }
       if (name === "add-creator") { openForm("Add creator", [{n:"name",l:"Name"},{n:"email",l:"Email"},{n:"niches",l:"Niches"},{n:"platforms",l:"Platforms"}], "creator"); return; }
       if (name === "add-campaign") { openForm("Add campaign", [{n:"name",l:"Name"},{n:"goal",l:"Goal"},{n:"status",l:"Status"},{n:"budgetCents",l:"Budget (cents)",optional:true}], "campaign"); return; }
@@ -453,46 +878,232 @@ function wireEvents() {
       if (name === "add-workflow") { openForm("Add workflow", [{n:"name",l:"Name"}], "workflow"); return; }
       if (name === "add-task") { openForm("Add task", [{n:"title",l:"Title"},{n:"priority",l:"Priority"},{n:"dueDate",l:"Due date",optional:true,type:"date"}], "task"); return; }
       if (name === "add-post") { openForm("Add post", [{n:"platform",l:"Platform"},{n:"externalId",l:"External ID"},{n:"title",l:"Title"}], "post"); return; }
-      if (name === "save-form") {
-        const form = $("#entry-form");
-        if (!form) return;
-        const d = Object.fromEntries(new FormData(form));
-        const kind = form.dataset.kind;
-        (async () => {
-          try {
-            if (kind === "product") await api("/api/products", {method:"POST", body: JSON.stringify({name:d.name, category:d.category, source:d.source, priceCents:d.priceCents === "" ? null : Number(d.priceCents)})});
-            if (kind === "creator") await api("/api/creators", {method:"POST", body: JSON.stringify({name:d.name, email:d.email, niches:d.niches, platforms:d.platforms})});
-            if (kind === "campaign") await api("/api/campaigns", {method:"POST", body: JSON.stringify({name:d.name, goal:d.goal, status:d.status, budgetCents:d.budgetCents === "" ? null : Number(d.budgetCents)})});
-            if (kind === "idea") await api("/api/ideas", {method:"POST", body: JSON.stringify({title:d.title, format:d.format})});
-            if (kind === "workflow") await api("/api/workflows", {method:"POST", body: JSON.stringify({name:d.name, steps:[]})});
-            if (kind === "task") await api("/api/tasks", {method:"POST", body: JSON.stringify({title:d.title, priority:d.priority, dueDate:d.dueDate || null})});
-            if (kind === "post") await api("/api/content-posts", {method:"POST", body: JSON.stringify({platform:d.platform, externalId:d.externalId, title:d.title})});
-            $("#modal").close();
-            toast("Saved");
-            await loadView(state.view);
-          } catch (err) { toast("Error: "+err.message); }
-        })();
+      if (name === "save-form") { const form = $("#entry-form"); if (form) await saveEntry(form); return; }
+      if (name === "browser-create") {
+        const input = $("#browser-url");
+        const initialUrl = input && input.value ? input.value.trim() : undefined;
+        await browserPost('/api/browser/sessions', { initialUrl }, 'Browser session created', (res) => {
+          if (res && res.session && res.session.id) state.browserSessionId = res.session.id;
+        });
         return;
       }
+      if (name === "browser-navigate") {
+        if (!state.browserSessionId) { toast('Create a session first'); return; }
+        const input = $("#browser-url"); const url = input ? input.value.trim() : "";
+        if (!url) { toast('Enter an allowed URL first'); return; }
+        await browserPost('/api/browser/sessions/'+encodeURIComponent(state.browserSessionId)+'/navigate', { url }, 'Navigation requested');
+        return;
+      }
+      if (name === "browser-back") { if (state.browserSessionId) await browserPost('/api/browser/sessions/'+encodeURIComponent(state.browserSessionId)+'/back', {}, 'Back requested'); return; }
+      if (name === "browser-forward") { if (state.browserSessionId) await browserPost('/api/browser/sessions/'+encodeURIComponent(state.browserSessionId)+'/forward', {}, 'Forward requested'); return; }
+      if (name === "browser-reload") { if (state.browserSessionId) await browserPost('/api/browser/sessions/'+encodeURIComponent(state.browserSessionId)+'/reload', {}, 'Reload requested'); return; }
+      if (name === "browser-home") {
+        const input = $("#browser-url"); if (!input) return;
+        const session = state.data.browser && state.data.browser.session;
+        const home = session && /^https?:\/\//.test(session.url || "") ? session.url : 'https://example.com';
+        input.value = home;
+        toast('Address filled with ' + home + '; press Navigate to request navigation');
+        return;
+      }
+      if (name === "browser-new-tab") {
+        if (!state.browserSessionId) return;
+        const input = $("#browser-url");
+        await browserPost('/api/browser/sessions/'+encodeURIComponent(state.browserSessionId)+'/tabs', { url: input ? input.value : undefined }, 'Tab requested');
+        return;
+      }
+      if (name === "browser-screenshot") { await browserScreenshot(); return; }
+      if (name === "browser-read") { await browserRead(); return; }
+      if (name === "browser-click") {
+        if (!state.browserSessionId) return;
+        const sel = $("#browser-selector");
+        if (!sel || !sel.value.trim()) { toast('Enter a selector first'); return; }
+        await browserPost('/api/browser/sessions/'+encodeURIComponent(state.browserSessionId)+'/click', { selector:sel.value }, 'Click requested');
+        return;
+      }
+      if (name === "browser-type") {
+        if (!state.browserSessionId) return;
+        const sel = $("#browser-selector"); const text = $("#browser-text");
+        if (!sel || !sel.value.trim() || !text) { toast('Enter a selector and text first'); return; }
+        await browserPost('/api/browser/sessions/'+encodeURIComponent(state.browserSessionId)+'/type', { selector:sel.value, text:text.value }, 'Type requested');
+        return;
+      }
+      if (name === "browser-wait") {
+        if (!state.browserSessionId) return;
+        const sel = $("#browser-selector"); const ms = $("#browser-ms");
+        await browserPost('/api/browser/sessions/'+encodeURIComponent(state.browserSessionId)+'/wait', { selector: sel && sel.value ? sel.value : undefined, ms: ms ? Number(ms.value) : undefined }, 'Wait requested');
+        return;
+      }
+      if (name === "browser-download") {
+        if (!state.browserSessionId) return;
+        const url = $("#browser-download-url");
+        if (!url || !url.value.trim()) { toast('Enter a download URL first'); return; }
+        await browserPost('/api/browser/sessions/'+encodeURIComponent(state.browserSessionId)+'/download', { url:url.value }, 'Download requested');
+        return;
+      }
+      if (name === "browser-close-session") {
+        const sid = state.browserSessionId;
+        if (!sid) return;
+        await browserPost('/api/browser/sessions/'+encodeURIComponent(sid)+'/close', {}, 'Session closed', () => { state.browserSessionId = ""; });
+        return;
+      }
+      if (name === "browser-switch-tab") {
+        if (!state.browserSessionId) return;
+        await browserPost('/api/browser/sessions/'+encodeURIComponent(state.browserSessionId)+'/tabs/'+encodeURIComponent(a.dataset.tabId)+'/activate', {}, 'Tab activated');
+        return;
+      }
+      if (name === "browser-close-tab") {
+        if (!state.browserSessionId) return;
+        await browserPost('/api/browser/sessions/'+encodeURIComponent(state.browserSessionId)+'/tabs/'+encodeURIComponent(a.dataset.tabId)+'/close', {}, 'Tab closed');
+        return;
+      }
+      if (name === "browser-takeover") { if (state.browserSessionId) await browserPost('/api/browser/sessions/'+encodeURIComponent(state.browserSessionId)+'/control/takeover', {}, 'Control taken over'); return; }
+      if (name === "browser-control-request" || name === "browser-control-approve") {
+        if (!state.browserSessionId) return;
+        const agent = $("#browser-agent-id"); const agentId = agent ? agent.value.trim() : "";
+        if (!agentId) { toast('Enter an agent ID first'); return; }
+        const suffix = name === "browser-control-request" ? "request" : "approve";
+        await browserPost('/api/browser/sessions/'+encodeURIComponent(state.browserSessionId)+'/control/'+suffix, { agentId }, 'Control ' + suffix + ' requested');
+        return;
+      }
+      if (name === "browser-control-release") {
+        if (!state.browserSessionId) return;
+        await browserPost('/api/browser/sessions/'+encodeURIComponent(state.browserSessionId)+'/control/release', { actorId:(state.user && state.user.id) || 'human' }, 'Control released');
+        return;
+      }
+    } catch (err) {
+      if (err && err.status === 401) return;
+      toast("Action failed: " + errorText(err));
     }
   });
   document.addEventListener("submit", async (e)=>{
-    if (e.target.id === "entry-form") {
-      e.preventDefault();
-      const d = Object.fromEntries(new FormData(e.target));
-      const kind = e.target.dataset.kind;
-      try {
-        if (kind === "product") await api("/api/products", {method:"POST", body: JSON.stringify({name:d.name, category:d.category, source:d.source, priceCents:d.priceCents === "" ? null : Number(d.priceCents)})});
-        if (kind === "creator") await api("/api/creators", {method:"POST", body: JSON.stringify({name:d.name, email:d.email, niches:d.niches, platforms:d.platforms})});
-        if (kind === "campaign") await api("/api/campaigns", {method:"POST", body: JSON.stringify({name:d.name, goal:d.goal, status:d.status, budgetCents:d.budgetCents === "" ? null : Number(d.budgetCents)})});
-        if (kind === "idea") await api("/api/ideas", {method:"POST", body: JSON.stringify({title:d.title, format:d.format})});
-        if (kind === "workflow") await api("/api/workflows", {method:"POST", body: JSON.stringify({name:d.name, steps:[]})});
-        if (kind === "task") await api("/api/tasks", {method:"POST", body: JSON.stringify({title:d.title, priority:d.priority, dueDate:d.dueDate || null})});
-        if (kind === "post") await api("/api/content-posts", {method:"POST", body: JSON.stringify({platform:d.platform, externalId:d.externalId, title:d.title})});
-        $("#modal").close();
-        toast("Saved");
+    const form = e.target;
+    if (!form || !form.id) return;
+    try {
+      if (form.id === "entry-form") { e.preventDefault(); await saveEntry(form); return; }
+      if (form.id === "workflow-form") {
+        e.preventDefault();
+        const d = Object.fromEntries(new FormData(form));
+        const stepName = String(d.stepName || "").trim();
+        const action = String(d.action || "");
+        if (stepName && WORKFLOW_ACTIONS.indexOf(action) < 0) throw new Error("UNKNOWN_WORKFLOW_ACTION:" + action);
+        const steps = stepName ? [{ name:stepName, action }] : [];
+        await api("/api/workflows", { method:"POST", body: JSON.stringify({ name:d.name, steps }) });
+        toast("Workflow created"); await loadView(state.view); return;
+      }
+      if (form.id === "integration-form") {
+        e.preventDefault();
+        const d = Object.fromEntries(new FormData(form));
+        if (!String(d.provider || "").trim() || !String(d.apiKey || "").trim()) throw new Error("PROVIDER_AND_KEY_REQUIRED");
+        await api("/api/integrations/" + encodeURIComponent(d.provider), { method:"POST", body: JSON.stringify({ apiKey:d.apiKey }) });
+        toast("Credential recorded (liveAdapter:false)"); await loadView(state.view); return;
+      }
+      if (form.id === "agent-form") {
+        e.preventDefault();
+        const d = Object.fromEntries(new FormData(form));
+        await api("/api/agents", { method:"POST", body: JSON.stringify({ name:d.name, role:d.role }) });
+        toast("Agent created"); await loadView(state.view); return;
+      }
+      if (form.id === "agent-task-form") {
+        e.preventDefault();
+        const d = Object.fromEntries(new FormData(form));
+        await api("/api/agent-tasks", { method:"POST", body: JSON.stringify({ name:d.name, agentId:d.agentId || null, input:d.input || null }) });
+        toast("Agent task created"); await loadView(state.view); return;
+      }
+      if (form.id === "discovery-form") {
+        e.preventDefault();
+        const d = Object.fromEntries(new FormData(form));
+        const query = String(d.query || "").trim();
+        if (!query) throw new Error("QUERY_REQUIRED");
+        let discoveryError = null;
+        try {
+          await api("/api/discovery/searches", { method:"POST", body: JSON.stringify({ query }) });
+          toast("Discovery search queued");
+        } catch (err) {
+          if (err && err.status === 401) throw err;
+          discoveryError = errorText(err);
+          toast(discoveryError);
+        }
         await loadView(state.view);
-      } catch (err) { toast("Error: "+err.message); }
+        // loadDiscoveryData clears the banner on a successful candidate fetch;
+        // restore a real search error (e.g. DISCOVERY_NOT_CONFIGURED) after it.
+        if (discoveryError) { state.data.discoveryError = discoveryError; render(); }
+        return;
+      }
+      if (form.id === "analytics-snapshot-form") {
+        e.preventDefault();
+        const d = Object.fromEntries(new FormData(form));
+        const value = parseNumberField(d.value, "Value");
+        await api("/api/analytics/snapshots", { method:"POST", body: JSON.stringify({ metric:d.metric, value, source:d.source || "manual" }) });
+        toast("Snapshot saved"); await loadView(state.view); return;
+      }
+      if (form.id === "analytics-click-form") {
+        e.preventDefault();
+        const d = Object.fromEntries(new FormData(form));
+        const body = { contentId:d.contentId || null, offerId:d.offerId || null };
+        if (d.idempotencyKey) body.idempotencyKey = d.idempotencyKey;
+        await api("/api/analytics/clicks", { method:"POST", body: JSON.stringify(body) });
+        toast("Click recorded"); await loadView(state.view); return;
+      }
+      if (form.id === "content-snapshot-form") {
+        e.preventDefault();
+        const d = Object.fromEntries(new FormData(form));
+        const postId = String(d.postId || "").trim();
+        if (!postId || !(state.data.contentPosts || []).some((p)=>p.id === postId)) throw new Error("UNKNOWN_CONTENT_POST");
+        const body = {
+          views: parseNumberField(d.views, "Views", { integer:true, min:0 }) || 0,
+          likes: parseNumberField(d.likes, "Likes", { integer:true, min:0 }) || 0,
+          comments: parseNumberField(d.comments, "Comments", { integer:true, min:0 }) || 0,
+          shares: parseNumberField(d.shares, "Shares", { integer:true, min:0 }) || 0,
+          watchTimeSec: parseNumberField(d.watchTimeSec, "Watch time")
+        };
+        await api("/api/content-posts/" + encodeURIComponent(postId) + "/snapshots", { method:"POST", body: JSON.stringify(body) });
+        toast("Post snapshot saved"); await loadView(state.view); return;
+      }
+      if (form.id === "media-upload-form") {
+        e.preventDefault();
+        const input = $("#media-file");
+        if (!input || !input.files || !input.files.length) { toast("Choose a file first"); return; }
+        await runMediaAction(()=>uploadMedia(input.files[0]), "File uploaded");
+        render();
+        return;
+      }
+      if (form.id === "media-job-form") {
+        e.preventDefault();
+        const d = Object.fromEntries(new FormData(form));
+        await runMediaAction(async () => {
+          const job = await createMediaJob(d.name, d.language);
+          const processed = await processMediaJob(job && job.id);
+          return await pollMediaJob(processed && processed.id || job && job.id);
+        }, "Media job started");
+        render();
+        return;
+      }
+      if (form.id === "media-highlights-form") {
+        e.preventDefault();
+        await runMediaAction(()=>detectHighlights(), "Highlights detected");
+        render();
+        return;
+      }
+      if (form.id === "browser-mcp-form") {
+        e.preventDefault();
+        const d = Object.fromEntries(new FormData(form));
+        const tool = String(d.tool || "");
+        const tools = (state.data.browser && state.data.browser.tools) || [];
+        if (tools.indexOf(tool) < 0) throw new Error("TOOL_NOT_REPORTED");
+        let args; try { args = JSON.parse(d.arguments || "{}"); } catch { throw new Error("INVALID_TOOL_ARGUMENTS"); }
+        if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("INVALID_TOOL_ARGUMENTS");
+        args.sessionId = state.browserSessionId;
+        const payload = { jsonrpc:"2.0", id:Date.now(), method:"tools/call", params:{ name:tool, arguments:args } };
+        const res = await api("/api/browser/mcp", { method:"POST", body: JSON.stringify(payload) });
+        await loadView("agent-browser");
+        if (state.data.browser) state.data.browser.result = res;
+        render();
+        toast("MCP tool call returned a result");
+        return;
+      }
+    } catch (err) {
+      if (err && err.status === 401) return;
+      toast("Action failed: " + errorText(err));
     }
   });
   const menu = $("#menu"); if (menu) menu.addEventListener("click", ()=>$("#sidebar").classList.toggle("open"));
@@ -508,6 +1119,31 @@ function wireEvents() {
   });
 }
 
+async function saveEntry(form) {
+  const d = Object.fromEntries(new FormData(form));
+  const kind = form.dataset.kind;
+  if (kind === "product") {
+    await api("/api/products", { method:"POST", body: JSON.stringify(Object.assign({ name:d.name, category:d.category, source:d.source }, centsField(d, "priceCents", "Price (cents)"))) });
+  } else if (kind === "creator") {
+    await api("/api/creators", { method:"POST", body: JSON.stringify({ name:d.name, email:d.email, niches:d.niches, platforms:d.platforms }) });
+  } else if (kind === "campaign") {
+    await api("/api/campaigns", { method:"POST", body: JSON.stringify(Object.assign({ name:d.name, goal:d.goal, status:d.status }, centsField(d, "budgetCents", "Budget (cents)"))) });
+  } else if (kind === "idea") {
+    await api("/api/ideas", { method:"POST", body: JSON.stringify({ title:d.title, format:d.format }) });
+  } else if (kind === "workflow") {
+    await api("/api/workflows", { method:"POST", body: JSON.stringify({ name:d.name, steps:[] }) });
+  } else if (kind === "task") {
+    await api("/api/tasks", { method:"POST", body: JSON.stringify({ title:d.title, priority:d.priority, dueDate:d.dueDate || null }) });
+  } else if (kind === "post") {
+    await api("/api/content-posts", { method:"POST", body: JSON.stringify({ platform:d.platform, externalId:d.externalId, title:d.title }) });
+  } else {
+    throw new Error("UNKNOWN_FORM_KIND:" + kind);
+  }
+  const modal = $("#modal"); if (modal && modal.close) modal.close();
+  toast("Saved");
+  await loadView(state.view);
+}
+
 function openForm(title, fields, kind) {
   $("#modal-body").innerHTML = '<div class="eyebrow">WORKSPACE</div><h2>'+title+'</h2><form id="entry-form" data-kind="'+kind+'" class="field-grid">'+fields.map(f=>'<div class="field full"><label>'+f.l+(f.optional?' (optional)':'')+'</label><input name="'+f.n+'"'+(f.type?' type="'+f.type+'"':'')+(f.optional?'':' required')+'></div>').join("")+'<div class="field full"><button class="btn primary" type="button" data-action="save-form">Save</button></div></form>';
   $("#modal").showModal();
@@ -518,7 +1154,9 @@ async function boot() {
   const prof = document.querySelector(".profile"); if (prof && !prof.querySelector("[data-action=logout]")) { const b=document.createElement("button"); b.className="btn"; b.dataset.action="logout"; b.textContent="Logout"; prof.appendChild(b); }
   const ok = await loadMe();
   if (!ok) { renderAuth(); return; }
-  // add logout to profile area if possible
+  updateProfile();
+  await loadProductCount();
+  await loadControlStatus();
   await loadView("overview");
 }
 

@@ -17,7 +17,8 @@
     "postinstall": "prisma generate",
     "db:generate": "prisma generate",
     "db:migrate:deploy": "prisma migrate deploy",
-    "verify:media": "tsx scripts/verify-media-runtime.ts"
+    "verify:media": "tsx scripts/verify-media-runtime.ts",
+    "qa:full": "flock -n /tmp/opencode/ugc-qa-full.lock node scripts/qa-full.mjs"
   },
   "engines": {
     "node": ">=22.23.4"
