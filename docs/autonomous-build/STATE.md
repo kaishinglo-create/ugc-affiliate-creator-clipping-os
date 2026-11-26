@@ -759,3 +759,10 @@ and verification on the target device are follow-up steps.
   `docs/testing/FINAL_QA_REPORT.md`, `docs/testing/TEST_ISOLATION.md`.
 - Keine externen Dienste gestartet/publishiert, kein Push/Merge/Deploy.
   Phase F bleibt bis ausdrücklicher Freigabe pausiert.
+
+## Phase F.3 GitHub Synchronization (2026-11-26)
+
+- PR #28 open: https://github.com/kaishinglo-create/ugc-affiliate-creator-clipping-os/pull/28
+- Checkpoint: c7b5687
+- CI status: in progress at publication time.
+- Awaiting merge approval.
