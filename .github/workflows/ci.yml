@@ -5,6 +5,7 @@ on:
     branches: [main, multi-agent-system, 'security/phase-24-*']
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   check:
