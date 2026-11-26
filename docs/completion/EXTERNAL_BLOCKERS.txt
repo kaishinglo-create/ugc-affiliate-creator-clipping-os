@@ -61,3 +61,17 @@ Weiterhin extern blockiert (lokale Entwicklung läuft weiter):
 Phase F.1 deferred integrations:
 - PR #27 recurring discovery schedule conflicts with local recurring discovery implementation.
 - Persistent scheduler / CDP host from local/audit-untracked requires compatibility review.
+
+Phase F — API Integration Center (extern offen):
+- Keine echten Plattform-Credentials und keine OAuth-App-Freigaben für Google/
+  YouTube, TikTok Web und Meta Web. Registrierte Redirect-URIs und App-Reviews
+  müssen im jeweiligen Entwicklerportal durch den Kontoinhaber erfolgen.
+- Produktion benötigt `API_INTEGRATIONS_OAUTH_BASE_URL` mit öffentlicher
+  HTTPS-URL; lokal genügt der Loopback-Origin-Fallback. Der Master-Key bleibt
+  ausschließlich in `.env` bzw. einer externen Key-Datei.
+- Ohne Freigabe bleiben Provider ehrlich `NOT_CONFIGURED`/
+  `CREDENTIALS_ONLY`/`ADAPTER_NOT_IMPLEMENTED`; `CONNECTED` entsteht nur durch
+  erfolgreiche echte Probes. Keine Umgehung von Login/MFA/CAPTCHA, keine
+  kostenpflichtigen Fallbacks.
+- Legacy `/api/integrations` bleibt bewusst unverändert (4 Provider,
+  `liveAdapter:false`); kein Push/Merge/Deployment ohne ausdrückliche Freigabe.

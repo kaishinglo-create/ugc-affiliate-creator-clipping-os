@@ -9,3 +9,14 @@ playwright-report/
 
 .env.*
 !.env.example
+# Runtime logs and machine-local artifacts
+.mece-control/server.log
+.mece/run-wave-output.log
+.run/dev.log
+.run/browser-host.log
+.mece-control/config.json
+3
+docs/completion/*.log
+docs/completion/*.out
+docs/completion/heartbeat.txt
+docs/completion/model_cooldowns.txt
