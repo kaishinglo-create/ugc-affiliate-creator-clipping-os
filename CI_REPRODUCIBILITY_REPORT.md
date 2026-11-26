@@ -28,3 +28,11 @@
 
 - Status at time of report: **NOT_READY_TO_MERGE**.
 - No merge, deployment, controller start or publishing performed.
+
+## Final verification
+
+- Final CI run: `45904295044`.
+- Final CI head: `3887e5f65f82ab75b1dff11c7075f3c57add3289`.
+- Final CI conclusion: **success**.
+- Local full suite: 68 files, 284 tests PASS.
+- Final status: **READY_TO_MERGE** pending explicit approval.

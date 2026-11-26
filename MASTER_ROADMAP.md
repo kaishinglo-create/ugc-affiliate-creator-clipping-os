@@ -10,14 +10,13 @@ Status: complete locally and published as PR #28.
 
 ## Phase F.3.1
 
-Status: CI fixes in progress; final CI rerun required.
+Status: **READY_TO_MERGE** pending explicit user approval.
 
-- CI root cause analysis: CI_ROOT_CAUSE_ANALYSIS.md.
-- CI reproducibility report: CI_REPRODUCIBILITY_REPORT.md.
-- Fixes pushed to sync/remote-into-local at checkpoint `7180e02`.
-- Final CI rerun required.
+- Final CI run: `45904295044` — **SUCCESS**.
+- Final CI head: `3887e5f65f82ab75b1dff11c7075f3c57add3289`.
+- Local suite: 284/284 PASS; typecheck/ESLint/build PASS.
+- QA full: 2 successful runs.
 
 ## Next
 
-- Final CI run after fixes.
-- Await CI green before merge approval.
+- Await explicit merge approval.

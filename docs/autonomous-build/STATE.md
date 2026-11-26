@@ -774,3 +774,10 @@ and verification on the target device are follow-up steps.
 - Fixes pushed to sync/remote-into-local at checkpoint `3622ebf`.
 - Final CI rerun required.
 - Status: NOT_READY_TO_MERGE.
+
+## Phase F.3.1 Final Status (2026-11-26)
+
+- Final CI run: `45904295044` — **SUCCESS**.
+- Final CI head: `3887e5f65f82ab75b1dff11c7075f3c57add3289`.
+- Local full suite after latest fixes: 68 files, 284 tests PASS.
+- Final status: **READY_TO_MERGE** pending explicit approval.

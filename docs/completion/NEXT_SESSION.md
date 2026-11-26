@@ -184,3 +184,9 @@ bash scripts/controller-watchdog.sh                 # respektiert Cooldowns
 - CI repair fixes pushed.
 - Full CI rerun required after fixes.
 - Await CI green before merge approval.
+
+## Phase F.3.1 final follow-up (2026-11-26)
+
+- Final CI run green at head `3887e5f`.
+- Local suite green.
+- Await merge approval before any merge/deploy/publish.

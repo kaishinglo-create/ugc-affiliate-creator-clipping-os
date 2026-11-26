@@ -1,5 +1,12 @@
 {
   "phase": "F.3.1",
-  "status": "ci_fixes_pushed_not_ready_to_merge",
-  "prUrl": "https://github.com/kaisinglo-create/ugc-affiliate-creator-clipping-os/pull/28"
+  "status": "ready_to_merge_pending_approval",
+  "prUrl": "https://github.com/kaisinglo-create/ugc-affiliate-creator-clipping-os/pull/28",
+  "finalCiRun": 45904295044,
+  "finalCiStatus": "success",
+  "finalCiHead": "3887e5f65f82ab75b1dff11c7075f3c57add3289",
+  "finalLocalTests": {
+    "testFiles": 68,
+    "tests": 284
+  }
 }

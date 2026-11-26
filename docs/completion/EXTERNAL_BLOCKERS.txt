@@ -77,3 +77,5 @@ Phase F — API Integration Center (extern offen):
   `liveAdapter:false`); kein Push/Merge/Deployment ohne ausdrückliche Freigabe.
 
 Phase F.3.1 CI blocker: final CI rerun after reproducibility fixes required.
+
+Phase F.3.1 final: CI green; merge is pending explicit user approval.
