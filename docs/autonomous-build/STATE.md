@@ -1,5 +1,35 @@
 # STATE
 
+## Phase F: API Integration Center (2026-11-26)
+
+- Freigabe umgesetzt und lokal als `061c391` gesichert (Backup-Branch
+  `backup/local-phase-f-2026-11-26`). Kein Push, Merge oder Deploy.
+- Zentraler Provider-Katalog mit 14 Providern, echten Probes und offiziellen
+  Portal-Links; Legacy `/api/integrations` bleibt unverändert bei 4 Providern
+  und `liveAdapter:false`.
+- Neue workspace-scoped Modelle `ApiCredential`, `ApiConnection`,
+  `ApiIntegrationEvent`, `OAuthAuthorization` unter FORCE RLS, Migration
+  `20261126010000_api_integration_center` lokal angewendet.
+- Credentials AES-256-GCM mit AAD-Bindung an Workspace/Provider; Master-Key nur
+  aus `API_INTEGRATIONS_MASTER_KEY` bzw. `..._FILE`, fail-closed ohne Key.
+  Kein Secret in API-Responses, Logs, Audit oder Doku.
+- OAuth-Lifecycle: `state` + HMAC-signierter HttpOnly-Cookie
+  (`ugc_api_oauth`), absolute registrierte Redirect-URI aus
+  `API_INTEGRATIONS_OAUTH_BASE_URL` (lokal Loopback-Origin), kein
+  User-supplied Redirect, manipulierte Cookies/States liefern 403.
+  Dokumentierte Google-/TikTok-Web-/Meta-Web-Flows ohne PKCE.
+- Dashboard-Tab „API Integration Center“ mit echten Statuswerten, Setup,
+  maskierten Credentials, Test/Refresh/Disconnect, Kontingenten und History.
+  `CONNECTED` nur nach echter Probe; sonst `ADAPTER_NOT_IMPLEMENTED` etc.
+- Gezielte Prüfungen: Typecheck, ESLint, Build PASS; OAuth 6/6; API-Integration-
+  Tests 21/21 inkl. Redaction/Isolation; Secret-Scan 0 Treffer bei 3 geprüften
+  Werten.
+- Zwei vollständige QA-Läufe grün: `qa-full-2026-11-26T18-53-33-491Z-39223`
+  und `qa-full-2026-11-26T19-54-56-408Z-51405`, je **284/284** Tests und
+  **68/68** Dateien, Watchdog nicht ausgelöst, DB sauber gestoppt. Ein
+  zusätzlicher Seriallauf auf finalem Stand läuft noch. Details:
+  `docs/testing/FINAL_QA_REPORT.md`.
+
 ## Phase F.1: repository consolidation (2026-11-26)
 
 - Phase F committed as `061c391`; backup branch `backup/local-phase-f-2026-11-26`.
@@ -13,7 +43,8 @@
 - `git fetch origin` completed; no pull/push/merge/rebase.
 - Local `main` at `d01fdad` is 8 commits ahead of `origin/main` (`ef0e434`), 0 behind.
 - Remote-only commits: `origin/feat/discovery-schedule` (+1, open PR #27), `origin/local/audit-untracked-2026-11-02` (+3), `origin/phase-16/release-verification` (+2). All other remote branches are behind or equal.
-- Working tree has uncommitted Phase F work: API Integration Center plus schema/index/jobs/frontend changes and runtime logs/scratch file.
+- Working tree had uncommitted Phase F work at audit time; superseded by
+  `061c391`. Only runtime logs/scratch files remain uncommitted.
 - No secrets were inspected or transferred; `.env` remains uncommitted/ignored.
 - Safe next step: create a local backup branch/commit or stash, then cherry-pick/merge remote-only commits into a separate integration branch and resolve conflicts before any push.
 ## Phase D: lokale Betriebsreife abgeschlossen (2026-11-25T02:35Z) — 10/10

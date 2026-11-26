@@ -15,6 +15,27 @@
 - Finale QA Phase E: Typecheck/ESLint/Build PASS; Playwright **8/8** mit
   Screenshots; `npm run verify:media` echt grün für **EN und DE**
   (`SSIM All = 0.883772`); Secret-Scan `checkedValues=4`, `matches=0`.
+- Phase F ist umgesetzt und lokal committet (`061c391`); Details unten.
+
+## Phase F — API Integration Center (2026-11-26)
+
+- Lokal gesichert: Commit `061c391`, Backup-Branch
+  `backup/local-phase-f-2026-11-26`; kein Push/Merge/Deploy.
+- Neue Routes `/api/api-integrations*`, getrennt vom Legacy-Endpunkt
+  `/api/integrations` (unverändert 4 Provider, `liveAdapter:false`).
+- Credentials AES-256-GCM mit Master-Key aus `.env` (nie committen) und
+  AAD-Bindung an Workspace/Provider; ohne gültigen Key fail-closed (503).
+- OAuth: `state` + HMAC-signierter HttpOnly-Cookie, absolute registrierte
+  Redirect-URI via `API_INTEGRATIONS_OAUTH_BASE_URL`, manipulierte Cookies
+  werden abgelehnt; offizielle Web-Flows von Google, TikTok und Meta.
+- 14 Provider mit echten Probes, Health/Quota/Cooldown/Circuit-Breaker,
+  Redaction und Audit; Dashboard-Tab mit echten Werten und History.
+- Tests: `tests/api-integrations*.test.ts` (21 Tests) plus
+  `tests/e2e/api-integrations.spec.ts`; completa QA siehe
+  `docs/testing/FINAL_QA_REPORT.md`.
+- Extern offen: echte Plattform-Credentials, OAuth-App-Freigaben und
+  App-Reviews; ohne diese bleibt der Status ehrlich `NOT_CONFIGURED` bzw.
+  `ADAPTER_NOT_IMPLEMENTED`, niemals erfunden `CONNECTED`.
 
 ## Startbefehle
 
@@ -115,7 +136,8 @@ bash scripts/controller-watchdog.sh                 # respektiert Cooldowns
   Playwright **8/8** mit `node --env-file=.env`. Logs unter
   `/tmp/opencode/phase-e1-final-static.log` und
   `/tmp/opencode/phase-e1-final-playwright.log`.
-- Phase F bleibt bis ausdrücklicher Freigabe pausiert.
+- Phase F war zum Zeitpunkt dieses Phase-E-Eintrags pausiert; inzwischen
+  freigegeben und abgeschlossen (siehe Abschnitt „Phase F“ oben).
 
 ## Nächste sinnvolle Aufgaben
 
