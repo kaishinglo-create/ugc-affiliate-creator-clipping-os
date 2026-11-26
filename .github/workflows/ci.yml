@@ -27,6 +27,8 @@ jobs:
       DATABASE_URL: postgresql://ugc_os_app:ugc_os_app@127.0.0.1:5432/ugc_os_ci
       SESSION_JWT_SECRET: ci-only-secret-that-is-at-least-thirty-two-characters-long
       NODE_ENV: test
+      API_INTEGRATIONS_MASTER_KEY: ci-only-master-key-0123456789abcdef0123456789abcdef
+      MECE_DASHBOARD_TOKEN: ci-only-mece-token-0123456789abcdef0123456789abcdef
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -35,7 +37,7 @@ jobs:
           cache: npm
       - name: Provision non-superuser app role
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client ffmpeg
           export PGPASSWORD=pgpass
           psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE USER ugc_os_app WITH PASSWORD 'ugc_os_app' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;"
           psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE ugc_os_ci OWNER ugc_os_app;"

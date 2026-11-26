@@ -305,7 +305,7 @@ function checkMedia() {
   ], false);
   const items = { ffmpeg, ffprobe, whisperBinary, whisperModel };
   return {
-    healthy: Object.values(items).every((item) => item.available),
+    healthy: ffmpeg.available && ffprobe.available,
     ...items,
     whisperMultilingual: { ...whisperMultilingual, required: false },
   };
