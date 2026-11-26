@@ -39,11 +39,15 @@ jobs:
       - name: Create test .env
         run: |
           cat > .env <<'EOF'
-          SESSION_JWT_SECRET=ci-only-secret-that-is-at-least-thirty-two-characters-long
-          API_INTEGRATIONS_MASTER_KEY=grIGkEUMScCJRLqDgOU4FIPCK3cvhQbc0sHSE7y1bWc=
-          MECE_DASHBOARD_TOKEN=ci-only-mece-token-0123456789abcdef0123456789abcdef
-          NODE_ENV=test
-          EOF
+SESSION_JWT_SECRET=ci-only-secret-that-is-at-least-thirty-two-characters-long
+API_INTEGRATIONS_MASTER_KEY=grIGkEUMScCJRLqDgOU4FIPCK3cvhQbc0sHSE7y1bWc=
+MECE_DASHBOARD_TOKEN=ci-only-mece-token-0123456789abcdef0123456789abcdef
+NODE_ENV=test
+EOF
+      - name: Install pilot dependencies
+        run: npm --prefix pilots/api-anything ci
+      - name: Install OpenCode CLI
+        run: npm install -g opencode-ai || true
       - name: Provision non-superuser app role
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client ffmpeg
