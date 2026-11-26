@@ -28,7 +28,7 @@ jobs:
       DATABASE_URL: postgresql://ugc_os_app:ugc_os_app@127.0.0.1:5432/ugc_os_ci
       SESSION_JWT_SECRET: ci-only-secret-that-is-at-least-thirty-two-characters-long
       NODE_ENV: test
-      API_INTEGRATIONS_MASTER_KEY: ci-only-master-key-0123456789abcdef0123456789abcdef
+      API_INTEGRATIONS_MASTER_KEY: grIGkEUMScCJRLqDgOU4FIPCK3cvhQbc0sHSE7y1bWc=
       MECE_DASHBOARD_TOKEN: ci-only-mece-token-0123456789abcdef0123456789abcdef
     steps:
       - uses: actions/checkout@v4
