@@ -57,3 +57,7 @@ Weiterhin extern blockiert (lokale Entwicklung läuft weiter):
   `MECE_CONTROL_PORT=3031` und `MECE_OPENCODE_PORT=4097` verwendet. Startfehler
   werden redactet sichtbar angezeigt, kein Fake-Erfolg.
 - Keine Deployment-Credentials: kein Push/Merge/Deploy.
+
+Phase F.1 deferred integrations:
+- PR #27 recurring discovery schedule conflicts with local recurring discovery implementation.
+- Persistent scheduler / CDP host from local/audit-untracked requires compatibility review.

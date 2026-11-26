@@ -1,5 +1,13 @@
 # STATE
 
+## Phase F.1: repository consolidation (2026-11-26)
+
+- Phase F committed as `061c391`; backup branch `backup/local-phase-f-2026-11-26`.
+- Integration branch `sync/remote-into-local` created.
+- Remote commit `ddcaf72` integrated; `63ab78b` skipped as already present.
+- PR #27 and scheduler/CDP commits deferred due to conflicts.
+- Reports created: `REPOSITORY_SYNC_REPORT.md`, `MERGE_CONFLICT_REPORT.md`, `CONSOLIDATED_FEATURE_MATRIX.md`, `CONSOLIDATED_FEATURE_MATRIX.json`, `PHASE_F1_QA_REPORT.md`.
+
 ## Sync audit (2026-11-26, local vs GitHub)
 
 - `git fetch origin` completed; no pull/push/merge/rebase.

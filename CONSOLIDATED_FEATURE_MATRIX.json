@@ -1,0 +1,15 @@
+{
+  "phase": "F.1",
+  "localHead": "061c391",
+  "originMain": "ef0e434",
+  "backupBranch": "backup/local-phase-f-2026-11-26",
+  "integrationBranch": "sync/remote-into-local",
+  "features": [
+    {"function":"Recurring discovery","local":"implemented-id-based","githubMain":"missing","remote":"PR #27 workspaceId-based","difference":"conflicting-schema","remainingWork":"unify"},
+    {"function":"Persistent scheduler","local":"missing","githubMain":"missing","remote":"local/audit-untracked","difference":"remote-only","remainingWork":"compatibility-review"},
+    {"function":"CDP browser fallback","local":"missing","githubMain":"missing","remote":"local/audit-untracked","difference":"remote-only","remainingWork":"compatibility-review"},
+    {"function":"RLS migration guard","local":"integrated","githubMain":"base","remote":"phase-16/release-verification","difference":"remote-guard-added","remainingWork":"done"},
+    {"function":"Security F-01 to F-10","local":"implemented","githubMain":"missing","remote":"older","difference":"local-only","remainingWork":"preserve"},
+    {"function":"API Integration Center","local":"completed-phase-f","githubMain":"missing","remote":"none","difference":"local-only","remainingWork":"keep"}
+  ]
+}

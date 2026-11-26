@@ -149,3 +149,10 @@ bash scripts/controller-watchdog.sh                 # respektiert Cooldowns
   sichtbar und redactet angezeigt, kein Fake-Erfolg.
 - Ollama-Cloud-Live-Call ohne `OLLAMA_API_KEY` nicht prüfbar; die
   OpenCode-Free-Modelle sind davon unabhängig.
+
+## Phase F.1 (2026-11-26)
+
+- Phase F committed; backup and integration branches created.
+- Remote guard commit integrated; install checks already present.
+- PR #27 and scheduler/CDP commits deferred due to conflicts.
+- Reports and matrices created at repository root.
