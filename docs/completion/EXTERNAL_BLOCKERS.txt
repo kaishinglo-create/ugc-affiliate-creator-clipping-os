@@ -79,3 +79,5 @@ Phase F — API Integration Center (extern offen):
 Phase F.3.1 CI blocker: final CI rerun after reproducibility fixes required.
 
 Phase F.3.1 final: CI green; merge is pending explicit user approval.
+
+Phase F.3.2 final: merge conflicts resolved, CI green, status READY_TO_MERGE.

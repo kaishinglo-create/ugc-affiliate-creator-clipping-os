@@ -781,3 +781,11 @@ and verification on the target device are follow-up steps.
 - Final CI head: `3887e5f65f82ab75b1dff11c7075f3c57add3289`.
 - Local full suite after latest fixes: 68 files, 284 tests PASS.
 - Final status: **READY_TO_MERGE** pending explicit approval.
+
+## Phase F.3.2 Final Status (2026-11-27)
+
+- Merged `origin/main` into `sync/remote-into-local`.
+- Merge commit: `4a19bed0f1d85eb392c002222868ce0caf062b26`.
+- Final CI run: `45909401512` — **SUCCESS**.
+- Final PR state: OPEN, MERGEABLE, CLEAN.
+- Final status: **READY_TO_MERGE**.

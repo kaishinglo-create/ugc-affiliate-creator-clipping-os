@@ -1,14 +1,9 @@
 {
-  "phase": "F.3.1",
-  "localHead": "3622ebf",
+  "phase": "F.3.2",
+  "status": "ready_to_merge",
   "pr": 28,
-  "status": "ci_fixes_pushed_not_ready_to_merge",
-  "features": [
-    {"function":"Recurring discovery","local":"implemented","github":"replaced-by-local","remote":"PR#27","difference":"resolved-by-local-supersession","remainingWork":"none"},
-    {"function":"Persistent scheduler","local":"excluded","github":"missing","remote":"local/audit-untracked","difference":"resolved-by-duplicate-prevention","remainingWork":"none"},
-    {"function":"CDP fallback","local":"integrated","github":"missing","remote":"local/audit-untracked","difference":"integrated","remainingWork":"none"},
-    {"function":"RLS guard","local":"integrated","github":"base","remote":"phase-16","difference":"integrated","remainingWork":"none"},
-    {"function":"Security F-01..F-10","local":"implemented","github":"missing","remote":"older","difference":"local-only","remainingWork":"preserve"},
-    {"function":"API Integration Center","local":"completed","github":"missing","remote":"none","difference":"local-only","remainingWork":"keep"}
-  ]
+  "mergeCommit": "4a19bed0f1d85eb392c002222868ce0caf062b26",
+  "finalCiRun": 45909401512,
+  "finalCiStatus": "success",
+  "finalPrState": "OPEN_MERGEABLE_CLEAN"
 }

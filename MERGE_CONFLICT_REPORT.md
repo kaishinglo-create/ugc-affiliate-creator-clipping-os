@@ -1,55 +1,44 @@
-# Merge Conflict Report (Phase F.1)
+# Merge Conflict Report (Phase F.3.2)
 
-## Conflicts observed
+## Final merge
 
-### `origin/feat/discovery-schedule` (`4da26dd`, PR #27)
+- Base: `ef0e4347bd344389866f10ba7623eff33d1a56de` (`origin/main` at merge time)
+- Merge source: `origin/main`
+- Target: `sync/remote-into-local`
+- Merge result: `4a19bed0f1d85eb392c002222868ce0caf062b26`
 
-Conflicting files:
+## Conflict areas resolved
 
-- `prisma/schema.prisma`
-- `src/engine.ts`
-- `src/index.ts`
-- `docs/autonomous-build/STATE.md`
-- `pilots/api-anything/README.md`
+1. `prisma/schema.prisma`
+   - Remote added one-schedule relation/model; local already had advanced multi-schedule model.
+   - Resolution: kept local advanced multi-schedule model and removed conflicting remote model.
 
-Root cause:
+2. `src/discovery.ts`
+   - Remote added simpler recurring schedule implementation; local already had advanced multi-schedule implementation.
+   - Resolution: kept local advanced implementation.
 
-- Remote implements one recurring schedule per workspace with `DiscoverySchedule.workspaceId` as primary key.
-- Local already implements recurring discovery with a different `DiscoverySchedule` model using `id` as primary key and `workspaceId` as foreign key, plus `lastRunAt`, timestamps and an index.
-- Remote adds `/api/discovery/schedule` routes and engine enqueue behavior that overlap with local discovery routes and tests.
+3. `src/engine.ts`
+   - Remote used one-schedule enqueue; local used advanced multi-schedule enqueue.
+   - Resolution: kept local advanced engine integration.
 
-Resolution plan:
+4. `src/index.ts`
+   - Remote added one-schedule routes; local already had multi-schedule routes.
+   - Resolution: kept local multi-schedule API.
 
-- Do not overwrite either implementation.
-- Design a single additive schema migration or unify the model before integration.
-- Re-run `tests/discovery.test.ts` and `tests/discovery-mcp-schedules.test.ts`.
+5. `tests/discovery.test.ts`
+   - Resolved to local advanced regression coverage.
 
-### `origin/phase-16/release-verification` (`63ab78b`)
+6. `docs/autonomous-build/STATE.md`, `pilots/api-anything/README.md`
+   - Resolved to local consolidated documentation.
 
-Conflicting files:
+## Migration resolution
 
-- `prisma/schema.prisma`
-- `src/index.ts`
+- Kept local advanced `DiscoverySchedule` migration.
+- Removed conflicting origin/main-added discovery schedule migration to prevent duplicate table creation.
 
-Root cause:
+## Final state
 
-- Remote install-check changes were already present locally through Phase F, so the commit was skipped.
-
-### `origin/local/audit-untracked-2026-11-02`
-
-Potential conflicts:
-
-- `src/index.ts`
-- `src/orchestration.ts`
-- Additive runtime files (`.mece/*`, `browser-runtime-host/cdp-server.mjs`, `src/scheduler.ts`)
-
-Resolution plan:
-
-- Review scheduler lease, heartbeat, retry, deduplication and crash recovery against local orchestration leases before integrating.
-- Avoid duplicate worker/scheduler/browser runtimes.
-
-## Additive migration strategy
-
-- Do not modify already applied migrations.
-- Use new additive correction migrations where schema unification is required.
-- Test both fresh databases and upgrades of existing databases.
+- Merge commit: `4a19bed0f1d85eb392c002222868ce0caf062b26`
+- Final CI run: `45909401512`
+- Final CI conclusion: **success**
+- Final mergeability: **CLEAN**

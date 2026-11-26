@@ -10,14 +10,17 @@ Status: complete locally and published as PR #28.
 
 ## Phase F.3.1
 
-Status: **NOT_READY_TO_MERGE**.
+Status: final CI green; merge conflict reported.
 
-- Final CI run: `45904295044` — **SUCCESS**.
-- Final CI head: `3887e5f65f82ab75b1dff11c7075f3c57add3289`.
-- Local suite: 68 files, 284 tests PASS; typecheck/ESLint/build PASS.
-- QA full: 2 successful runs.
+## Phase F.3.2
+
+Status: **READY_TO_MERGE**.
+
+- Final merge: `4a19bed0f1d85eb392c002222868ce0caf062b26`.
+- Final CI: `45909401512` — success.
+- Final PR state: MERGEABLE/CLEAN.
+- Local QA: green.
 
 ## Next
 
-- Resolve reported merge conflicts before merge approval.
-- Await explicit merge approval after conflict resolution.
+- Await explicit merge approval before merge into `main`.

@@ -190,3 +190,8 @@ bash scripts/controller-watchdog.sh                 # respektiert Cooldowns
 - Final CI run green at head `3887e5f`.
 - Local suite green.
 - Await merge approval before any merge/deploy/publish.
+
+## Phase F.3.2 (2026-11-27)
+
+- Final merge conflict resolution completed and CI green.
+- Final status: READY_TO_MERGE; awaiting explicit merge approval.
