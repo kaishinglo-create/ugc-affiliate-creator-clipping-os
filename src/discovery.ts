@@ -11,6 +11,51 @@ import { cancelJob, completeJob, createJob, failJob, heartbeatJob } from './jobs
 const querySchema = z.string().trim().min(1).max(200).refine((query) => !query.includes('\0'));
 export const discoveryInput = z.object({ query: querySchema, runAt: z.iso.datetime({ offset: true }).optional() });
 
+export const discoveryScheduleInput = z.object({
+  query: querySchema,
+  intervalMinutes: z.number().int().min(180).max(10_080),
+  enabled: z.boolean(),
+});
+
+export async function getDiscoverySchedule(workspaceId: string) {
+  return withWorkspaceTransaction(workspaceId, (tx) => tx.discoverySchedule.findUnique({ where: { workspaceId } }));
+}
+
+export async function setDiscoverySchedule(workspaceId: string, input: z.infer<typeof discoveryScheduleInput>, actor: string) {
+  return withWorkspaceTransaction(workspaceId, async (tx) => {
+    const data = { ...input, nextRunAt: new Date() };
+    const schedule = await tx.discoverySchedule.upsert({
+      where: { workspaceId }, create: { workspaceId, ...data }, update: data,
+    });
+    await writeAuditEvent({ workspaceId, actor, type: 'discovery_schedule_updated', data: {
+      enabled: input.enabled, intervalMinutes: input.intervalMinutes,
+    }, tx });
+    return schedule;
+  });
+}
+
+/** Advance and enqueue together so competing workers cannot schedule the same run. */
+export async function enqueueDueDiscovery(workspaceId: string, now: Date) {
+  return withWorkspaceTransaction(workspaceId, async (tx) => {
+    const schedule = await tx.discoverySchedule.findFirst({
+      where: { workspaceId, enabled: true, nextRunAt: { lte: now } },
+    });
+    if (!schedule || await isKillSwitchActive(workspaceId, tx)) return null;
+
+    const advanced = await tx.discoverySchedule.updateMany({
+      where: { workspaceId, enabled: true, nextRunAt: schedule.nextRunAt, query: schedule.query, intervalMinutes: schedule.intervalMinutes },
+      data: { nextRunAt: new Date(now.getTime() + schedule.intervalMinutes * 60_000) },
+    });
+    if (advanced.count !== 1) return null;
+
+    // After downtime, enqueue one current search rather than replaying missed slots.
+    return createJob({
+      workspaceId, type: 'CONTENT_DISCOVERY', category: 'youtube_search', payload: { query: schedule.query },
+      runAt: now, maxAttempts: 2,
+    }, tx);
+  });
+}
+
 const providerResponse = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(false), class: z.string().regex(/^[a-z_]{1,40}$/) }),
   z.object({ ok: z.literal(true), tier: z.literal(1), candidates: z.array(z.object({

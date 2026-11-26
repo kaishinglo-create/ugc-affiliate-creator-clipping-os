@@ -60,6 +60,7 @@ model Workspace {
   agentTasks           AgentTask[]
   jobs                 Job[]
   discoveryCandidates  DiscoveryCandidate[]
+  discoverySchedule    DiscoverySchedule?
   contentPosts         ContentPost[]
   performanceSnapshots PerformanceSnapshot[]
   policies             OperationalPolicy[]
@@ -819,4 +820,13 @@ model DiscoveryCandidate {
 
   @@id([workspaceId, source, externalId])
   @@index([workspaceId, firstFoundAt])
+}
+
+model DiscoverySchedule {
+  workspaceId     String    @id
+  query           String
+  intervalMinutes Int
+  enabled         Boolean   @default(true)
+  nextRunAt       DateTime
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }

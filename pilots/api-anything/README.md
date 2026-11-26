@@ -49,4 +49,14 @@ for the latest saved candidates. Both use the existing workspace session.
 The worker limits search attempts to ten per workspace per UTC day.
 Identical queries deduplicate within the requested scheduling hour.
 Candidate IDs deduplicate across all runs within the workspace.
-Recurring search schedules are separate from this pilot.
+## Recurring search
+
+An owner or admin can save one schedule per workspace using
+`PUT /api/discovery/schedule`, for example
+`{"query":"creator video clipping workflow","intervalMinutes":180,"enabled":true}`.
+Use `GET /api/discovery/schedule` to check the next due time. The minimum
+interval is three hours and the maximum is seven days. Saving an enabled
+schedule makes the next search due on the next engine tick. The worker
+resumes with one search after downtime. Set `enabled` to false to stop
+scheduling new searches. Already queued jobs can be managed separately.
+Scheduled and manual runs share the same daily workspace budget.

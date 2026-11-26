@@ -113,5 +113,6 @@ The isolated pilot exposes one public YouTube search via MCP stdio, capped
 at Tier 1 with the shared catalog disabled. See
 [pilot setup](../../pilots/api-anything/README.md).
 The worker accepts manual and one-time scheduled searches, applies a workspace
-request budget, and stores candidates under workspace RLS. Recurring schedules
-and verification on the target device are follow-up steps.
+request budget, and stores candidates under workspace RLS. Each workspace can
+configure one recurring search, with a three-hour minimum interval and no
+replay of missed slots after downtime. Target-device verification is pending.
