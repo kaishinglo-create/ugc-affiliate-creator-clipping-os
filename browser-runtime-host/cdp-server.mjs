@@ -74,7 +74,7 @@ function findChromeBin() {
   for (const candidate of candidateChromeBins()) {
     try {
       if (!candidate.includes(path.sep)) {
-        const proc = spawn("which", [candidate], { stdio: "ignore" });
+        spawn("which", [candidate], { stdio: "ignore" });
         // synchronous availability is unknown; rely on PATH spawn later
       }
       if (fs.existsSync(candidate)) return candidate;
