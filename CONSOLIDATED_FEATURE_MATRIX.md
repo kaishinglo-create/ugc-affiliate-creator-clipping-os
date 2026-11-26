@@ -1,19 +1,11 @@
-# Consolidated Feature Matrix (Phase F.1)
+# Consolidated Feature Matrix (Phase F.3.1)
 
-| Function | Local | GitHub main | Remote branch / PR | Difference | Remaining work |
+| Function | Local | GitHub main | GitHub Branch / PR | Difference | Remaining work |
 |---|---|---|---|---|---|
-| Core architecture | Implemented | Implemented | Older phase branches | Local ahead | Keep local |
-| Discovery worker | Implemented | Implemented | Older | Local ahead | Keep local |
-| Recurring discovery | Implemented locally (id-based schedule) | Missing | PR #27 (workspaceId-based schedule) | Conflicting designs | Unify schema/routes/tests |
-| Persistent scheduler | Missing | Missing | `local/audit-untracked` | Remote only | Compatibility review |
-| CDP browser fallback | Missing | Missing | `local/audit-untracked` | Remote only | Compatibility review |
-| RLS migration guard | Integrated | Base | `phase-16/release-verification` | Remote guard added | Done in integration branch |
-| Security F-01 to F-10 | Implemented | Missing | Older security branches | Local only | Preserve and push after QA |
-| Whisper / FFmpeg | Verified | Older | Older | Local ahead | Keep local |
-| Publishing | Implemented | Missing | None | Local only | Keep local |
-| Affiliate analytics | Implemented | Missing | None | Local only | Keep local |
-| Self-healing | Partial | Missing | None | Local only | Keep local |
-| Company agents | Implemented | Older | None | Local ahead | Keep local |
-| Isolated QA runtime | Implemented | Missing | None | Local only | Keep local |
-| API Integration Center | Completed in Phase F | Missing | None | Local only | Keep local |
-| Credential vault | Completed in Phase F | Missing | None | Local only | Keep local |
+| Recurring discovery | Implemented | Missing | PR #27 | Replaced by local implementation | Done |
+| Persistent scheduler | Excluded | Missing | local/audit-untracked | Duplicate prevention | Done |
+| CDP fallback | Integrated | Missing | local/audit-untracked | Integrated | Done |
+| RLS guard | Integrated | Base | phase-16 | Integrated | Done |
+| Security F-01..F-10 | Implemented | Missing | older | Local only | Preserve |
+| API Integration Center | Completed | Missing | none | Local only | Keep |
+| CI reproducibility | Fixed/pushed | Missing | branch | Fixed | Final CI rerun |

@@ -75,3 +75,5 @@ Phase F — API Integration Center (extern offen):
   kostenpflichtigen Fallbacks.
 - Legacy `/api/integrations` bleibt bewusst unverändert (4 Provider,
   `liveAdapter:false`); kein Push/Merge/Deployment ohne ausdrückliche Freigabe.
+
+Phase F.3.1 CI blocker: final CI rerun after reproducibility fixes required.

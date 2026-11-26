@@ -1,8 +1,9 @@
 {
-  "phase": "F.3",
-  "status": "pr-open",
+  "phase": "F.3.1",
+  "status": "ci-fixes-pushed",
   "pr": 28,
-  "checkpoint": "c7b5687ba9c5de3b5e9400babfd0b6c4d24ff302",
+  "checkpoint": "3622ebf",
   "tests": 284,
-  "qaFullRuns": 2
+  "qaFullRuns": 2,
+  "ciFinalStatus": "pending"
 }

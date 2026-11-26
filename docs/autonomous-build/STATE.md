@@ -766,3 +766,11 @@ and verification on the target device are follow-up steps.
 - Checkpoint: c7b5687
 - CI status: in progress at publication time.
 - Awaiting merge approval.
+
+## Phase F.3.1 CI Repair (2026-11-26)
+
+- CI root cause analysis: CI_ROOT_CAUSE_ANALYSIS.md.
+- CI reproducibility report: CI_REPRODUCIBILITY_REPORT.md.
+- Fixes pushed to sync/remote-into-local at checkpoint `3622ebf`.
+- Final CI rerun required.
+- Status: NOT_READY_TO_MERGE.

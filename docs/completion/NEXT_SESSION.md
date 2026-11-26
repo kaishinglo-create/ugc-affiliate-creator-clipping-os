@@ -178,3 +178,9 @@ bash scripts/controller-watchdog.sh                 # respektiert Cooldowns
 - Remote guard commit integrated; install checks already present.
 - PR #27 and scheduler/CDP commits deferred due to conflicts.
 - Reports and matrices created at repository root.
+
+## Phase F.3.1 (2026-11-26)
+
+- CI repair fixes pushed.
+- Full CI rerun required after fixes.
+- Await CI green before merge approval.
