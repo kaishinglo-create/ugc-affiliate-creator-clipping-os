@@ -9,7 +9,8 @@ const state = {
     agentTasks: [], contentPosts: [], incidents: [], approvals: [],
     analytics: null, integrations: [], systemStatus: null, summary: null,
     browser: null, niches: [], items: [], candidates: [], discoveryError: null,
-    controlStatus: null, media: null
+    controlStatus: null, media: null,
+    apiIntegrations: [], apiIntegrationHealth: null, apiIntegrationDetail: null
   },
   loading: false,
   error: null,
@@ -17,7 +18,7 @@ const state = {
   authMessage: ""
 };
 
-const titles = {overview:"Overview",radar:"Product Radar",creators:"Creators",campaigns:"Campaigns",scripts:"Script Studio",clipping:"Clipping Studio",youtube:"YouTube Intelligence",content:"Content Factory",calendar:"Publishing Calendar",analytics:"Analytics & Revenue",agents:"Agent Control",integrations:"Integrations","agent-browser":"Agent Browser"};
+const titles = {overview:"Overview",radar:"Product Radar",creators:"Creators",campaigns:"Campaigns",scripts:"Script Studio",clipping:"Clipping Studio",youtube:"YouTube Intelligence",content:"Content Factory",calendar:"Publishing Calendar",analytics:"Analytics & Revenue",agents:"Agent Control",integrations:"Integrations","api-integrations":"API Integration Center","agent-browser":"Agent Browser"};
 const CONTROL_FALLBACK_URL = "http://127.0.0.1:3031/";
 const WORKFLOW_ACTIONS = ["echo", "delay"];
 const MEDIA_LANGUAGES = ["de", "en", "auto"];
@@ -269,6 +270,16 @@ async function loadView(view) {
       case "campaigns": state.data.campaigns = (await api("/api/campaigns")).campaigns || []; break;
       case "analytics": await loadAnalyticsData(); break;
       case "integrations": state.data.integrations = (await api("/api/integrations")).integrations || []; break;
+      case "api-integrations": {
+        const [center, health] = await Promise.all([
+          api("/api/api-integrations"),
+          api("/api/api-integrations/health").catch(()=>null)
+        ]);
+        state.data.apiIntegrations = center.providers || [];
+        state.data.apiIntegrationHealth = health;
+        state.data.apiIntegrationDetail = null;
+        break;
+      }
       case "agents": await loadAgentsData(); break;
       case "content": state.data.contentPosts = (await api("/api/content-posts")).posts || []; break;
       case "scripts": state.data.ideas = (await api("/api/ideas")).ideas || []; break;
@@ -748,7 +759,79 @@ function agentBrowser() {
       (b.result ? '<h3>Last tool result</h3><pre>'+esc(JSON.stringify(b.result,null,2))+'</pre>' : '') + '</section>' + loadingBlock();
 }
 
-const views = {overview,radar,creators,campaigns,scripts,clipping,youtube,content,calendar,analytics,agents,integrations,"agent-browser":agentBrowser};
+function apiIntegrationStatusTag(status) {
+  const color = status === "CONNECTED" ? "green"
+    : ["RATE_LIMITED", "QUOTA_EXHAUSTED", "TOKEN_EXPIRED", "PROVIDER_UNAVAILABLE"].includes(status) ? "orange"
+    : status === "ADAPTER_NOT_IMPLEMENTED" ? "purple" : "";
+  return tag(status || "NOT_CONFIGURED", color);
+}
+
+function apiIntegrationButton(label, action, provider, primary) {
+  return '<button class="btn '+(primary?"primary":"")+'" data-action="'+action+'" data-provider="'+esc(provider)+'">'+esc(label)+'</button>';
+}
+
+function apiIntegrationRedirectUri(provider) {
+  if (!provider || !provider.oauth || !provider.oauth.defaultRedirectPath) return '';
+  try { return new URL(provider.oauth.defaultRedirectPath, window.location.href).toString(); }
+  catch { return String(provider.oauth.defaultRedirectPath); }
+}
+
+function apiIntegrationDetailPanel() {
+  const d = state.data.apiIntegrationDetail;
+  if (!d) return '<section class="panel"><h2>Setup assistant</h2><p class="sub">Select a provider card and choose <b>Details</b> to see official portal links, required permissions, real free-tier facts and the setup steps.</p></section>';
+  const c = d.connection || {};
+  const steps = (d.manualSteps||[]).map((s)=>'<li>'+esc(s)+'</li>').join('');
+  const permissions = (d.requiredPermissions||[]).map((s)=>'<li>'+esc(s)+'</li>').join('');
+  const unavailable = (d.unavailableWithoutCredentials||[]).map((s)=>'<li>'+esc(s)+'</li>').join('');
+  const links = [d.portalUrl ? '<a href="'+esc(d.portalUrl)+'" target="_blank" rel="noopener noreferrer">Developer portal</a>' : '', d.docsUrl ? '<a href="'+esc(d.docsUrl)+'" target="_blank" rel="noopener noreferrer">Official docs</a>' : ''].filter(Boolean).join(' · ');
+  const redirectHint = apiIntegrationRedirectUri(d) ? '<p class="sub">OAuth redirect URI to register: <code>'+esc(apiIntegrationRedirectUri(d))+'</code></p>' : '';
+  const fields = (d.credentialFields||[]).map((f)=>'<div class="field full"><label>'+esc(f.label)+'</label><input name="'+esc(f.key)+'" type="'+esc(f.type)+'" autocomplete="off"'+(f.required?' required':'')+'><div class="sub">'+esc(f.help)+'</div></div>').join('');
+  const form = fields ? '<form id="api-integration-credential-form" data-provider="'+esc(d.key)+'" class="field-grid">'+fields+'<div class="field full"><button class="btn primary" type="submit">Save encrypted credential</button></div></form>' : '<p class="sub">This provider needs no stored credential.</p>';
+  const history = (d.history||[]).map((h)=>'<tr><td>'+esc(new Date(h.createdAt).toLocaleString())+'</td><td>'+esc(h.type)+'</td><td>'+esc(h.outcome)+'</td><td>'+esc(h.errorCode||"—")+'</td></tr>').join('');
+  return '<section class="panel"><h2>'+esc(d.name)+' — setup</h2><p>'+esc(d.description)+'</p><p class="sub">Status: '+esc(c.status||'NOT_CONFIGURED')+' · credential: '+esc(c.credentialHint||'none')+' · token expires: '+esc(c.tokenExpiresAt||'not reported')+'</p><p>'+(links||'<span class="sub">No official portal link for an unimplemented adapter.</span>')+'</p>'+redirectHint+
+    '<h3>Manual steps</h3><ol>'+(steps||'<li>No manual steps documented.</li>')+'</ol>'+
+    '<h3>Required permissions</h3><ul>'+(permissions||'<li>None</li>')+'</ul>'+
+    '<h3>Credentials</h3>'+form+
+    '<h3>Free tier (as documented)</h3><p>'+esc(d.freeTier||'')+'</p>'+
+    '<h3>Without credentials</h3><ul>'+(unavailable||'<li>None</li>')+'</ul>'+
+    '<h3>Adapter note</h3><p>'+esc(d.adapterNote||'')+'</p>'+
+    '<h3>Last successful call</h3><p>'+esc(c.lastSuccessAt||'never')+'</p>'+
+    '<h3>Quota</h3><pre>'+esc(JSON.stringify(c.quota||{source:'not_supplied_by_provider'},null,2))+'</pre>'+
+    '<h3>History</h3><div class="table-wrap"><table class="table"><thead><tr><th>Time</th><th>Event</th><th>Outcome</th><th>Error</th></tr></thead><tbody>'+(history||'<tr><td colspan="4">No events yet.</td></tr>')+'</tbody></table></div></section>';
+}
+
+function apiIntegrationCenter() {
+  const providers = state.data.apiIntegrations || [];
+  const health = state.data.apiIntegrationHealth || {};
+  const cards = providers.length ? providers.map((p)=>{
+    const c = p.connection || {};
+    return '<article class="card" data-provider="'+esc(p.key)+'">'+
+      apiIntegrationStatusTag(c.status)+
+      '<h3>'+esc(p.name)+'</h3><p>'+esc(p.description)+'</p>'+
+      '<p class="sub">'+esc(p.category)+' · adapter: '+(p.liveAdapter?'live':'not implemented')+'</p>'+
+      '<p class="sub">Credential: '+esc(c.credentialHint||'none')+' · source: '+esc(c.credentialSource||'none')+' · last success: '+esc(c.lastSuccessAt||'never')+'</p>'+
+      '<div class="field-grid">'+
+        apiIntegrationButton('Details','api-integration-detail',p.key,true)+
+        apiIntegrationButton('Test connection','api-integration-test',p.key)+
+        apiIntegrationButton('Refresh token','api-integration-refresh',p.key)+
+        apiIntegrationButton(c.enabled?'Disable':'Enable','api-integration-toggle',p.key)+
+        apiIntegrationButton('Disconnect','api-integration-disconnect',p.key)+
+        (p.oauth ? apiIntegrationButton('OAuth authorize','api-integration-oauth',p.key) : '')+
+      '</div></article>';
+  }).join('') : '<div class="panel">No providers available.</div>';
+  return heading("API Integration Center","Official provider status from real connection tests. No secrets are returned by the API.")+
+    '<div class="stats">'+
+      stat('Providers', String(providers.length), 'registry entries', '⚡')+
+      stat('Connected', String((health.byStatus&&health.byStatus.CONNECTED)||0), 'verified by a real call', '✓')+
+      stat('Open circuits', String(health.openCircuits||0), 'cooldown active', '⏱')+
+      stat('Credential store', health.credentialStoreAvailable?'ready':'unavailable', 'separate master key', '🔐')+
+    '</div>'+
+    '<div class="notice">CONNECTED is shown only after a successful official API call or verified local adapter. Missing credentials are never simulated.</div>'+
+    apiIntegrationDetailPanel()+
+    '<div class="cards">'+cards+'</div>'+loadingBlock();
+}
+
+const views = {overview,radar,creators,campaigns,scripts,clipping,youtube,content,calendar,analytics,agents,integrations,"api-integrations":apiIntegrationCenter,"agent-browser":agentBrowser};
 
 function renderAuth() {
   const auth = $("#auth-container");
@@ -834,6 +917,48 @@ async function wireEvents() {
     const name = a.dataset.action;
     try {
       if (name === "refresh") { await loadView(state.view); return; }
+      if (name && name.startsWith("api-integration-")) {
+        const provider = String(a.dataset.provider||"");
+        const base = "/api/api-integrations/" + encodeURIComponent(provider);
+        if (!provider) throw new Error("PROVIDER_REQUIRED");
+        if (name === "api-integration-detail") {
+          state.data.apiIntegrationDetail = await api(base);
+          render();
+          return;
+        }
+        if (name === "api-integration-test") {
+          const res = await api(base + "/test", {method:"POST", body: JSON.stringify({})});
+          toast("Connection test: " + String(res.status||"unknown") + (res.errorCode ? " ("+res.errorCode+")" : ""));
+          await loadView(state.view);
+          return;
+        }
+        if (name === "api-integration-refresh") {
+          const res = await api(base + "/refresh", {method:"POST", body: JSON.stringify({})});
+          toast("Token refreshed" + (res.tokenExpiresAt ? " (expires "+res.tokenExpiresAt+")" : ""));
+          await loadView(state.view);
+          return;
+        }
+        if (name === "api-integration-toggle") {
+          const current = (state.data.apiIntegrations||[]).find((p)=>p.key===provider);
+          const enabled = !(current && current.connection && current.connection.enabled);
+          await api(base, {method:"PATCH", body: JSON.stringify({enabled})});
+          toast(enabled ? "Provider enabled" : "Provider disabled");
+          await loadView(state.view);
+          return;
+        }
+        if (name === "api-integration-disconnect") {
+          await api(base, {method:"DELETE"});
+          state.data.apiIntegrationDetail = null;
+          toast("Connection disconnected");
+          await loadView(state.view);
+          return;
+        }
+        if (name === "api-integration-oauth") {
+          const res = await api("/api/api-integrations/oauth/" + encodeURIComponent(provider) + "/start");
+          if (res && res.authorizationUrl && window && window.location) window.location.href = res.authorizationUrl;
+          return;
+        }
+      }
       if (name === "logout") { await doLogout(); return; }
       if (name === "engine-tick") {
         const res = await api('/api/engine/tick', {method:'POST', body: JSON.stringify({})});
@@ -989,6 +1114,19 @@ async function wireEvents() {
         const steps = stepName ? [{ name:stepName, action }] : [];
         await api("/api/workflows", { method:"POST", body: JSON.stringify({ name:d.name, steps }) });
         toast("Workflow created"); await loadView(state.view); return;
+      }
+      if (form.id === "api-integration-credential-form") {
+        e.preventDefault();
+        const d = Object.fromEntries(new FormData(form));
+        const provider = String(form.dataset.provider||d.provider||"");
+        if (!provider) throw new Error("PROVIDER_REQUIRED");
+        const body = {};
+        for (const [key, value] of Object.entries(d)) if (key !== "provider" && String(value||"").trim()) body[key] = String(value).trim();
+        await api("/api/api-integrations/" + encodeURIComponent(provider) + "/credentials", { method:"POST", body: JSON.stringify(body) });
+        state.data.apiIntegrationDetail = await api("/api/api-integrations/" + encodeURIComponent(provider));
+        toast("Credential stored encrypted; run Test connection to verify");
+        render();
+        return;
       }
       if (form.id === "integration-form") {
         e.preventDefault();

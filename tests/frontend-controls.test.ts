@@ -128,7 +128,7 @@ function createHarness(responses: Responses = {}) {
   for (const id of ['page', 'auth-container', 'radar-count', 'profile-name', 'profile-detail', 'profile-avatar', 'control-link', 'live-badge', 'crumb', 'sidebar', 'toast', 'modal', 'modal-body', 'menu', 'help', 'close']) {
     ensure(id, id === 'toast' ? 'DIV' : 'DIV', id === 'radar-count' ? { hidden: '' } : {});
   }
-  const navs = ['overview', 'radar', 'creators', 'campaigns', 'scripts', 'clipping', 'youtube', 'content', 'calendar', 'analytics'].map((view) => new StubElement('', 'BUTTON', { class: 'nav', 'data-view': view }));
+  const navs = ['overview', 'radar', 'creators', 'campaigns', 'scripts', 'clipping', 'youtube', 'content', 'calendar', 'analytics', 'integrations', 'api-integrations', 'agent-browser'].map((view) => new StubElement('', 'BUTTON', { class: 'nav', 'data-view': view }));
   const profile = new StubElement('', 'DIV', { class: 'profile' });
 
   const documentStub: any = {
@@ -210,7 +210,7 @@ globalThis.__hooks = {
   updateControlLink, loadControlStatus, mediaState, uploadMedia, createMediaJob,
   processMediaJob, pollMediaJob, previewMediaFile, cancelMediaJob, retryMediaJob,
   exportSelectedClips, detectHighlights, writeSubtitles, loadDiscoveryData,
-  loadAnalyticsData
+  loadAnalyticsData, apiIntegrationCenter, apiIntegrationDetailPanel
 };`;
   runInContext(source + hooksSource, context);
 
@@ -424,6 +424,47 @@ describe('frontend controls regression', () => {
     expect(appSource).toContain('data-action="browser-control-release"');
     expect(appSource).toContain('browser-home');
     expect(appSource).toContain('/screenshot');
+  });
+
+  it('renders the API Integration Center with real status, links and working controls', async () => {
+    const provider = {
+      key: 'ollama_cloud', name: 'Ollama Cloud', category: 'KI', description: 'Hosted models',
+      portalUrl: 'https://ollama.com/settings/keys', docsUrl: 'https://docs.ollama.com/api',
+      credentialFields: [{ key: 'apiKey', label: 'API key', type: 'password', required: true, help: 'Encrypted' }],
+      manualSteps: ['Create a key'], requiredPermissions: ['Active account'], freeTier: 'Paid service',
+      unavailableWithoutCredentials: ['Hosted chat'], liveAdapter: true, adapterNote: 'Read-only listing',
+      oauth: { authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth', tokenUrl: 'https://oauth2.googleapis.com/token', pkce: false, scopes: ['youtube.readonly'], defaultRedirectPath: '/api/api-integrations/oauth/youtube_google/callback' },
+      connection: { status: 'CONFIGURED', enabled: true, credentialHint: 'sha256:abc123', lastSuccessAt: null, tokenExpiresAt: null, quota: { source: 'not_supplied_by_provider' } },
+    };
+    const h = createHarness({
+      '/api/api-integrations': { body: { providers: [provider], credentialStoreAvailable: true } },
+      '/api/api-integrations/health': { body: { credentialStoreAvailable: true, providersTotal: 1, byStatus: { CONFIGURED: 1 }, openCircuits: 0 } },
+      '/api/api-integrations/ollama_cloud': { body: { ...provider, history: [{ id: 'e1', type: 'credentials_saved', outcome: 'ok', errorCode: null, createdAt: new Date().toISOString() }] } },
+      '/api/api-integrations/ollama_cloud/test': { body: { status: 'CONNECTED' } },
+      '/api/api-integrations/ollama_cloud/credentials': { body: { provider: 'ollama_cloud', connection: { status: 'CONFIGURED' } } },
+    });
+    h.hooks.state.user = { id: 'user-1' };
+    await h.hooks.wireEvents();
+    await h.hooks.loadView('api-integrations');
+    const page = h.elements.get('page')!.innerHTML;
+    expect(h.calls.some((call) => call.url === '/api/api-integrations')).toBe(true);
+    expect(page).toContain('API Integration Center');
+    expect(page).toContain('CONFIGURED');
+    expect(page).toContain('data-action="api-integration-detail"');
+    expect(page).toContain('data-action="api-integration-test"');
+    expect(page).toContain('data-action="api-integration-oauth"');
+    expect(page).not.toContain('undefined');
+    expect(indexSource).toContain('data-view="api-integrations"');
+
+    const detailButton = { dataset: { action: 'api-integration-detail', provider: 'ollama_cloud' } };
+    await h.fire('click', { target: { closest: (selector: string) => selector.includes('data-view') ? null : detailButton }, preventDefault() {} });
+    expect(h.hooks.state.data.apiIntegrationDetail.key).toBe('ollama_cloud');
+
+    const form = h.ensure('api-integration-credential-form', 'FORM', { 'data-provider': 'ollama_cloud' });
+    form.fields = { apiKey: 'frontend-secret-value' };
+    await h.fire('submit', { target: form, preventDefault() {} });
+    const save = h.calls.find((call) => call.url === '/api/api-integrations/ollama_cloud/credentials' && call.opts.method === 'POST');
+    expect(save!.body.apiKey).toBe('frontend-secret-value');
   });
 });
 

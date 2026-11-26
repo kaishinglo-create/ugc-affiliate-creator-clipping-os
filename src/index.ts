@@ -6,6 +6,7 @@ import rateLimit from '@fastify/rate-limit';
 import { z } from 'zod';
 import { loadConfig, resolveTrustProxy } from './config.js';
 import { join, extname } from 'node:path';
+import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { prisma, withWorkspaceTransaction } from '../lib/db.js';
@@ -16,6 +17,22 @@ import { hashPassword, verifyPassword, createSession, verifySession, sessionCook
 import { isAffiliatePayoutAction, resolvePayoutTransition, summarizeAttribution, summarizePayouts } from './affiliate.js';
 import { getBrowserGateway, validateBrowserUrl } from './browser-gateway.js';
 import { newSpan, trace } from './qa-trace.js';
+import {
+  listProviders as listApiIntegrations,
+  getProviderDetail as getApiIntegrationDetail,
+  listHistory as listApiIntegrationHistory,
+  saveCredentials as saveApiIntegrationCredentials,
+  testConnection as testApiIntegrationConnection,
+  refreshConnection as refreshApiIntegrationConnection,
+  setProviderEnabled as setApiIntegrationEnabled,
+  disconnectProvider as disconnectApiIntegration,
+  startOAuth as startApiIntegrationOAuth,
+  completeOAuth as completeApiIntegrationOAuth,
+  getHealthSummary as getApiIntegrationHealth,
+  ensureApiIntegrationDepartment,
+  oauthCookieName,
+  readOAuthCookie,
+} from './api-integration-center/service.js';
 
 const trustProxy = resolveTrustProxy(process.env.TRUST_PROXY);
 const app = Fastify({ logger: true, trustProxy: trustProxy as any });
@@ -2671,6 +2688,186 @@ app.post('/api/ollama/chat', { config: { rateLimit: { max: 20, timeWindow: '1 mi
     }
     return reply.code(502).send({ error: 'OLLAMA_REQUEST_FAILED', message: 'OLLAMA_REQUEST_FAILED' });
   }
+});
+
+// Phase F — API Integration Center. All routes reuse the workspace auth and
+// operator-role helpers above; no credential, token or secret is returned.
+function apiIntegrationError(reply: any, error: unknown): any {
+  const code = String((error as Error)?.message ?? 'API_INTEGRATION_FAILED');
+  if (code === 'CREDENTIAL_STORE_NOT_CONFIGURED' || code === 'CREDENTIAL_DECRYPT_FAILED') {
+    return reply.code(503).send({ error: code });
+  }
+  if (code.startsWith('MISSING_FIELD_') || ['PROVIDER_HAS_NO_CREDENTIAL_FIELDS', 'INVALID_REDIRECT_URI', 'INVALID_INPUT', 'INVALID_WORKSPACE_ID', 'INVALID_OAUTH_CALLBACK', 'NO_REFRESH_TOKEN', 'NO_STORED_OAUTH_CREDENTIAL'].includes(code)) {
+    return reply.code(400).send({ error: code });
+  }
+  if (['OAUTH_REDIRECT_BASE_URL_REQUIRED', 'INVALID_OAUTH_REDIRECT_BASE_URL'].includes(code)) {
+    return reply.code(503).send({ error: code });
+  }
+  if (['INVALID_OAUTH_STATE', 'OAUTH_COOKIE_MISMATCH', 'PKCE_VERIFICATION_FAILED', 'NOT_A_WORKSPACE_MEMBER'].includes(code)) {
+    return reply.code(403).send({ error: code });
+  }
+  if (['OAUTH_CLIENT_ID_REQUIRED', 'OAUTH_NOT_SUPPORTED', 'OAUTH_TOKEN_EXCHANGE_FAILED', 'OAUTH_TOKEN_MISSING'].includes(code)) {
+    return reply.code(502).send({ error: code });
+  }
+  reqLogIntegrationError(code);
+  return reply.code(500).send({ error: 'API_INTEGRATION_FAILED' });
+}
+
+function reqLogIntegrationError(code: string): void {
+  app.log.error({ code }, 'api integration route failed');
+}
+
+function apiIntegrationRequestOrigin(req: any): string {
+  const host = String(req.headers?.host ?? '').trim();
+  if (!host || host.length > 255 || !/^[A-Za-z0-9.\-:[\]]+$/.test(host)) return '';
+  return `${req.protocol}://${host}`;
+}
+
+app.get('/api/api-integrations', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  return listApiIntegrations(ctx.workspaceId);
+});
+
+app.get('/api/api-integrations/health', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  return getApiIntegrationHealth(ctx.workspaceId);
+});
+
+app.get('/api/api-integrations/departments', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  return ensureApiIntegrationDepartment(ctx.workspaceId);
+});
+
+app.post('/api/api-integrations/departments/seed', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  reply.code(201);
+  return ensureApiIntegrationDepartment(ctx.workspaceId);
+});
+
+app.get('/api/api-integrations/oauth/:provider/start', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const provider = String((req.params as any).provider ?? '');
+  try {
+    const result = await startApiIntegrationOAuth(ctx.workspaceId, provider, ctx.userId, apiIntegrationRequestOrigin(req));
+    if (!result) return reply.code(400).send({ error: 'OAUTH_NOT_SUPPORTED' });
+    reply.header('set-cookie', result.cookie);
+    return { authorizationUrl: result.authorizationUrl, redirectUri: result.redirectUri, state: result.state, expiresAt: result.expiresAt };
+  } catch (error) {
+    return apiIntegrationError(reply, error);
+  }
+});
+
+app.get('/api/api-integrations/oauth/:provider/callback', async (req, reply) => {
+  const provider = String((req.params as any).provider ?? '');
+  const query = (req.query ?? {}) as any;
+  const state = String(query.state ?? '');
+  const code = String(query.code ?? '');
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(state) || !code || code.length > 512) return reply.code(400).send({ error: 'INVALID_OAUTH_CALLBACK' });
+  const session = await verifySession(readSessionCookie(req));
+  if (!session) return reply.code(401).send({ error: 'NOT_AUTHENTICATED' });
+
+  const cookieName = oauthCookieName();
+  const cookiePart = String(req.headers.cookie ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${cookieName}=`));
+  const cookie = readOAuthCookie(cookiePart ? cookiePart.slice(cookieName.length + 1) : null);
+  if (!cookie) return reply.code(403).send({ error: 'OAUTH_COOKIE_MISMATCH' });
+  reply.header('set-cookie', `${cookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+
+  // Real providers redirect to a static registered URI. The signed, HttpOnly
+  // cookie carries the workspace; the one-time state is then looked up inside
+  // that workspace transaction so RLS still applies.
+  const workspaceId = cookie.workspaceId;
+  const oauthRecord: any = await withWorkspaceTransaction(workspaceId, (tx: any) => tx.oAuthAuthorization.findUnique({
+    where: { stateHash: createHash('sha256').update(state).digest('hex') },
+    select: { workspaceId: true, providerKey: true, userId: true },
+  }));
+  if (!oauthRecord) return reply.code(403).send({ error: 'INVALID_OAUTH_STATE' });
+  if (oauthRecord.providerKey !== provider || oauthRecord.userId !== session.userId) return reply.code(403).send({ error: 'INVALID_OAUTH_STATE' });
+  const membership = await prisma.membership.findUnique({ where: { userId_workspaceId: { userId: session.userId, workspaceId } } });
+  if (!membership || (membership.role !== 'OWNER' && membership.role !== 'ADMIN')) return reply.code(403).send({ error: 'INSUFFICIENT_ROLE' });
+  try {
+    const result = await completeApiIntegrationOAuth(workspaceId, provider, state, code, cookiePart ? cookiePart.slice(cookieName.length + 1) : null, session.userId);
+    if (!result) return reply.code(400).send({ error: 'OAUTH_NOT_SUPPORTED' });
+    return { provider, status: result.connection.status, tokenExpiresAt: result.connection.tokenExpiresAt };
+  } catch (error) {
+    return apiIntegrationError(reply, error);
+  }
+});
+
+app.get('/api/api-integrations/:provider', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const detail = await getApiIntegrationDetail(ctx.workspaceId, String((req.params as any).provider ?? ''));
+  if (!detail) return reply.code(404).send({ error: 'UNKNOWN_PROVIDER' });
+  return detail;
+});
+
+app.get('/api/api-integrations/:provider/history', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const limit = (req.query as any)?.limit;
+  const history = await listApiIntegrationHistory(ctx.workspaceId, String((req.params as any).provider ?? ''), limit === undefined ? 100 : Number(limit));
+  if (!history) return reply.code(404).send({ error: 'UNKNOWN_PROVIDER' });
+  return history;
+});
+
+app.post('/api/api-integrations/:provider/credentials', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  try {
+    const result = await saveApiIntegrationCredentials(ctx.workspaceId, String((req.params as any).provider ?? ''), (req.body ?? {}) as Record<string, unknown>, ctx.userId);
+    if (!result) return reply.code(404).send({ error: 'UNKNOWN_PROVIDER' });
+    return { provider: result.key, connection: result.connection };
+  } catch (error) {
+    return apiIntegrationError(reply, error);
+  }
+});
+
+app.post('/api/api-integrations/:provider/test', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  try {
+    const result = await testApiIntegrationConnection(ctx.workspaceId, String((req.params as any).provider ?? ''), ctx.userId);
+    if (!result) return reply.code(404).send({ error: 'UNKNOWN_PROVIDER' });
+    if (result.errorCode === 'PROVIDER_COOLDOWN') return reply.code(429).send({ error: 'PROVIDER_COOLDOWN', status: result.status });
+    return result;
+  } catch (error) {
+    return apiIntegrationError(reply, error);
+  }
+});
+
+app.post('/api/api-integrations/:provider/refresh', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  try {
+    const result = await refreshApiIntegrationConnection(ctx.workspaceId, String((req.params as any).provider ?? ''), ctx.userId);
+    if (!result) return reply.code(400).send({ error: 'OAUTH_NOT_SUPPORTED' });
+    return result;
+  } catch (error) {
+    return apiIntegrationError(reply, error);
+  }
+});
+
+app.patch('/api/api-integrations/:provider', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const enabled = (req.body as any)?.enabled;
+  if (typeof enabled !== 'boolean') return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const result = await setApiIntegrationEnabled(ctx.workspaceId, String((req.params as any).provider ?? ''), enabled, ctx.userId);
+  if (!result) return reply.code(404).send({ error: 'UNKNOWN_PROVIDER' });
+  return { provider: result.key, connection: result.connection };
+});
+
+app.delete('/api/api-integrations/:provider', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const result = await disconnectApiIntegration(ctx.workspaceId, String((req.params as any).provider ?? ''), ctx.userId);
+  if (!result) return reply.code(404).send({ error: 'UNKNOWN_PROVIDER' });
+  return { provider: result.key, connection: result.connection };
 });
 
 export async function buildServer() {

@@ -513,7 +513,7 @@ export async function failJob(jobId: string, input: FailJobInput | string = {}, 
   return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
 }
 
-function computeBackoffMs(attempt: number): number {
+export function computeBackoffMs(attempt: number): number {
   const exp = Math.min(30_000, 1_000 * Math.pow(2, Math.max(0, attempt - 1)));
   return exp + Math.floor(Math.random() * 100);
 }

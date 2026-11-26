@@ -1,5 +1,13 @@
 # STATE
 
+## Sync audit (2026-11-26, local vs GitHub)
+
+- `git fetch origin` completed; no pull/push/merge/rebase.
+- Local `main` at `d01fdad` is 8 commits ahead of `origin/main` (`ef0e434`), 0 behind.
+- Remote-only commits: `origin/feat/discovery-schedule` (+1, open PR #27), `origin/local/audit-untracked-2026-11-02` (+3), `origin/phase-16/release-verification` (+2). All other remote branches are behind or equal.
+- Working tree has uncommitted Phase F work: API Integration Center plus schema/index/jobs/frontend changes and runtime logs/scratch file.
+- No secrets were inspected or transferred; `.env` remains uncommitted/ignored.
+- Safe next step: create a local backup branch/commit or stash, then cherry-pick/merge remote-only commits into a separate integration branch and resolve conflicts before any push.
 ## Phase D: lokale Betriebsreife abgeschlossen (2026-11-25T02:35Z) — 10/10
 
 - Vollständige QA nach allen Code- und Dokumentationsänderungen:
