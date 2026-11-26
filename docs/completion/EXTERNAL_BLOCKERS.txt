@@ -1,0 +1,85 @@
+# EXTERNE BLOCKADEN (Stand 2026-11-26, Phase-E-QA)
+
+Gelöst / verifiziert:
+- RLS: `DATABASE_URL` verwendet die Nicht-Superuser-Rolle `ugc_os_app`
+  (`rolsuper=f`, `rolbypassrls=f`). `tests/workspace-isolation.test.ts` 5/5 PASS.
+- KI: `opencode/beam-free` ist im Katalog als kostenlos geführt und lieferte
+  einen echten Antworttext (`OK.`). Kein `OLLAMA_API_KEY` nötig.
+- Finale QA: Typecheck, ESLint, Build PASS; Vitest 225/225 (57 Dateien);
+  MECE-Browsercheck 27/27, UGC-Main-UI-Check 5/5, Playwright 8/8.
+  Secret-Scan über das Repository (ohne `.env`/Logs): 0 Treffer für gesetzte
+  Token/Keys. MECE-Token, Browsercheck und Fastify-Bridge unverändert grün.
+- Echter Medienlauf: ffmpeg/ffprobe 7.1.5, whisper.cpp 1.9.6-dev mit
+  `ggml-tiny.en.bin`, 720x1280 H.264/AAC-Export, SSIM 0.930179 gegen
+  identischen Clipart ohne Untertitel. Report:
+  `/tmp/opencode/ugc-media-verify/verification.json`.
+- Doctor/Watchdog: Ports 3000/3031/3200 HTTP 200, Controller `stopped` /
+  `GLOBAL_FREE_QUOTA`, Watchdog `SKIPPED_COOLDOWN`, `started: false`,
+  `success: false`, `paidFallbackAttempted: false`. Kein Token-Wert in der
+  Doctor-Ausgabe.
+- Security-Härtung F-01..F-10 lokal geschlossen, inklusive Symlink-Schutz,
+  Wegfall des statischen Dev-JWT-Fallbacks, zentraler Redaction in Logs/Audit,
+  deterministischem `TRUST_PROXY` und DNS-/IP-Prüfung für Browser-URLs.
+- Phase E: statische Whisper-CLI (nur System-Libs, `1.9.6-dev`), echte DE/EN-
+  Samples, `SSIM All = 0.883772`; Playwright 8/8 mit Screenshots; ENV-Audit
+  97 Variablen (`SET 30 · MISSING 65 · EMPTY 2`), Secret-Scan 0 Treffer.
+  `.env` Modus 600, Backup vorhanden, `.gitignore` abgesichert.
+- Phase E.1: Full-Suite-Instabilität als Umgebungsursache nachgewiesen und
+  durch `npm run qa:full` (temporäre PostgreSQL, ein Worker, Watchdog,
+  Reports) behoben. Zwei Läufe **262/262** (64/64 Dateien), Watchdog nicht
+  ausgelöst; final Typecheck/ESLint/Build und Playwright 8/8 PASS. Details in
+  `docs/testing/`. Keine Produktions-Orchestrierungslogik geändert.
+
+Weiterhin extern blockiert (lokale Entwicklung läuft weiter):
+- Live-KI: Doctor meldet `controller.status=stopped`,
+  `pauseReason=GLOBAL_FREE_QUOTA`, `cooldownActive=false`,
+  `resumeAt=1795582740966`. Ohne ausdrückliche Freigabe kein Start, kein
+  Workaround und kein kostenpflichtiger Fallback.
+- `DISCOVERY_MCP_SERVER` / `DISCOVERY_MCP_CLIENT` bewusst nicht gesetzt: Tests
+  stubben den Client, ein gesetzter Server würde echte Calls auslösen. Der
+  Header-Fix (`maxHeaderSize: 32768`) ist geprüft; der Tier-1-Live-Smoke steht
+  noch aus. Kein Tier-2- oder Paid-Fallback benutzt.
+- YouTube-Suche ohne API-Zugang/Cursor-Quelle nicht live prüfbar; Retry- und
+  Budgetlogik ist lokal gegen einen Fake-MCP-Server getestet.
+- `ffmpeg` / `ffprobe` sind systemweit installiert (7.1.5) und mit echtem Video
+  verifiziert; der frühere `NOT_CONFIGURED`-Blocker ist geschlossen.
+- Lokales whisper.cpp (1.9.6-dev) ist statisch gelinkt und dauerhaft unter
+  `$HOME/.local/share/ugc-media/whisper` installiert (Binary + `ggml-tiny.en.bin`
+  + `ggml-tiny.bin` + DE/EN-CC0-Samples); Hashes in `docs/media/WHISPER_ASSETS.md`.
+  Bei einem neuen Host müssen diese Assets erneut bereitgestellt werden. Kein
+  Cloud-/Kostenfallback.
+- Keine Plattform-Credentials: Publishing bleibt freigabepflichtig und ohne
+  echten Upload; ohne Credentials `NOT_CONFIGURED`, mit Credentials
+  `CREDENTIALS_ONLY` + `ADAPTER_NOT_IMPLEMENTED`. Keine erfundenen URLs/IDs.
+- Keine externen Analytics-Quellen; Analytics bleibt auf gespeicherte
+  workspace-eigene Daten beschränkt und markiert Fehlendes explizit.
+- MECE-Chat: Port 4096 ist fremd belegt und wird nicht bereinigt; lokal werden
+  `MECE_CONTROL_PORT=3031` und `MECE_OPENCODE_PORT=4097` verwendet. Startfehler
+  werden redactet sichtbar angezeigt, kein Fake-Erfolg.
+- Keine Deployment-Credentials: kein Push/Merge/Deploy.
+
+Phase F.1 deferred integrations:
+- PR #27 recurring discovery schedule conflicts with local recurring discovery implementation.
+- Persistent scheduler / CDP host from local/audit-untracked requires compatibility review.
+
+Phase F — API Integration Center (extern offen):
+- Keine echten Plattform-Credentials und keine OAuth-App-Freigaben für Google/
+  YouTube, TikTok Web und Meta Web. Registrierte Redirect-URIs und App-Reviews
+  müssen im jeweiligen Entwicklerportal durch den Kontoinhaber erfolgen.
+- Produktion benötigt `API_INTEGRATIONS_OAUTH_BASE_URL` mit öffentlicher
+  HTTPS-URL; lokal genügt der Loopback-Origin-Fallback. Der Master-Key bleibt
+  ausschließlich in `.env` bzw. einer externen Key-Datei.
+- Ohne Freigabe bleiben Provider ehrlich `NOT_CONFIGURED`/
+  `CREDENTIALS_ONLY`/`ADAPTER_NOT_IMPLEMENTED`; `CONNECTED` entsteht nur durch
+  erfolgreiche echte Probes. Keine Umgehung von Login/MFA/CAPTCHA, keine
+  kostenpflichtigen Fallbacks.
+- Legacy `/api/integrations` bleibt bewusst unverändert (4 Provider,
+  `liveAdapter:false`); kein Push/Merge/Deployment ohne ausdrückliche Freigabe.
+
+Phase F.3.1 CI blocker: final CI rerun after reproducibility fixes required.
+
+Phase F.3.1 final: CI green; merge is pending explicit user approval.
+
+Phase F.3.2 final: merge conflicts resolved, CI green, status READY_TO_MERGE.
+
+Phase F.3.2 final: final CI/check green, status READY_TO_MERGE.

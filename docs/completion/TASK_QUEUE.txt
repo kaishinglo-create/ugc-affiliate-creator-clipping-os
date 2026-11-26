@@ -1,0 +1,14 @@
+1f3e70719a13|Roadmap: /home/kaishinglo/ugc-affiliate-creator-clipping-os/docs/autonomous-build/STATE.md:153:Next: Phase 23 — provider-independent AI gateway with structured output and per-workspace budget.
+247ce9f6d98f|Complete feature: Self-Improving (missing) - criteria: Implementation
+448ab0a4ef94|Complete feature: Security (partial) - criteria: F2/F3 closed
+5e75e5ed2fbf|Complete feature: Frontend (partial) - criteria: Stale labels removed
+63ab30f11111|Complete feature: End-to-End-Tests (missing) - criteria: Playwright suite
+6aa9e0ad15ec|Complete feature: MCP (partial) - criteria: Runtime host connected
+729d04faa782|Complete feature: CEO-/COO-Agenten (partial) - criteria: COO persisted beyond DB row; CEO synthesis validated
+8f45bf2dae1d|Complete feature: Video Clipping (missing) - criteria: ffmpeg pipeline
+a4d87ce569ae|Roadmap: /home/kaishinglo/ugc-affiliate-creator-clipping-os/docs/autonomous-build/STATE.md:120:Next: Phase 24 — drive orchestration from the engine (no driver in the request path) with a
+bd13e5022e50|Complete feature: Department-Agenten (partial) - criteria: No fake success flags; Deterministic outputs labelled
+bdb695cc42fc|Complete feature: MECE-Wave (partial) - criteria: Phase docs present; Verified execution
+e825a2dee55c|Complete feature: YouTube Discovery (partial) - criteria: Cursor + retry
+f1cc7e57a323|Roadmap: /home/kaishinglo/ugc-affiliate-creator-clipping-os/docs/completion/PROJECT_STATUS.md:32:## Offene Blocker
+f4f523a8b621|Complete feature: Publishing (placeholder) - criteria: Platform clients

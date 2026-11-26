@@ -7,6 +7,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
     "api-anything": "0.4.0",
+    "undici": "7.30.2",
     "zod": "4.6.7"
   }
 }

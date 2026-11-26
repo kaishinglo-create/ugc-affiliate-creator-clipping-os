@@ -1,0 +1,1695 @@
+{
+  "generatedAt": "2026-11-26T15:27:34.663Z",
+  "source": {
+    "envFile": ".env",
+    "head": "d97f8ca",
+    "secretValuesExposed": false
+  },
+  "counts": {
+    "SET": 30,
+    "MISSING": 65,
+    "EMPTY": 2
+  },
+  "variables": [
+    {
+      "name": "DATABASE_URL",
+      "group": "Kern & Datenbank",
+      "requirement": "pflicht",
+      "default": "—",
+      "type": "URL/String",
+      "function": "Prisma-Pg-Adapter, CLI-Migrationen und Services Doctor",
+      "references": [
+        "lib/db.ts:8",
+        "src/config.ts:27",
+        "scripts/services.sh:313"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "App startet nicht; DB-/RLS-Prüfungen nicht möglich",
+      "notes": "Nicht-Superuser-Rolle ugc_os_app verwenden"
+    },
+    {
+      "name": "SESSION_JWT_SECRET",
+      "group": "Kern & Datenbank",
+      "requirement": "pflicht",
+      "default": "—",
+      "type": "String >= 32 Zeichen",
+      "function": "Signatur/Verifikation der Sessions",
+      "references": [
+        "src/config.ts:28",
+        "lib/auth.ts:11"
+      ],
+      "origin": "lokal generierbar",
+      "free": "ja",
+      "status": "SET",
+      "impact": "App startet hart; kein statischer Dev-Fallback",
+      "notes": "openssl rand -hex 32"
+    },
+    {
+      "name": "APP_ENV",
+      "group": "Auth & HTTP",
+      "requirement": "optional",
+      "default": "development",
+      "type": "development|production",
+      "function": "Cookie-Secure-Flag und Config-Modus",
+      "references": [
+        "src/config.ts:25",
+        "lib/auth.ts:66"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "production-spezifische Cookie-Härtung entfällt",
+      "notes": "NODE_ENV ist Fallback"
+    },
+    {
+      "name": "NODE_ENV",
+      "group": "Auth & HTTP",
+      "requirement": "optional",
+      "default": "—",
+      "type": "String",
+      "function": "Fallback für APP_ENV, Prisma-Logging",
+      "references": [
+        "src/config.ts:25",
+        "lib/db.ts:12",
+        "lib/auth.ts:66"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Fallback auf APP_ENV bzw. development",
+      "notes": "Von Tools gesetzt; nicht zwingend in .env"
+    },
+    {
+      "name": "CORS_ORIGIN",
+      "group": "Auth & HTTP",
+      "requirement": "optional",
+      "default": "http://localhost:5173",
+      "type": "URL/String",
+      "function": "Fastify-CORS-Freigabe",
+      "references": [
+        "src/config.ts:41"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "Browser-UI kann API nicht erreichen",
+      "notes": "—"
+    },
+    {
+      "name": "PORT",
+      "group": "Auth & HTTP",
+      "requirement": "optional",
+      "default": "3000",
+      "type": "Zahl",
+      "function": "Fastify-Listen-Port; Fallback des Browser-Hosts",
+      "references": [
+        "src/config.ts:42",
+        "browser-runtime-host/server.mjs:5"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "Default-Port 3000 wird verwendet",
+      "notes": "Browser-Runtime nutzt eigenen Port, falls gesetzt"
+    },
+    {
+      "name": "TRUST_PROXY",
+      "group": "Auth & HTTP",
+      "requirement": "optional",
+      "default": "false",
+      "type": "false|0|loopback|Zahl|true|1",
+      "function": "Fastify trustProxy",
+      "references": [
+        "src/index.ts:19",
+        "src/config.ts:16-21"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "Fail-closed: keine Proxy-Header-Vertrauensstellung",
+      "notes": "true/1 nur bewusst setzen"
+    },
+    {
+      "name": "OLLAMA_API_KEY",
+      "group": "KI & Provider",
+      "requirement": "optional",
+      "default": "—",
+      "type": "Secret/String",
+      "function": "Ollama-Cloud-Chat und AI-Gateway",
+      "references": [
+        "src/ai/provider.ts:54",
+        "src/ollama.ts:14"
+      ],
+      "origin": "extern",
+      "free": "nicht garantiert",
+      "status": "EMPTY",
+      "impact": "Ollama/AI wird als nicht konfiguriert markiert",
+      "notes": "402 bei fehlendem Cloud-Guthaben; kein Paid-Fallback"
+    },
+    {
+      "name": "OLLAMA_BASE_URL",
+      "group": "KI & Provider",
+      "requirement": "optional",
+      "default": "https://ollama.com",
+      "type": "URL",
+      "function": "AI-Provider-Requests",
+      "references": [
+        "src/ai/provider.ts:55"
+      ],
+      "origin": "lokal/extern",
+      "free": "ja",
+      "status": "SET",
+      "impact": "Default-Endpunkt wird verwendet",
+      "notes": "—"
+    },
+    {
+      "name": "OLLAMA_MODEL",
+      "group": "KI & Provider",
+      "requirement": "optional",
+      "default": "Base 1-flash",
+      "type": "String",
+      "function": "Modellauflösung und Audit-Metadaten",
+      "references": [
+        "src/ai/models.ts:11",
+        "src/ollama.ts:19",
+        "src/index.ts:2608,2626,2641"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "Repo-Default wird verwendet",
+      "notes": "—"
+    },
+    {
+      "name": "OLLAMA_MODEL_<AGENT>",
+      "group": "KI & Provider",
+      "requirement": "optional",
+      "default": "—",
+      "type": "String (Muster)",
+      "function": "resolveAgentModel pro Agent",
+      "references": [
+        "src/ai/models.ts:9"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "OLLAMA_MODEL bzw. Default gilt",
+      "notes": "Beispiel: OLLAMA_MODEL_RESEARCH"
+    },
+    {
+      "name": "AGENT_AI_MODE",
+      "group": "KI & Provider",
+      "requirement": "optional",
+      "default": "auto",
+      "type": "auto|off|required",
+      "function": "Gateway-Modus",
+      "references": [
+        "src/ai/gateway.ts:16"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "auto: deterministische Ausgabe ohne AI",
+      "notes": "required bricht ohne AI ab"
+    },
+    {
+      "name": "AI_MAX_DAILY_REQUESTS_PER_WORKSPACE",
+      "group": "KI & Provider",
+      "requirement": "optional",
+      "default": "100",
+      "type": "Zahl (0 = aus)",
+      "function": "AI-Gateway-Budget",
+      "references": [
+        "src/ai/gateway.ts:22"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "Fallback auf OLLAMA_MAX_DAILY_REQUESTS_PER_WORKSPACE, dann 100",
+      "notes": "—"
+    },
+    {
+      "name": "OLLAMA_MAX_DAILY_REQUESTS_PER_WORKSPACE",
+      "group": "KI & Provider",
+      "requirement": "optional",
+      "default": "100",
+      "type": "Zahl (0 = aus)",
+      "function": "Ollama-Budget und -Audit",
+      "references": [
+        "src/index.ts:2584",
+        "src/ai/gateway.ts:22"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "Default 100; 0 deaktiviert Ollama",
+      "notes": "—"
+    },
+    {
+      "name": "AUTOMATION_ENGINE",
+      "group": "Automatisierung",
+      "requirement": "optional",
+      "default": "on",
+      "type": "on|off",
+      "function": "Job-Claim/Loop",
+      "references": [
+        "src/engine.ts:500",
+        "src/index.ts:2682"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "off = API-only-Prozess",
+      "notes": "—"
+    },
+    {
+      "name": "AUTOMATION_ENGINE_INTERVAL_MS",
+      "group": "Automatisierung",
+      "requirement": "optional",
+      "default": "3000",
+      "type": "Zahl 250..300000",
+      "function": "Engine-Takt",
+      "references": [
+        "src/engine.ts:503,517"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "Default 3000 ms",
+      "notes": "—"
+    },
+    {
+      "name": "OPENCODE_BIN",
+      "group": "Automatisierung",
+      "requirement": "optional",
+      "default": "opencode",
+      "type": "Pfad/String",
+      "function": "Autonomer Controller",
+      "references": [
+        "scripts/autonomous-controller.mjs:533"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "PATH wird verwendet",
+      "notes": "—"
+    },
+    {
+      "name": "MECE_DASHBOARD_TOKEN",
+      "group": "MECE & Controller",
+      "requirement": "pflicht für MECE",
+      "default": "—",
+      "type": "String >= 32 Zeichen",
+      "function": "Dashboard-Auth in API, MECE und Doctor",
+      "references": [
+        "src/index.ts:690",
+        ".mece-control/server.mjs:30",
+        "scripts/services.sh:303"
+      ],
+      "origin": "lokal generierbar",
+      "free": "ja",
+      "status": "SET",
+      "impact": "MECE-Bridge/UI fail-closed 401",
+      "notes": "Nur .env und Browser-sessionStorage; nie loggen"
+    },
+    {
+      "name": "MECE_CONTROL_PORT",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "3031",
+      "type": "Zahl",
+      "function": "MECE-HTTP-Server",
+      "references": [
+        ".mece-control/server.mjs:22"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "Default 3031",
+      "notes": "—"
+    },
+    {
+      "name": "MECE_OPENCODE_PORT",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "4096",
+      "type": "Zahl",
+      "function": "MECE/OpenCode-Child-Prozess",
+      "references": [
+        ".mece-control/server.mjs:23"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "Default 4096; fremde Ports nicht freiräumen",
+      "notes": "Lokal 4097 sinnvoll, wenn 4096 belegt ist"
+    },
+    {
+      "name": "OPENCODE_PORT",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "—",
+      "type": "Zahl",
+      "function": "Fallback-Port",
+      "references": [
+        ".mece-control/server.mjs:23"
+      ],
+      "origin": "veraltet",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Nur wirksam ohne MECE_OPENCODE_PORT",
+      "notes": "Dokumentiert, nicht gelöscht"
+    },
+    {
+      "name": "OPENCODE_SERVER_PASSWORD",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "ephemer generiert",
+      "type": "Secret/String",
+      "function": "MECE-Child-Env",
+      "references": [
+        ".mece-control/server.mjs:494,542"
+      ],
+      "origin": "lokal generierbar",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "MECE erzeugt ein temporäres Passwort",
+      "notes": "Niemals in Logs ausgeben"
+    },
+    {
+      "name": "OPENCODE_PASSWORD",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "—",
+      "type": "Secret/String",
+      "function": "Fallback für Basic Auth",
+      "references": [
+        ".mece-control/server.mjs:494"
+      ],
+      "origin": "veraltet",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Nur wirksam ohne OPENCODE_SERVER_PASSWORD",
+      "notes": "Dokumentiert, nicht gelöscht"
+    },
+    {
+      "name": "CONTROLLER_STATUS_FILE",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "—",
+      "type": "Pfad",
+      "function": "Watchdog und Doctor",
+      "references": [
+        "scripts/controller-watchdog.sh:50,233",
+        "scripts/services.sh:175"
+      ],
+      "origin": "diagnostisch",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Standardpfad .mece-control/state.json",
+      "notes": "Nur für Tests/Diagnose"
+    },
+    {
+      "name": "CONTROLLER_AGENT_TIMEOUT_MS",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "480000",
+      "type": "Zahl ms",
+      "function": "Autonomer Controller",
+      "references": [
+        "scripts/autonomous-controller.mjs:51"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default 480000 ms",
+      "notes": "—"
+    },
+    {
+      "name": "CONTROLLER_FULL_TEST_TIMEOUT_MS",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "480000",
+      "type": "Zahl ms",
+      "function": "Autonomer Controller",
+      "references": [
+        "scripts/autonomous-controller.mjs:54"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default 480000 ms",
+      "notes": "—"
+    },
+    {
+      "name": "WATCHDOG_MIN_FREE_MEMORY_MB",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "256",
+      "type": "Zahl",
+      "function": "Watchdog-Ressourcengate",
+      "references": [
+        "scripts/controller-watchdog.sh:105"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default 256 MB",
+      "notes": "—"
+    },
+    {
+      "name": "WATCHDOG_MIN_CGROUP_MEMORY_MB",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "256",
+      "type": "Zahl",
+      "function": "Watchdog-Ressourcengate",
+      "references": [
+        "scripts/controller-watchdog.sh:106"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default 256 MB",
+      "notes": "—"
+    },
+    {
+      "name": "WATCHDOG_MIN_DISK_GB",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "1",
+      "type": "Zahl",
+      "function": "Watchdog-Ressourcengate",
+      "references": [
+        "scripts/controller-watchdog.sh:107"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default 1 GB",
+      "notes": "—"
+    },
+    {
+      "name": "WATCHDOG_MAX_LOAD_MULTIPLIER",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "2",
+      "type": "Zahl",
+      "function": "Watchdog-Ressourcengate",
+      "references": [
+        "scripts/controller-watchdog.sh:108"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default 2x CPU-Anzahl",
+      "notes": "—"
+    },
+    {
+      "name": "WATCHDOG_HEARTBEAT_MIN_AGE_SECONDS",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "60",
+      "type": "Zahl s",
+      "function": "Watchdog-Entscheidung",
+      "references": [
+        "scripts/controller-watchdog.sh:161-162"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default 60 s",
+      "notes": "Verhindert wiederholte Starts"
+    },
+    {
+      "name": "WATCHDOG_JOURNAL_BEFORE",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "0",
+      "type": "Zahl",
+      "function": "Watchdog-Nachlauf",
+      "references": [
+        "scripts/controller-watchdog.sh:224"
+      ],
+      "origin": "intern",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "0 wird angenommen",
+      "notes": "Vom Watchdog gesetzt; nicht manuell pflegen"
+    },
+    {
+      "name": "WATCHDOG_ONCE_TIMEOUT_SECONDS",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "900",
+      "type": "Zahl s",
+      "function": "Watchdog-Ausführung",
+      "references": [
+        "scripts/controller-watchdog.sh:205"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default 900 s",
+      "notes": "—"
+    },
+    {
+      "name": "WATCHDOG_SCHEDULE_INTERVAL_SECONDS",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "300",
+      "type": "Zahl s",
+      "function": "Watchdog-Scheduler",
+      "references": [
+        "scripts/controller-watchdog-scheduler.sh:14"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default 300 s",
+      "notes": "—"
+    },
+    {
+      "name": "WATCHDOG_SCHEDULE_TICKS",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "1",
+      "type": "Zahl",
+      "function": "Watchdog-Scheduler",
+      "references": [
+        "scripts/controller-watchdog-scheduler.sh:15"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default 1; stoppt nach gebundener Ausführung",
+      "notes": "—"
+    },
+    {
+      "name": "WATCHDOG_SCHEDULE_LOG_FILE",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": ".run/controller-watchdog-schedule.jsonl",
+      "type": "Pfad",
+      "function": "Watchdog-Scheduler",
+      "references": [
+        "scripts/controller-watchdog-scheduler.sh:16"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Defaultpfad wird verwendet",
+      "notes": "—"
+    },
+    {
+      "name": "WATCHDOG_SCRIPT",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "scripts/controller-watchdog.sh",
+      "type": "Pfad",
+      "function": "Scheduler-Override",
+      "references": [
+        "scripts/controller-watchdog-scheduler.sh:13"
+      ],
+      "origin": "diagnostisch",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Defaultpfad wird verwendet",
+      "notes": "—"
+    },
+    {
+      "name": "WATCHDOG_RUNNER",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "bash",
+      "type": "String",
+      "function": "Scheduler-Override",
+      "references": [
+        "scripts/controller-watchdog-scheduler.sh:12"
+      ],
+      "origin": "diagnostisch",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default bash",
+      "notes": "—"
+    },
+    {
+      "name": "NODE_BIN",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "node",
+      "type": "Pfad",
+      "function": "Watchdog/Scheduler/Doctor",
+      "references": [
+        "scripts/controller-watchdog.sh:10",
+        "scripts/controller-watchdog-scheduler.sh:11"
+      ],
+      "origin": "diagnostisch",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "PATH wird verwendet",
+      "notes": "—"
+    },
+    {
+      "name": "TMPDIR",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "/tmp/opencode (Skripte)",
+      "type": "Pfad",
+      "function": "Watchdog/Scheduler/Pilot",
+      "references": [
+        "scripts/controller-watchdog.sh:13",
+        "scripts/controller-watchdog-scheduler.sh:31"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "OS-Default bzw. /tmp/opencode",
+      "notes": "—"
+    },
+    {
+      "name": "WATCHDOG_SCHEDULE_*",
+      "group": "MECE & Controller",
+      "requirement": "intern",
+      "default": "—",
+      "type": "String/Zahl",
+      "function": "JSONL-Protokoll des Schedulers",
+      "references": [
+        "scripts/controller-watchdog-scheduler.sh:76-95"
+      ],
+      "origin": "intern",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Keine Auswirkung ohne Scheduler",
+      "notes": "TICK, STARTED_AT, DECISION, EXIT_CODE, STARTED, SUCCESS, PAID_FALLBACK"
+    },
+    {
+      "name": "MECE_TEST_CONTROL_PORT",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "3131",
+      "type": "Zahl",
+      "function": "MECE-Runtime-Test",
+      "references": [
+        "tests/mece-runtime.test.ts:6"
+      ],
+      "origin": "test-only",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default 3131 im Test",
+      "notes": "—"
+    },
+    {
+      "name": "MECE_TEST_OPENCODE_PORT",
+      "group": "MECE & Controller",
+      "requirement": "optional",
+      "default": "4097",
+      "type": "Zahl",
+      "function": "MECE-Runtime-Test",
+      "references": [
+        "tests/mece-runtime.test.ts:7"
+      ],
+      "origin": "test-only",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default 4097 im Test",
+      "notes": "—"
+    },
+    {
+      "name": "DISCOVERY_MCP_SERVER",
+      "group": "Discovery & MCP",
+      "requirement": "optional",
+      "default": "—",
+      "type": "absoluter Pfad",
+      "function": "YouTube-Creator-/Produkt-Discovery",
+      "references": [
+        "src/discovery.ts:80"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Discovery bleibt deaktiviert",
+      "notes": "Pilot: pilots/api-anything/server.mjs"
+    },
+    {
+      "name": "DISCOVERY_MCP_CLIENT",
+      "group": "Discovery & MCP",
+      "requirement": "optional",
+      "default": "—",
+      "type": "absoluter Pfad",
+      "function": "Discovery-Fallback",
+      "references": [
+        "src/discovery.ts:86"
+      ],
+      "origin": "veraltet",
+      "free": "ja",
+      "status": "EMPTY",
+      "impact": "Nur wirksam ohne SERVER",
+      "notes": "Dokumentiert, nicht gelöscht"
+    },
+    {
+      "name": "HTTP_PROXY",
+      "group": "Discovery & MCP",
+      "requirement": "optional",
+      "default": "—",
+      "type": "URL",
+      "function": "MCP-Kindprozess/netzwerk",
+      "references": [
+        "src/discovery.ts:75-76",
+        "pilots/api-anything/smoke.mjs:6"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Direkte Verbindung",
+      "notes": "Nur an Kindprozess weitergegeben"
+    },
+    {
+      "name": "HTTPS_PROXY",
+      "group": "Discovery & MCP",
+      "requirement": "optional",
+      "default": "—",
+      "type": "URL",
+      "function": "MCP-Kindprozess/netzwerk",
+      "references": [
+        "src/discovery.ts:75-76",
+        "pilots/api-anything/smoke.mjs:6"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Direkte Verbindung",
+      "notes": "—"
+    },
+    {
+      "name": "NO_PROXY",
+      "group": "Discovery & MCP",
+      "requirement": "optional",
+      "default": "—",
+      "type": "String",
+      "function": "MCP-Kindprozess/netzwerk",
+      "references": [
+        "src/discovery.ts:75-76",
+        "pilots/api-anything/smoke.mjs:6"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Keine Ausnahmen",
+      "notes": "—"
+    },
+    {
+      "name": "NODE_USE_ENV_PROXY",
+      "group": "Discovery & MCP",
+      "requirement": "optional",
+      "default": "—",
+      "type": "String",
+      "function": "MCP-Kindprozess",
+      "references": [
+        "src/discovery.ts:75-76",
+        "pilots/api-anything/smoke.mjs:6"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Node-Default",
+      "notes": "—"
+    },
+    {
+      "name": "NODE_EXTRA_CA_CERTS",
+      "group": "Discovery & MCP",
+      "requirement": "optional",
+      "default": "—",
+      "type": "Pfad",
+      "function": "MCP-Kindprozess",
+      "references": [
+        "src/discovery.ts:75-76",
+        "pilots/api-anything/smoke.mjs:6"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "System-CA",
+      "notes": "—"
+    },
+    {
+      "name": "API_ANYTHING_HOME",
+      "group": "Discovery & MCP",
+      "requirement": "intern",
+      "default": "mkdtemp",
+      "type": "Pfad",
+      "function": "api-anything/host",
+      "references": [
+        "pilots/api-anything/server.mjs:117"
+      ],
+      "origin": "intern",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Pilot setzt Wert selbst",
+      "notes": "Nicht manuell setzen"
+    },
+    {
+      "name": "API_ANYTHING_LOCAL_ONLY",
+      "group": "Discovery & MCP",
+      "requirement": "intern",
+      "default": "1",
+      "type": "0|1",
+      "function": "api-anything/host",
+      "references": [
+        "pilots/api-anything/server.mjs:118"
+      ],
+      "origin": "intern",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Externe Registry wäre aktiv",
+      "notes": "Pilot erzwingt 1"
+    },
+    {
+      "name": "API_ANYTHING_KEY",
+      "group": "Discovery & MCP",
+      "requirement": "optional",
+      "default": "—",
+      "type": "Secret/String",
+      "function": "Externe API-Anything-Registry",
+      "references": [
+        "nur Abhängigkeit api-anything/host (ausgeschlossen)"
+      ],
+      "origin": "extern",
+      "free": "nicht garantiert",
+      "status": "MISSING",
+      "impact": "Lokaler Tier-1-Pilot bleibt nutzbar",
+      "notes": "Nicht konfiguriert; nicht erfunden"
+    },
+    {
+      "name": "API_ANYTHING_TOKEN",
+      "group": "Discovery & MCP",
+      "requirement": "optional",
+      "default": "—",
+      "type": "Secret/String",
+      "function": "Externe Registry-Auth",
+      "references": [
+        "nur Abhängigkeit api-anything/host (ausgeschlossen)"
+      ],
+      "origin": "extern",
+      "free": "nicht garantiert",
+      "status": "MISSING",
+      "impact": "Lokaler Tier-1-Pilot bleibt nutzbar",
+      "notes": "Nicht konfiguriert"
+    },
+    {
+      "name": "API_ANYTHING_REGISTRY",
+      "group": "Discovery & MCP",
+      "requirement": "optional",
+      "default": "—",
+      "type": "URL",
+      "function": "Externe Discovery-Quellen",
+      "references": [
+        "nur Abhängigkeit api-anything/host (ausgeschlossen)"
+      ],
+      "origin": "extern",
+      "free": "nicht garantiert",
+      "status": "MISSING",
+      "impact": "Lokaler Pilot bleibt nutzbar",
+      "notes": "Nicht konfiguriert"
+    },
+    {
+      "name": "BROWSER_RUNTIME_URL",
+      "group": "Browser Runtime",
+      "requirement": "optional",
+      "default": "—",
+      "type": "URL",
+      "function": "HTTP-Browser-Adapter",
+      "references": [
+        "src/browser-gateway.ts:331"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "Lokaler Browser-Adapter entfällt",
+      "notes": "—"
+    },
+    {
+      "name": "BROWSER_RUNTIME_TOKEN",
+      "group": "Browser Runtime",
+      "requirement": "optional",
+      "default": "—",
+      "type": "Secret/String",
+      "function": "Auth des Browser-Adapters",
+      "references": [
+        "src/browser-gateway.ts:336",
+        "browser-runtime-host/server.mjs:6"
+      ],
+      "origin": "lokal generierbar",
+      "free": "ja",
+      "status": "SET",
+      "impact": "Runtime-Anfragen werden abgelehnt",
+      "notes": "Nie ausgeben oder loggen"
+    },
+    {
+      "name": "BROWSER_RUNTIME_PORT",
+      "group": "Browser Runtime",
+      "requirement": "optional",
+      "default": "3200",
+      "type": "Zahl",
+      "function": "Browser-Host",
+      "references": [
+        "browser-runtime-host/server.mjs:5"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "Default 3200",
+      "notes": "—"
+    },
+    {
+      "name": "BROWSER_RUNTIME_HOST",
+      "group": "Browser Runtime",
+      "requirement": "optional",
+      "default": "127.0.0.1",
+      "type": "Host",
+      "function": "Browser-Host",
+      "references": [
+        "browser-runtime-host/server.mjs:7"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "Loopback-Bind",
+      "notes": "—"
+    },
+    {
+      "name": "BROWSER_EXECUTABLE_PATH",
+      "group": "Browser Runtime",
+      "requirement": "optional",
+      "default": "—",
+      "type": "Pfad",
+      "function": "Playwright-Executable",
+      "references": [
+        "browser-runtime-host/server.mjs:8"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "Playwright-Standardpfad wird gesucht",
+      "notes": "—"
+    },
+    {
+      "name": "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH",
+      "group": "Browser Runtime",
+      "requirement": "optional",
+      "default": "—",
+      "type": "Pfad",
+      "function": "Playwright-Fallback",
+      "references": [
+        "browser-runtime-host/server.mjs:8"
+      ],
+      "origin": "veraltet",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Nur ohne BROWSER_EXECUTABLE_PATH",
+      "notes": "Dokumentiert, nicht gelöscht"
+    },
+    {
+      "name": "FFMPEG_BIN",
+      "group": "Medien",
+      "requirement": "optional",
+      "default": "ffmpeg (PATH)",
+      "type": "Pfad",
+      "function": "Clipping/Audio-Extraktion",
+      "references": [
+        "src/video/clipping.ts:182-184",
+        "scripts/services.sh:282"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "Medienjobs scheitern mit NOT_CONFIGURED",
+      "notes": "—"
+    },
+    {
+      "name": "FFPROBE_BIN",
+      "group": "Medien",
+      "requirement": "optional",
+      "default": "ffprobe (PATH)",
+      "type": "Pfad",
+      "function": "Medienanalyse",
+      "references": [
+        "src/video/clipping.ts:182-184",
+        "scripts/services.sh:283"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "Medienjobs scheitern mit NOT_CONFIGURED",
+      "notes": "—"
+    },
+    {
+      "name": "FFMPEG_VIDEO_CODEC",
+      "group": "Medien",
+      "requirement": "optional",
+      "default": "libx264",
+      "type": "String",
+      "function": "Video-Export",
+      "references": [
+        "src/video/clipping.ts:175"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default libx264",
+      "notes": "—"
+    },
+    {
+      "name": "FFMPEG_TIMEOUT_MS",
+      "group": "Medien",
+      "requirement": "optional",
+      "default": "120000",
+      "type": "Zahl ms 1000..600000",
+      "function": "Binary-Sicherung",
+      "references": [
+        "src/video/clipping.ts:204"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default 120000 ms",
+      "notes": "—"
+    },
+    {
+      "name": "WHISPER_BIN",
+      "group": "Medien",
+      "requirement": "optional",
+      "default": "whisper (PATH)",
+      "type": "Pfad",
+      "function": "Transkription",
+      "references": [
+        "src/transcription.ts:192",
+        "scripts/services.sh:285"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "NOT_CONFIGURED",
+      "notes": "—"
+    },
+    {
+      "name": "WHISPER_MODEL",
+      "group": "Medien",
+      "requirement": "optional",
+      "default": "—",
+      "type": "Pfad",
+      "function": "Transkription",
+      "references": [
+        "src/transcription.ts:242",
+        "scripts/services.sh:291"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "WHISPER_MODEL_NOT_CONFIGURED",
+      "notes": "—"
+    },
+    {
+      "name": "WHISPER_MODEL_MULTILINGUAL",
+      "group": "Medien",
+      "requirement": "optional",
+      "default": "—",
+      "type": "Pfad",
+      "function": "DE-Transkription",
+      "references": [
+        "src/transcription.ts:228,310"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "DE-Sprache schlägt mit NOT_CONFIGURED fehl",
+      "notes": "—"
+    },
+    {
+      "name": "WHISPER_THREADS",
+      "group": "Medien",
+      "requirement": "optional",
+      "default": "1",
+      "type": "Zahl 1..cap",
+      "function": "Ressourcenbegrenzung",
+      "references": [
+        "src/transcription.ts:207"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default 1",
+      "notes": "—"
+    },
+    {
+      "name": "WHISPER_THREADS_MAX",
+      "group": "Medien",
+      "requirement": "optional",
+      "default": "2",
+      "type": "Zahl 1..8",
+      "function": "Ressourcenbegrenzung",
+      "references": [
+        "src/transcription.ts:203"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default 2",
+      "notes": "—"
+    },
+    {
+      "name": "WHISPER_TIMEOUT_MS",
+      "group": "Medien",
+      "requirement": "optional",
+      "default": "300000",
+      "type": "Zahl ms 1000..600000",
+      "function": "Binary-Sicherung",
+      "references": [
+        "src/transcription.ts:197"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default 300000 ms",
+      "notes": "—"
+    },
+    {
+      "name": "UGC_MEDIA_TMP_DIR",
+      "group": "Medien",
+      "requirement": "optional",
+      "default": "OS-TMP",
+      "type": "Pfad",
+      "function": "Upload-/Job-Verzeichnisse",
+      "references": [
+        "src/media-workspace.ts:19"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "tmpdir() wird verwendet",
+      "notes": "—"
+    },
+    {
+      "name": "UGC_MEDIA_MAX_UPLOAD_BYTES",
+      "group": "Medien",
+      "requirement": "optional",
+      "default": "8388608",
+      "type": "Zahl 1024..33554432",
+      "function": "Upload-Guard",
+      "references": [
+        "src/media-workspace.ts:14"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default 8 MiB",
+      "notes": "—"
+    },
+    {
+      "name": "MEDIA_VERIFY_DIR",
+      "group": "Medien",
+      "requirement": "optional",
+      "default": "/tmp/opencode/ugc-media-verify",
+      "type": "Pfad",
+      "function": "verify:media",
+      "references": [
+        "scripts/verify-media-runtime.ts:17"
+      ],
+      "origin": "test-only",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Defaultpfad wird verwendet",
+      "notes": "—"
+    },
+    {
+      "name": "WHISPER_SAMPLE",
+      "group": "Medien",
+      "requirement": "optional",
+      "default": "$HOME/.local/share/ugc-media/whisper/samples/en-test-sentence-cc0.wav",
+      "type": "Pfad",
+      "function": "verify:media",
+      "references": [
+        "scripts/verify-media-runtime.ts:20"
+      ],
+      "origin": "test-only",
+      "free": "ja",
+      "status": "SET",
+      "impact": "Defaultpfad wird verwendet",
+      "notes": "—"
+    },
+    {
+      "name": "WHISPER_SAMPLE_DE",
+      "group": "Medien",
+      "requirement": "optional",
+      "default": "$HOME/.local/share/ugc-media/whisper/samples/de-deutschland-cc0.flac",
+      "type": "Pfad",
+      "function": "verify:media (DE-Fall)",
+      "references": [
+        "scripts/verify-media-runtime.ts:24"
+      ],
+      "origin": "test-only",
+      "free": "ja",
+      "status": "SET",
+      "impact": "DE-Fall wird als SKIPPED_EXTERNAL_SAMPLE markiert",
+      "notes": "—"
+    },
+    {
+      "name": "FFMPEG_ARGV_LOG",
+      "group": "Medien",
+      "requirement": "test-only",
+      "default": "—",
+      "type": "Pfad",
+      "function": "Video-Pipeline-Tests",
+      "references": [
+        "tests/video-pipeline.test.ts:80"
+      ],
+      "origin": "test-only",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Keine Auswirkung im Betrieb",
+      "notes": "—"
+    },
+    {
+      "name": "FFPROBE_ARGV_LOG",
+      "group": "Medien",
+      "requirement": "test-only",
+      "default": "—",
+      "type": "Pfad",
+      "function": "Video-Pipeline-Tests",
+      "references": [
+        "tests/video-pipeline.test.ts:81"
+      ],
+      "origin": "test-only",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Keine Auswirkung im Betrieb",
+      "notes": "—"
+    },
+    {
+      "name": "PUBLISHING_LIVE_ADAPTERS",
+      "group": "Publishing",
+      "requirement": "optional",
+      "default": "0",
+      "type": "0|1|true",
+      "function": "Publishing-Live-Gate",
+      "references": [
+        "src/publishing.ts:101-105"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "SET",
+      "impact": "Kein Provider-HTTP-Call",
+      "notes": "Ohne Opt-in bleibt Status CREDENTIALS_ONLY"
+    },
+    {
+      "name": "YOUTUBE_CLIENT_ID",
+      "group": "Publishing",
+      "requirement": "optional publishing",
+      "default": "—",
+      "type": "String",
+      "function": "YouTube-Upload",
+      "references": [
+        "src/publishing.ts:81"
+      ],
+      "origin": "extern",
+      "free": "nicht garantiert",
+      "status": "MISSING",
+      "impact": "NOT_CONFIGURED (503)",
+      "notes": "Google Cloud Console"
+    },
+    {
+      "name": "YOUTUBE_CLIENT_SECRET",
+      "group": "Publishing",
+      "requirement": "optional publishing",
+      "default": "—",
+      "type": "Secret/String",
+      "function": "YouTube-Token-Refresh",
+      "references": [
+        "src/publishing.ts:81"
+      ],
+      "origin": "extern",
+      "free": "nicht garantiert",
+      "status": "MISSING",
+      "impact": "NOT_CONFIGURED (503)",
+      "notes": "Google Cloud Console"
+    },
+    {
+      "name": "YOUTUBE_REFRESH_TOKEN",
+      "group": "Publishing",
+      "requirement": "optional publishing",
+      "default": "—",
+      "type": "Secret/String",
+      "function": "YouTube-Token-Refresh",
+      "references": [
+        "src/publishing.ts:81"
+      ],
+      "origin": "extern",
+      "free": "nicht garantiert",
+      "status": "MISSING",
+      "impact": "NOT_CONFIGURED (503)",
+      "notes": "Google OAuth-Einwilligung"
+    },
+    {
+      "name": "TIKTOK_CLIENT_KEY",
+      "group": "Publishing",
+      "requirement": "optional publishing",
+      "default": "—",
+      "type": "String",
+      "function": "TikTok-Content-Posting",
+      "references": [
+        "src/publishing.ts:88"
+      ],
+      "origin": "extern",
+      "free": "nicht garantiert",
+      "status": "MISSING",
+      "impact": "NOT_CONFIGURED (503)",
+      "notes": "TikTok Developers"
+    },
+    {
+      "name": "TIKTOK_CLIENT_SECRET",
+      "group": "Publishing",
+      "requirement": "optional publishing",
+      "default": "—",
+      "type": "Secret/String",
+      "function": "TikTok-Token-Refresh",
+      "references": [
+        "src/publishing.ts:88"
+      ],
+      "origin": "extern",
+      "free": "nicht garantiert",
+      "status": "MISSING",
+      "impact": "NOT_CONFIGURED (503)",
+      "notes": "TikTok Developers"
+    },
+    {
+      "name": "TIKTOK_REFRESH_TOKEN",
+      "group": "Publishing",
+      "requirement": "optional publishing",
+      "default": "—",
+      "type": "Secret/String",
+      "function": "TikTok-Token-Refresh",
+      "references": [
+        "src/publishing.ts:88"
+      ],
+      "origin": "extern",
+      "free": "nicht garantiert",
+      "status": "MISSING",
+      "impact": "NOT_CONFIGURED (503)",
+      "notes": "App-Freigabe erforderlich"
+    },
+    {
+      "name": "INSTAGRAM_ACCESS_TOKEN",
+      "group": "Publishing",
+      "requirement": "optional publishing",
+      "default": "—",
+      "type": "Secret/String",
+      "function": "Instagram-Graph-Publishing",
+      "references": [
+        "src/publishing.ts:95"
+      ],
+      "origin": "extern",
+      "free": "nicht garantiert",
+      "status": "MISSING",
+      "impact": "NOT_CONFIGURED (503)",
+      "notes": "Meta Developers"
+    },
+    {
+      "name": "INSTAGRAM_USER_ID",
+      "group": "Publishing",
+      "requirement": "optional publishing",
+      "default": "—",
+      "type": "String",
+      "function": "Media-Container",
+      "references": [
+        "src/publishing.ts:95"
+      ],
+      "origin": "extern",
+      "free": "nicht garantiert",
+      "status": "MISSING",
+      "impact": "NOT_CONFIGURED (503)",
+      "notes": "Meta Developers"
+    },
+    {
+      "name": "INSTAGRAM_APP_ID",
+      "group": "Publishing",
+      "requirement": "optional publishing",
+      "default": "—",
+      "type": "String",
+      "function": "Token-Refresh",
+      "references": [
+        "src/publishing.ts:95"
+      ],
+      "origin": "extern",
+      "free": "nicht garantiert",
+      "status": "MISSING",
+      "impact": "NOT_CONFIGURED (503)",
+      "notes": "Meta Developers"
+    },
+    {
+      "name": "INSTAGRAM_APP_SECRET",
+      "group": "Publishing",
+      "requirement": "optional publishing",
+      "default": "—",
+      "type": "Secret/String",
+      "function": "Token-Refresh",
+      "references": [
+        "src/publishing.ts:95"
+      ],
+      "origin": "extern",
+      "free": "nicht garantiert",
+      "status": "MISSING",
+      "impact": "NOT_CONFIGURED (503)",
+      "notes": "Meta Developers"
+    },
+    {
+      "name": "YAPS_API_KEY",
+      "group": "Publishing",
+      "requirement": "optional",
+      "default": "—",
+      "type": "Secret/String",
+      "function": "Nur Präsenzanzeige",
+      "references": [
+        "src/integrations.ts:14"
+      ],
+      "origin": "extern",
+      "free": "nicht garantiert",
+      "status": "MISSING",
+      "impact": "Integration wird als nicht konfiguriert angezeigt",
+      "notes": "Keine Live-Funktion"
+    },
+    {
+      "name": "CLIPPINGMINI_API_KEY",
+      "group": "Publishing",
+      "requirement": "optional",
+      "default": "—",
+      "type": "Secret/String",
+      "function": "Nur Präsenzanzeige",
+      "references": [
+        "src/integrations.ts:15"
+      ],
+      "origin": "extern",
+      "free": "nicht garantiert",
+      "status": "MISSING",
+      "impact": "Integration wird als nicht konfiguriert angezeigt",
+      "notes": "Keine Live-Funktion"
+    },
+    {
+      "name": "KLAP_API_KEY",
+      "group": "Publishing",
+      "requirement": "optional",
+      "default": "—",
+      "type": "Secret/String",
+      "function": "Nur Präsenzanzeige",
+      "references": [
+        "src/integrations.ts:16"
+      ],
+      "origin": "extern",
+      "free": "nicht garantiert",
+      "status": "MISSING",
+      "impact": "Integration wird als nicht konfiguriert angezeigt",
+      "notes": "Keine Live-Funktion"
+    },
+    {
+      "name": "OPUSCLIP_API_KEY",
+      "group": "Publishing",
+      "requirement": "optional",
+      "default": "—",
+      "type": "Secret/String",
+      "function": "Nur Präsenzanzeige",
+      "references": [
+        "src/integrations.ts:17"
+      ],
+      "origin": "extern",
+      "free": "nicht garantiert",
+      "status": "MISSING",
+      "impact": "Integration wird als nicht konfiguriert angezeigt",
+      "notes": "Keine Live-Funktion"
+    },
+    {
+      "name": "SERVICES_DOTENV_FILE",
+      "group": "Diagnose & Verifikation",
+      "requirement": "optional",
+      "default": ".env",
+      "type": "Pfad",
+      "function": "Services Doctor",
+      "references": [
+        "scripts/services.sh:120"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "ROOT/.env wird gelesen",
+      "notes": "none deaktiviert das Laden"
+    },
+    {
+      "name": "SERVICES_DOCTOR_TIMEOUT_MS",
+      "group": "Diagnose & Verifikation",
+      "requirement": "optional",
+      "default": "2000",
+      "type": "Zahl ms",
+      "function": "Services Doctor",
+      "references": [
+        "scripts/services.sh:99-101"
+      ],
+      "origin": "lokal",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Default 2000 ms",
+      "notes": "—"
+    },
+    {
+      "name": "SERVICES_DOCTOR_PORTS",
+      "group": "Diagnose & Verifikation",
+      "requirement": "optional",
+      "default": "—",
+      "type": "skip",
+      "function": "Services Doctor",
+      "references": [
+        "scripts/services.sh:188"
+      ],
+      "origin": "diagnostisch",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "Ports werden geprüft",
+      "notes": "Nur für Diagnose"
+    },
+    {
+      "name": "SERVICES_DOCTOR_DB_CHECK",
+      "group": "Diagnose & Verifikation",
+      "requirement": "optional",
+      "default": "—",
+      "type": "0",
+      "function": "Services Doctor",
+      "references": [
+        "scripts/services.sh:316"
+      ],
+      "origin": "diagnostisch",
+      "free": "ja",
+      "status": "MISSING",
+      "impact": "DB wird geprüft",
+      "notes": "Nur für Diagnose"
+    }
+  ],
+  "externalCredentials": [
+    {
+      "provider": "PostgreSQL (lokal)",
+      "portal": "PostgreSQL / lokale Rolle",
+      "url": "https://www.postgresql.org/docs/",
+      "permissions": "Nicht-Superuser-Rolle ugc_os_app mit RLS-Bypass deaktiviert",
+      "env": [
+        "DATABASE_URL"
+      ],
+      "note": "Lokal kostenlos; keine externen Zugangsdaten nötig."
+    },
+    {
+      "provider": "Google / YouTube",
+      "portal": "Google Cloud Console",
+      "url": "https://console.cloud.google.com/",
+      "permissions": "YouTube Data API v3 aktivieren; OAuth-Consent-Screen; Scope https://www.googleapis.com/auth/youtube.upload; Refresh-Token für Desktop-App",
+      "env": [
+        "YOUTUBE_CLIENT_ID",
+        "YOUTUBE_CLIENT_SECRET",
+        "YOUTUBE_REFRESH_TOKEN"
+      ],
+      "note": "Kostenlos innerhalb des API-Kontingents; Publishing benötigt zusätzlich PUBLISHING_LIVE_ADAPTERS=1."
+    },
+    {
+      "provider": "TikTok",
+      "portal": "TikTok Developers",
+      "url": "https://developers.tiktok.com/",
+      "permissions": "Content Posting API v2, scope video.publish, App-Review und Creator-Autorisierung",
+      "env": [
+        "TIKTOK_CLIENT_KEY",
+        "TIKTOK_CLIENT_SECRET",
+        "TIKTOK_REFRESH_TOKEN"
+      ],
+      "note": "Freigabe ist extern; ohne Freigabe bleibt Publishing ehrlich blockiert."
+    },
+    {
+      "provider": "Instagram / Meta",
+      "portal": "Meta Developers",
+      "url": "https://developers.facebook.com/",
+      "permissions": "Instagram Graph API mit Business/Creator-Konto; pages_manage_metadata, instagram_content_publish (je nach App-Setup); Long-Lived Token",
+      "env": [
+        "INSTAGRAM_ACCESS_TOKEN",
+        "INSTAGRAM_USER_ID",
+        "INSTAGRAM_APP_ID",
+        "INSTAGRAM_APP_SECRET"
+      ],
+      "note": "Basic Display API unterstützt kein Publishing."
+    },
+    {
+      "provider": "Ollama Cloud",
+      "portal": "Ollama",
+      "url": "https://ollama.com/",
+      "permissions": "Account und API-Key; Modellzugriff gemäß Account",
+      "env": [
+        "OLLAMA_API_KEY"
+      ],
+      "note": "Optional; 402 bei fehlendem Guthaben. Kein kostenpflichtiger Fallback."
+    },
+    {
+      "provider": "OpenCode",
+      "portal": "OpenCode",
+      "url": "https://opencode.ai/",
+      "permissions": "CLI mit kostenlosen Modellen; kein API-Key erforderlich",
+      "env": [],
+      "note": "Lokal kostenlos; aktuell über bestehende CLI-Anbindung nutzbar."
+    },
+    {
+      "provider": "API Anything MCP",
+      "portal": "lokaler Pilot / Paketdokumentation",
+      "url": "https://www.npmjs.com/package/api-anything",
+      "permissions": "Lokaler Tier-1-Server benötigt keine externen Keys",
+      "env": [
+        "API_ANYTHING_KEY",
+        "API_ANYTHING_TOKEN",
+        "API_ANYTHING_REGISTRY"
+      ],
+      "note": "Nur externe Registry-Optionen; aktuell nicht konfiguriert und nicht erfunden."
+    },
+    {
+      "provider": "Legacy-Clipping-Integrationen",
+      "portal": "jeweiliger Anbieter",
+      "url": "",
+      "permissions": "Provider-spezifisch; nur Präsenzanzeige im System",
+      "env": [
+        "YAPS_API_KEY",
+        "CLIPPINGMINI_API_KEY",
+        "KLAP_API_KEY",
+        "OPUSCLIP_API_KEY"
+      ],
+      "note": "Nicht erforderlich; keine Live-Funktion in dieser Version."
+    }
+  ],
+  "exclusions": [
+    "node_modules",
+    "src/generated",
+    "dist",
+    "build artifacts",
+    "logs",
+    "jsonl history"
+  ]
+}

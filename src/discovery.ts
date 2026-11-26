@@ -5,80 +5,171 @@ import { promisify } from 'node:util';
 import { z } from 'zod';
 import { writeAuditEvent } from '../lib/audit.js';
 import { withWorkspaceTransaction } from '../lib/db.js';
+import { redactError, redactText } from '../lib/redaction.js';
 import { isKillSwitchActive } from '../lib/security.js';
-import { cancelJob, completeJob, createJob, failJob, heartbeatJob } from './jobs.js';
+import { cancelJob, completeJob, createJob, failJob, getJob, heartbeatJob } from './jobs.js';
+import { McpStdioClient } from './mcp-client.js';
 
 const querySchema = z.string().trim().min(1).max(200).refine((query) => !query.includes('\0'));
 export const discoveryInput = z.object({ query: querySchema, runAt: z.iso.datetime({ offset: true }).optional() });
-
 export const discoveryScheduleInput = z.object({
   query: querySchema,
-  intervalMinutes: z.number().int().min(180).max(10_080),
-  enabled: z.boolean(),
+  intervalMinutes: z.number().int().min(15).max(10_080),
+  runAt: z.iso.datetime({ offset: true }).optional(),
 });
 
-export async function getDiscoverySchedule(workspaceId: string) {
-  return withWorkspaceTransaction(workspaceId, (tx) => tx.discoverySchedule.findUnique({ where: { workspaceId } }));
-}
-
-export async function setDiscoverySchedule(workspaceId: string, input: z.infer<typeof discoveryScheduleInput>, actor: string) {
-  return withWorkspaceTransaction(workspaceId, async (tx) => {
-    const data = { ...input, nextRunAt: new Date() };
-    const schedule = await tx.discoverySchedule.upsert({
-      where: { workspaceId }, create: { workspaceId, ...data }, update: data,
-    });
-    await writeAuditEvent({ workspaceId, actor, type: 'discovery_schedule_updated', data: {
-      enabled: input.enabled, intervalMinutes: input.intervalMinutes,
-    }, tx });
-    return schedule;
-  });
-}
-
-/** Advance and enqueue together so competing workers cannot schedule the same run. */
-export async function enqueueDueDiscovery(workspaceId: string, now: Date) {
-  return withWorkspaceTransaction(workspaceId, async (tx) => {
-    const schedule = await tx.discoverySchedule.findFirst({
-      where: { workspaceId, enabled: true, nextRunAt: { lte: now } },
-    });
-    if (!schedule || await isKillSwitchActive(workspaceId, tx)) return null;
-
-    const advanced = await tx.discoverySchedule.updateMany({
-      where: { workspaceId, enabled: true, nextRunAt: schedule.nextRunAt, query: schedule.query, intervalMinutes: schedule.intervalMinutes },
-      data: { nextRunAt: new Date(now.getTime() + schedule.intervalMinutes * 60_000) },
-    });
-    if (advanced.count !== 1) return null;
-
-    // After downtime, enqueue one current search rather than replaying missed slots.
-    return createJob({
-      workspaceId, type: 'CONTENT_DISCOVERY', category: 'youtube_search', payload: { query: schedule.query },
-      runAt: now, maxAttempts: 2,
-    }, tx);
-  });
-}
-
 const providerResponse = z.discriminatedUnion('ok', [
-  z.object({ ok: z.literal(false), class: z.string().regex(/^[a-z_]{1,40}$/) }),
+  z.object({
+    ok: z.literal(false),
+    class: z.string().regex(/^[a-z_]{1,40}$/),
+    reason: z.string().max(2_000).optional(),
+  }),
   z.object({ ok: z.literal(true), tier: z.literal(1), candidates: z.array(z.object({
     id: z.string().regex(/^[A-Za-z0-9_-]{11}$/),
     title: z.string().trim().min(1).max(500),
     channel: z.string().max(250).optional(),
-  })).max(20) }),
+  })).max(20), nextCursor: z.string().min(1).max(512).optional() }),
 ]);
 
 const runClient = promisify(execFile);
 const dailyLimit = 10;
 const reservationType = 'content_discovery_request_reserved';
+const failureType = 'content_discovery_failed';
+const MCP_TOOL = 'youtube_search';
+const DIAGNOSTIC_MESSAGE_LIMIT = 300;
+
+type DiscoveryDiagnostic = { class: string; message?: string };
+
+/** One bounded, redacted line suitable for lastError-adjacent audit data. */
+function safeDiagnosticMessage(value: unknown): string | undefined {
+  const text = redactText(value)
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, DIAGNOSTIC_MESSAGE_LIMIT);
+  return text || undefined;
+}
+
+/** Map an api-anything refusal to a stable class and a redacted diagnostic. */
+export function discoveryProviderDiagnostic(value: unknown): DiscoveryDiagnostic {
+  const row = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const rawClass = typeof row.class === 'string' && /^[a-z_]{1,40}$/.test(row.class) ? row.class : 'unknown';
+  const message = safeDiagnosticMessage(row.reason);
+  return { class: `DISCOVERY_PROVIDER_${rawClass.toUpperCase()}`, ...(message ? { message } : {}) };
+}
+
+/** Map a transport/tool exception to a stable class and a redacted diagnostic. */
+export function discoveryTransportDiagnostic(error: unknown): DiscoveryDiagnostic {
+  const details = redactError(error);
+  const name = typeof details.name === 'string' ? details.name : 'Error';
+  const message = safeDiagnosticMessage(`${name}: ${details.message}`);
+  return { class: 'DISCOVERY_MCP_UNAVAILABLE', ...(message ? { message } : {}) };
+}
+
+function toolSupportsCursor(tool: { name: string; inputSchema?: unknown }): boolean {
+  const schema = tool.inputSchema as { properties?: unknown } | undefined;
+  return Boolean(schema && typeof schema === 'object' && schema.properties &&
+    typeof schema.properties === 'object' && 'cursor' in schema.properties);
+}
+
+const childEnv = () => Object.fromEntries(Object.entries(process.env).filter(([name]) =>
+  ['PATH', 'HOME', 'TMPDIR', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'NODE_USE_ENV_PROXY', 'NODE_EXTRA_CA_CERTS'].includes(name)));
+
+/** Absolute path of the MCP server to connect to over stdio. */
+export function discoveryServerPath() {
+  const server = process.env.DISCOVERY_MCP_SERVER ?? '';
+  return isAbsolute(server) ? server : null;
+}
+
+/** Legacy one-shot client script; still supported for existing deployments. */
+function discoveryClientPath() {
+  const client = process.env.DISCOVERY_MCP_CLIENT ?? '';
+  return isAbsolute(client) ? client : null;
+}
 
 export function discoveryEnabled() {
-  return isAbsolute(process.env.DISCOVERY_MCP_CLIENT ?? '');
+  return discoveryServerPath() !== null || discoveryClientPath() !== null;
+}
+
+/** Stable, workspace-independent policy key for a query's pagination cursor. */
+export function discoveryCursorKey(query: string): string {
+  return `discovery.cursor.youtube.${createHash('sha256').update(query).digest('hex').slice(0, 32)}`;
+}
+
+/** Bounded exponential backoff; retries still consume the daily provider budget. */
+export function discoveryBackoffMs(attempt: number, baseMs = 30_000, capMs = 300_000): number {
+  const boundedAttempt = Math.max(1, Math.min(10, Math.trunc(Number(attempt) || 1)));
+  return Math.min(capMs, baseMs * 2 ** (boundedAttempt - 1));
+}
+
+/** Read the stored pagination cursor for a query (null when none is stored). */
+export async function getDiscoveryCursor(workspaceId: string, query: string): Promise<string | null> {
+  return readDiscoveryCursor(workspaceId, query);
+}
+
+async function readDiscoveryCursor(workspaceId: string, query: string): Promise<string | null> {
+  const key = discoveryCursorKey(query);
+  const row: any = await withWorkspaceTransaction(workspaceId, (tx) =>
+    tx.operationalPolicy.findUnique({ where: { workspaceId_key: { workspaceId, key } } }));
+  const value = row?.value;
+  const cursor = value && typeof value === 'object' ? (value as any).cursor : null;
+  return typeof cursor === 'string' && cursor.length > 0 && cursor.length <= 512 ? cursor : null;
+}
+
+async function writeDiscoveryCursor(workspaceId: string, query: string, cursor: string | undefined): Promise<void> {
+  if (cursor === undefined) return;
+  const key = discoveryCursorKey(query);
+  await withWorkspaceTransaction(workspaceId, async (tx) => {
+    if (cursor.length === 0 || cursor.length > 512) {
+      await tx.operationalPolicy.deleteMany({ where: { workspaceId, key } });
+      return;
+    }
+    await tx.operationalPolicy.upsert({
+      where: { workspaceId_key: { workspaceId, key } },
+      create: { workspaceId, key, value: { cursor, query } },
+      update: { value: { cursor, query } },
+    });
+  });
+}
+
+/**
+ * Connect to the API Anything pilot as a real MCP client, verify the search
+ * tool is exposed, and invoke it. Throws on transport or tool failures; the
+ * caller maps those to the provider failure classes.
+ */
+async function searchViaMcp(serverPath: string, query: string, cursor?: string): Promise<unknown> {
+  const client = await McpStdioClient.connect({
+    command: process.execPath,
+    args: [serverPath],
+    env: childEnv(),
+    connectTimeoutMs: 10_000,
+  });
+  try {
+    const tools = await client.listTools();
+    const tool = tools.find((candidate) => candidate.name === MCP_TOOL);
+    if (!tool) throw new Error('MCP_TOOL_MISSING');
+    // Only send a cursor when the tool advertises it; legacy peers never see
+    // an unsupported argument.
+    const args = cursor && toolSupportsCursor(tool) ? { query, cursor } : { query };
+    const result = await client.callTool(MCP_TOOL, args, 30_000);
+    if (result.isError) throw new Error('MCP_TOOL_ERROR');
+    if (result.structuredContent !== undefined) return result.structuredContent;
+    const text = result.content.find((block) => block.type === 'text')?.text;
+    if (!text) throw new Error('MCP_EMPTY_RESULT');
+    return JSON.parse(text);
+  } finally {
+    client.close();
+  }
 }
 
 export async function enqueueDiscovery(workspaceId: string, input: z.infer<typeof discoveryInput>) {
   const runAt = input.runAt ? new Date(input.runAt) : new Date();
   const hour = Math.floor(Math.max(runAt.getTime(), Date.now()) / 3_600_000);
   const hash = createHash('sha256').update(input.query).digest('hex');
+  const cursor = await readDiscoveryCursor(workspaceId, input.query);
   return createJob({
-    workspaceId, type: 'CONTENT_DISCOVERY', category: 'youtube_search', payload: { query: input.query },
+    workspaceId, type: 'CONTENT_DISCOVERY', category: 'youtube_search',
+    payload: cursor ? { query: input.query, cursor } : { query: input.query },
     idempotencyKey: `discovery:youtube:${hour}:${hash}`, runAt, maxAttempts: 2,
   });
 }
@@ -92,17 +183,96 @@ export async function listDiscoveryCandidates(workspaceId: string) {
   }));
 }
 
+export async function createDiscoverySchedule(workspaceId: string, input: z.infer<typeof discoveryScheduleInput>): Promise<any> {
+  const firstRunAt = input.runAt ? new Date(input.runAt) : new Date(Date.now() + input.intervalMinutes * 60_000);
+  return withWorkspaceTransaction<any>(workspaceId, (tx) => tx.discoverySchedule.create({
+    data: { workspaceId, query: input.query, intervalMinutes: input.intervalMinutes, nextRunAt: firstRunAt },
+  }));
+}
+
+export async function listDiscoverySchedules(workspaceId: string): Promise<any[]> {
+  return withWorkspaceTransaction<any[]>(workspaceId, (tx) => tx.discoverySchedule.findMany({
+    where: { workspaceId }, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }], take: 100,
+  }));
+}
+
+export async function deleteDiscoverySchedule(workspaceId: string, id: string): Promise<boolean> {
+  const result: any = await withWorkspaceTransaction<any>(workspaceId, (tx) =>
+    tx.discoverySchedule.deleteMany({ where: { id, workspaceId } })
+  );
+  return result?.count === 1;
+}
+
+/** Advance a missed schedule past `now` while keeping its interval cadence. */
+function nextScheduleRun(from: Date, intervalMinutes: number, now: Date): Date {
+  const step = Math.max(1, intervalMinutes) * 60_000;
+  let next = new Date(from.getTime() + step);
+  for (let guard = 0; next <= now && guard < 1_000; guard += 1) {
+    next = new Date(next.getTime() + step);
+  }
+  return next;
+}
+
+/**
+ * Queue one job per due recurring schedule and advance its `nextRunAt` in the
+ * same transaction. The advisory lock serialises concurrent engine ticks, so a
+ * due schedule is queued exactly once even with several workers.
+ */
+export async function enqueueDueDiscoverySchedules(workspaceId: string, now = new Date()): Promise<number> {
+  return withWorkspaceTransaction(workspaceId, async (tx) => {
+    await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtextextended(${`discovery_schedules:${workspaceId}`}, 0))`;
+    const due = await tx.discoverySchedule.findMany({
+      where: { workspaceId, enabled: true, nextRunAt: { lte: now } },
+      orderBy: [{ nextRunAt: 'asc' }, { id: 'asc' }],
+      take: 20,
+    });
+    let queued = 0;
+    for (const schedule of due) {
+      const advanced = await tx.discoverySchedule.updateMany({
+        where: { id: schedule.id, workspaceId, nextRunAt: schedule.nextRunAt },
+        data: { lastRunAt: schedule.nextRunAt, nextRunAt: nextScheduleRun(schedule.nextRunAt, schedule.intervalMinutes, now) },
+      });
+      if (advanced.count !== 1) continue;
+      await createJob({
+        workspaceId, type: 'CONTENT_DISCOVERY', category: 'youtube_search',
+        payload: { query: schedule.query, scheduleId: schedule.id },
+        idempotencyKey: `discovery:schedule:${schedule.id}:${schedule.nextRunAt.getTime()}`,
+        runAt: now, maxAttempts: 2,
+      }, tx);
+      queued += 1;
+    }
+    return queued;
+  });
+}
+
 export async function executeDiscovery(workspaceId: string, job: { id: string; leaseId: string; payload: unknown }, workerId: string, leaseTtlMs: number): Promise<{ outcome: 'succeeded' | 'failed' | 'retry' | 'skipped'; error?: string }> {
   const lease = { workspaceId, leaseId: job.leaseId, workerId };
-  const query = z.object({ query: querySchema }).safeParse(job.payload);
-  const client = process.env.DISCOVERY_MCP_CLIENT ?? '';
-  const fail = async (error: string, retryable = false) => {
-    const updated = await failJob(job.id, { error, retryable }, lease);
+  const query = z.object({ query: querySchema, cursor: z.string().min(1).max(512).optional() }).safeParse(job.payload);
+  const server = discoveryServerPath();
+  const client = discoveryClientPath();
+  const fail = async (error: string, retryable = false, diagnostic?: DiscoveryDiagnostic) => {
+    const nextRunAt = retryable
+      ? new Date(Date.now() + discoveryBackoffMs(Number((await getJob(job.id, workspaceId))?.attempts ?? 1)))
+      : null;
+    const updated = await failJob(job.id, { error, retryable, nextRunAt }, lease);
     const outcome = updated?.status === 'RETRY_WAIT' ? 'retry' as const :
       ['FAILED', 'DEAD_LETTER'].includes(updated?.status) ? 'failed' as const : 'skipped' as const;
+    if (diagnostic) {
+      await withWorkspaceTransaction(workspaceId, (tx) => writeAuditEvent({
+        workspaceId,
+        type: failureType,
+        data: {
+          jobId: job.id,
+          class: diagnostic.class,
+          ...(diagnostic.message ? { message: diagnostic.message } : {}),
+          retryable,
+        },
+        tx,
+      }));
+    }
     return { outcome, error };
   };
-  if (!query.success || !isAbsolute(client)) return fail('DISCOVERY_INVALID_CONFIGURATION');
+  if (!query.success || (!server && !client)) return fail('DISCOVERY_INVALID_CONFIGURATION');
 
   const fence = async (tx: any) => {
     const rows: { id: string }[] = await tx.$queryRaw`
@@ -134,28 +304,41 @@ export async function executeDiscovery(workspaceId: string, job: { id: string; l
   }, Math.max(1000, Math.floor(leaseTtlMs / 3)));
   timer.unref();
   try {
-    let raw: string;
+    let result: unknown;
     try {
-      const { stdout } = await runClient(process.execPath, [client, query.data.query, '--worker'], {
-        timeout: 38_000, maxBuffer: 128 * 1024,
-        env: Object.fromEntries(Object.entries(process.env).filter(([name]) =>
-          ['PATH', 'HOME', 'TMPDIR', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'NODE_USE_ENV_PROXY', 'NODE_EXTRA_CA_CERTS'].includes(name))),
-      });
-      raw = stdout;
-    } catch {
-      return await fail('DISCOVERY_MCP_UNAVAILABLE', true);
+      if (server) {
+        result = await searchViaMcp(server, query.data.query, query.data.cursor);
+      } else {
+        // `--` makes the query positional for CLIs that parse options; a query
+        // like `--help` must never be interpreted as a client flag.
+        const args = [client!, '--', query.data.query];
+        if (query.data.cursor) args.push('--cursor', query.data.cursor);
+        args.push('--worker');
+        const { stdout } = await runClient(process.execPath, args, {
+          timeout: 38_000, maxBuffer: 128 * 1024, env: childEnv(),
+        });
+        try {
+          result = JSON.parse(stdout);
+        } catch {
+          return await fail('DISCOVERY_INVALID_RESULT');
+        }
+      }
+    } catch (error) {
+      const diagnostic = discoveryTransportDiagnostic(error);
+      const errorText = diagnostic.message ? `${diagnostic.class}: ${diagnostic.message}` : diagnostic.class;
+      return await fail(errorText, true, diagnostic);
     }
 
-    let parsed: ReturnType<typeof providerResponse.safeParse>;
-    try {
-      parsed = providerResponse.safeParse(JSON.parse(raw));
-    } catch {
-      return await fail('DISCOVERY_INVALID_RESULT');
-    }
+    const parsed = providerResponse.safeParse(result);
     if (!parsed.success) return await fail('DISCOVERY_INVALID_RESULT');
-    if (!parsed.data.ok) return await fail(`DISCOVERY_PROVIDER_${parsed.data.class.toUpperCase()}`);
+    if (!parsed.data.ok) {
+      const retryableClass = ['rate_limited', 'quota', 'unavailable'].includes(parsed.data.class);
+      const diagnostic = discoveryProviderDiagnostic(parsed.data);
+      return await fail(diagnostic.class, retryableClass, diagnostic);
+    }
     const candidates = parsed.data.candidates;
-    return await withWorkspaceTransaction(workspaceId, async (tx) => {
+    const nextCursor = parsed.data.nextCursor;
+    const completed = await withWorkspaceTransaction(workspaceId, async (tx) => {
       if (!(await fence(tx))) return { outcome: 'skipped' as const };
       if (await isKillSwitchActive(workspaceId, tx)) {
         await cancelJob(job.id, { ...lease, reason: 'KILL_SWITCH_ACTIVE' }, tx);
@@ -166,9 +349,18 @@ export async function executeDiscovery(workspaceId: string, job: { id: string; l
         skipDuplicates: true,
       }) : { count: 0 };
       await completeJob(job.id, lease, tx);
-      await writeAuditEvent({ workspaceId, type: 'content_discovery_completed', data: { jobId: job.id, received: candidates.length, inserted: inserted.count }, tx });
-      return { outcome: 'succeeded' as const };
+      await writeAuditEvent({
+        workspaceId,
+        type: 'content_discovery_completed',
+        data: { jobId: job.id, received: candidates.length, inserted: inserted.count, cursorAdvanced: Boolean(nextCursor) },
+        tx,
+      });
+      return { outcome: 'succeeded' as const, nextCursor };
     });
+    if (completed.outcome === 'succeeded') {
+      await writeDiscoveryCursor(workspaceId, query.data.query, (completed as any).nextCursor);
+    }
+    return { outcome: completed.outcome };
   } finally {
     clearInterval(timer);
   }

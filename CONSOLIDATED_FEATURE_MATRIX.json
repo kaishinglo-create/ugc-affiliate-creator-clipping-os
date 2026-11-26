@@ -1,0 +1,9 @@
+{
+  "phase": "F.3.2",
+  "status": "ready_to_merge",
+  "pr": 28,
+  "mergeCommit": "4a19bed0f1d85eb392c002222868ce0caf062b26",
+  "finalCiRun": 45909401512,
+  "finalCiStatus": "success",
+  "finalPrState": "OPEN_MERGEABLE_CLEAN"
+}

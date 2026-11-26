@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { buildServer } from '../src/index.js';
 import { prisma, withWorkspaceTransaction } from '../lib/db.js';
-import { createJob, getJob, claimJobById, rejectJob, requeueDeadLetterJob } from '../src/jobs.js';
+import { createJob, getJob, claimJobById, rejectJob, requeueDeadLetterJob, failJob } from '../src/jobs.js';
 
 describe('job workspace scope', () => {
   let app: any;
@@ -35,6 +35,15 @@ describe('job workspace scope', () => {
     const job = await createJob({ workspaceId: workspaceA, type: 'WORKFLOW_RUN', category: 'workflow', payload: {}, idempotencyKey: `jws-key-${Date.now()}` });
     expect(await getJob(job.id, workspaceB)).toBeNull();
     expect((await getJob(job.id, workspaceA))?.id).toBe(job.id);
+  });
+
+  it('helpers reject an empty or missing workspace binding', async () => {
+    const job = await createJob({ workspaceId: workspaceA, type: 'WORKFLOW_RUN', category: 'workflow', payload: {}, idempotencyKey: `jws-empty-${Date.now()}` });
+    expect(await getJob(job.id, '')).toBeNull();
+    expect(await getJob(job.id, undefined as any)).toBeNull();
+    expect(await failJob(job.id, { error: 'SCOPE_REQUIRED' }, { workspaceId: '' })).toBeNull();
+    const fresh: any = await withWorkspaceTransaction(workspaceA, (tx: any) => tx.job.findUnique({ where: { id: job.id } }));
+    expect(fresh?.status).toBe('QUEUED');
   });
 
   it('claimJobById rejects foreign workspace binding', async () => {

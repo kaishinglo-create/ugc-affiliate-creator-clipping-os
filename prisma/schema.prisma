@@ -60,7 +60,7 @@ model Workspace {
   agentTasks           AgentTask[]
   jobs                 Job[]
   discoveryCandidates  DiscoveryCandidate[]
-  discoverySchedule    DiscoverySchedule?
+  discoverySchedules   DiscoverySchedule[]
   contentPosts         ContentPost[]
   performanceSnapshots PerformanceSnapshot[]
   policies             OperationalPolicy[]
@@ -70,6 +70,10 @@ model Workspace {
   departments          Department[]
   orchestrationRuns    OrchestrationRun[]
   delegationRecords    DelegationRecord[]
+  apiCredentials       ApiCredential[]
+  apiConnections       ApiConnection[]
+  apiIntegrationEvents ApiIntegrationEvent[]
+  oauthAuthorizations  OAuthAuthorization[]
 }
 
 enum MembershipRole {
@@ -808,6 +812,93 @@ model DelegationRecord {
   @@index([workspaceId, createdAt])
 }
 
+/**
+ * Phase F — API Integration Center.
+ *
+ * Secrets are stored only as AES-256-GCM ciphertext with a separately managed
+ * master key. The AAD binds each blob to its workspace and provider, so a blob
+ * cannot be moved to another owner. All four models are protected by forced
+ * RLS; every access goes through `withWorkspaceTransaction`.
+ */
+model ApiCredential {
+  id          String          @id @default(cuid())
+  workspaceId String
+  providerKey String
+  kind        String          @default("API_KEY")
+  ciphertext  String
+  iv          String
+  tag         String
+  hint        String
+  expiresAt   DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  connections ApiConnection[]
+
+  @@unique([workspaceId, providerKey])
+  @@index([workspaceId])
+}
+
+model ApiConnection {
+  id                  String         @id @default(cuid())
+  workspaceId         String
+  providerKey         String
+  status              String         @default("NOT_CONFIGURED")
+  enabled             Boolean        @default(true)
+  credentialId        String?
+  credential          ApiCredential? @relation(fields: [credentialId], references: [id], onDelete: SetNull)
+  lastSuccessAt       DateTime?
+  lastFailureAt       DateTime?
+  lastErrorCode       String?
+  lastErrorCategory   String?
+  consecutiveFailures Int            @default(0)
+  circuitState        String         @default("CLOSED")
+  cooldownUntil       DateTime?
+  quota               Json?
+  grantedScopes       String[]
+  tokenExpiresAt      DateTime?
+  connectedAt         DateTime?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+  workspace           Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, providerKey])
+  @@index([workspaceId, providerKey])
+}
+
+model ApiIntegrationEvent {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  providerKey   String
+  type          String
+  actor         String?
+  outcome       String
+  errorCode     String?
+  errorCategory String?
+  details       Json?
+  createdAt     DateTime  @default(now())
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, providerKey, createdAt])
+}
+
+model OAuthAuthorization {
+  id            String    @id @default(cuid())
+  stateHash     String    @unique
+  workspaceId   String
+  providerKey   String
+  userId        String
+  codeChallenge String?
+  redirectUri   String
+  scopes        String
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, providerKey])
+}
+
 
 model DiscoveryCandidate {
   workspaceId  String
@@ -823,10 +914,16 @@ model DiscoveryCandidate {
 }
 
 model DiscoverySchedule {
-  workspaceId     String    @id
+  id              String    @id @default(cuid())
+  workspaceId     String
   query           String
   intervalMinutes Int
   enabled         Boolean   @default(true)
   nextRunAt       DateTime
+  lastRunAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
   workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, enabled, nextRunAt])
 }

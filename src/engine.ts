@@ -28,8 +28,9 @@ import {
   recoverExpiredJobs,
 } from './jobs.js';
 import { executeRun } from './workflows.js';
-import { discoveryEnabled, enqueueDueDiscovery, executeDiscovery } from './discovery.js';
+import { discoveryEnabled, enqueueDueDiscoverySchedules, executeDiscovery } from './discovery.js';
 import { runOrchestration } from './orchestration.js';
+import { newSpan, trace } from './qa-trace.js';
 
 export const DEFAULT_ENGINE_POLL_INTERVAL_MS = 3_000;
 export const DEFAULT_ENGINE_BATCH_SIZE = 10;
@@ -73,6 +74,9 @@ export interface EngineTickSummary {
   skipped: number;
   workflowRunsRecovered: number;
   orchestrationsResumed: number;
+  scheduledSearchesQueued: number;
+  /** Workspace-level failures that would otherwise be silently swallowed. */
+  errors: string[];
   jobs: { id: string; type: string; outcome: EngineOutcome; runId: string | null; error?: string }[];
 }
 
@@ -179,6 +183,9 @@ async function executeWorkflowJob(workspaceId: string, job: any, workerId: strin
 
 async function executeClaimedJob(workspaceId: string, job: any, workerId: string, leaseTtlMs: number): Promise<{ id: string; type: string; outcome: EngineOutcome; runId: string | null; error?: string }> {
   const runId = typeof (job.payload as any)?.runId === 'string' ? String((job.payload as any).runId) : null;
+  const jobSpan = newSpan();
+  const jobStarted = Date.now();
+  trace('engine_job.start', { span: jobSpan, workspaceId, workerId, jobId: String(job.id), jobType: String(job.type), runId, leaseTtlMs });
   let outcome: EngineOutcome = 'skipped';
   let error: string | undefined;
 
@@ -215,6 +222,7 @@ async function executeClaimedJob(workspaceId: string, job: any, workerId: string
     // Auditing must never break execution.
   }
 
+  trace('engine_job.end', { span: jobSpan, workspaceId, jobId: String(job.id), durationMs: Date.now() - jobStarted, outcome, error: error ?? null });
   return { id: String(job.id), type: String(job.type), outcome, runId, error };
 }
 
@@ -249,6 +257,8 @@ export async function runEngineTick(opts: EngineTickOptions = {}): Promise<Engin
   const leaseTtlMs = clamp(Number(opts.leaseTtlMs ?? DEFAULT_ENGINE_LEASE_TTL_MS), 5_000, 3_600_000);
   const concurrency = clamp(Number(opts.concurrency ?? DEFAULT_ENGINE_CONCURRENCY), 1, 20);
 
+  const tickSpan = newSpan();
+  trace('engine_tick.start', { span: tickSpan, workerId, workspaceId: opts.workspaceId ?? null, batchSize, concurrency, leaseTtlMs, resumeOrchestrations: Boolean(opts.resumeOrchestrations) });
   const summary: EngineTickSummary = {
     startedAt: startedAt.toISOString(),
     finishedAt: startedAt.toISOString(),
@@ -261,6 +271,8 @@ export async function runEngineTick(opts: EngineTickOptions = {}): Promise<Engin
     skipped: 0,
     workflowRunsRecovered: 0,
     orchestrationsResumed: 0,
+    scheduledSearchesQueued: 0,
+    errors: [],
     jobs: [],
   };
 
@@ -281,14 +293,15 @@ export async function runEngineTick(opts: EngineTickOptions = {}): Promise<Engin
       const killActive = await withWorkspaceTransaction(workspace.id, (tx) => isKillSwitchActive(workspace.id, tx));
       if (killActive) continue;
 
-      const discoveryConfigured = discoveryEnabled();
-      if (discoveryConfigured) await enqueueDueDiscovery(workspace.id, startedAt);
+      if (discoveryEnabled()) {
+        summary.scheduledSearchesQueued += await enqueueDueDiscoverySchedules(workspace.id, now);
+      }
 
       const claimed = await claimDueJobs(workspace.id, workerId, {
         now,
         limit: batchSize,
         leaseTtlMs,
-        types: discoveryConfigured ? ['WORKFLOW_RUN', 'CONTENT_DISCOVERY'] : ['WORKFLOW_RUN'],
+        types: discoveryEnabled() ? ['WORKFLOW_RUN', 'CONTENT_DISCOVERY'] : ['WORKFLOW_RUN'],
       });
       summary.claimed += claimed.length;
 
@@ -304,37 +317,88 @@ export async function runEngineTick(opts: EngineTickOptions = {}): Promise<Engin
           else summary.skipped += 1;
         }
       }
-    } catch {
-      // A single broken workspace must not stall the whole engine.
+    } catch (error) {
+      // Background ticks must not let one broken workspace stall the others,
+      // but an explicitly requested workspace tick must report its real error
+      // instead of looking like a silent no-op.
+      const message = `${workspace.id}: ${sanitizeError(error)}`;
+      summary.errors.push(message);
+      if (opts.workspaceId) throw error;
       continue;
     }
   }
 
   if (opts.resumeOrchestrations) {
-    summary.orchestrationsResumed = await resumeStaleOrchestrations({
-      workspaceId: opts.workspaceId ?? null,
-      staleMs: opts.staleMs ?? DEFAULT_ORCHESTRATION_STALE_MS,
-      now,
-    });
+    try {
+      summary.orchestrationsResumed = await resumeStaleOrchestrations({
+        workspaceId: opts.workspaceId ?? null,
+        staleMs: opts.staleMs ?? DEFAULT_ORCHESTRATION_STALE_MS,
+        now,
+      });
+    } catch (error) {
+      summary.errors.push(`orchestration resume: ${sanitizeError(error)}`);
+      if (opts.workspaceId) throw error;
+    }
   }
 
   summary.finishedAt = new Date().toISOString();
+  trace('engine_tick.end', {
+    span: tickSpan, workerId, durationMs: Date.now() - startedAt.getTime(),
+    claimed: summary.claimed, succeeded: summary.succeeded, failed: summary.failed,
+    retried: summary.retried, awaitingApproval: summary.awaitingApproval,
+    orchestrationsResumed: summary.orchestrationsResumed, errors: summary.errors.length,
+  });
   return summary;
 }
 
 const activeOrchestrations = new Set<string>();
 
 function kickOrchestration(workspaceId: string, runId: string): void {
+  const kickSpan = newSpan();
+  const alreadyActive = activeOrchestrations.has(runId);
+  trace('orchestration.kick.start', { span: kickSpan, workspaceId, runId, alreadyActive, activeCount: activeOrchestrations.size });
   activeOrchestrations.add(runId);
   void runOrchestration(workspaceId, runId)
-    .catch(() => undefined)
-    .finally(() => activeOrchestrations.delete(runId));
+    .catch(async (error) => {
+      // A driver failure used to be swallowed, leaving the run stuck at
+      // `running` until a test timed out. Record a terminal, honest state.
+      const message = sanitizeError(error);
+      trace('orchestration.kick.driver_error', { span: kickSpan, workspaceId, runId, error: message.slice(0, 200) });
+      try {
+        await withWorkspaceTransaction(workspaceId, async (tx) => {
+          await tx.orchestrationRun.updateMany({
+            where: { workspaceId, id: runId, status: { in: ['queued', 'running'] } },
+            data: {
+              status: 'failed',
+              error: `ENGINE_DRIVER_ERROR: ${message}`,
+              leaseOwner: null,
+              leaseExpiresAt: null,
+              updatedAt: new Date(),
+            },
+          });
+        });
+        await writeAuditEvent({
+          workspaceId,
+          runId,
+          type: 'orchestration_engine_error',
+          data: { error: message },
+        });
+      } catch {
+        // The next tick will recover the run if no terminal state was persisted.
+      }
+    })
+    .finally(() => {
+      activeOrchestrations.delete(runId);
+      trace('orchestration.kick.end', { span: kickSpan, workspaceId, runId, activeCount: activeOrchestrations.size });
+    });
 }
 
 /** Pick up queued work, decided approvals, and abandoned runs on each tick. */
 export async function resumeStaleOrchestrations(opts: { workspaceId?: string | null; staleMs?: number; now?: Date } = {}): Promise<number> {
   const now = opts.now ?? new Date();
   const staleBefore = new Date(now.getTime() - clampStale(opts.staleMs));
+  const resumeSpan = newSpan();
+  trace('orchestration.resume.start', { span: resumeSpan, workspaceId: opts.workspaceId ?? null, now: now.toISOString(), staleMs: clampStale(opts.staleMs) });
   let resumed = 0;
 
   const workspaces = opts.workspaceId ? [{ id: opts.workspaceId }] : await selectWorkspacesForTick(DEFAULT_ENGINE_MAX_WORKSPACES_PER_TICK);
@@ -356,20 +420,26 @@ export async function resumeStaleOrchestrations(opts: { workspaceId?: string | n
               ] },
             ],
           },
-          select: { id: true },
+          select: { id: true, status: true, leaseOwner: true, leaseExpiresAt: true, updatedAt: true },
           orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
           take: 10,
         })
       );
+      trace('orchestration.resume.candidates', { span: resumeSpan, workspaceId: workspace.id, count: runs.length, runs: runs.map((run: any) => ({ id: run.id, status: run.status, leaseOwner: Boolean(run.leaseOwner), leaseExpired: run.leaseExpiresAt ? new Date(run.leaseExpiresAt).getTime() <= now.getTime() : null })) });
       for (const run of runs) {
-        if (activeOrchestrations.has(run.id)) continue;
+        if (activeOrchestrations.has(run.id)) {
+          trace('orchestration.resume.skipped_active', { span: resumeSpan, workspaceId: workspace.id, runId: run.id });
+          continue;
+        }
         resumed += 1;
         kickOrchestration(workspace.id, String(run.id));
       }
-    } catch {
+    } catch (error) {
+      if (opts.workspaceId) throw error;
       continue;
     }
   }
+  trace('orchestration.resume.end', { span: resumeSpan, resumed, activeCount: activeOrchestrations.size });
   return resumed;
 }
 
@@ -488,13 +558,19 @@ export function startEngine(opts: EngineTickOptions & { intervalMs?: number } = 
   };
 
   const loop = () => {
-    if (stopped || inFlight) return;
+    if (stopped || inFlight) {
+      trace('engine.poll.skipped', { workerId, intervalMs, stopped, inFlight: Boolean(inFlight) });
+      return;
+    }
+    trace('engine.poll.start', { workerId, intervalMs });
     inFlight = tick()
       .catch((error) => {
         lastError = sanitizeError(error);
+        trace('engine.poll.error', { workerId, error: lastError });
       })
       .finally(() => {
         inFlight = null;
+        trace('engine.poll.finished', { workerId });
       });
   };
 

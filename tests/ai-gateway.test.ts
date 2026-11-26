@@ -171,9 +171,16 @@ describe('ai gateway', () => {
     process.env.AI_MAX_DAILY_REQUESTS_PER_WORKSPACE = '10';
     const ws = await workspace();
     const provider = new FakeProvider(() => result(VALID_RESEARCH));
-    const settled = await Promise.allSettled(
-      Array.from({ length: 100 }, () => generateStructured(researchInvocation(ws, provider))),
-    );
+    // Keep the 100-call stress test, but bound in-flight work to the size of
+    // the DB pool. Unbounded interactive transactions time out instead of
+    // reaching the advisory-lock quota guard on this 2-CPU host.
+    const settled: PromiseSettledResult<unknown>[] = [];
+    for (let offset = 0; offset < 100; offset += 8) {
+      const batch = Array.from({ length: Math.min(8, 100 - offset) }, () =>
+        generateStructured(researchInvocation(ws, provider)),
+      );
+      settled.push(...await Promise.allSettled(batch));
+    }
     const accepted = settled.filter((entry) => entry.status === 'fulfilled');
     const rejected = settled.filter((entry) => entry.status === 'rejected');
     expect(accepted).toHaveLength(10);
@@ -203,7 +210,88 @@ describe('ai gateway', () => {
       provider,
     });
     expect(output._meta.source).toBe('deterministic_planner');
+    expect(output._meta.fallbackReason).toBe('ai_unconfigured');
     expect(output.summary).toBe('Planner research');
+    expect(provider.calls).toHaveLength(0);
+  });
+
+  it('degrades visibly to the planner when the daily AI budget is exhausted in auto mode', async () => {
+    process.env.AI_MAX_DAILY_REQUESTS_PER_WORKSPACE = '1';
+    const ws = await workspace();
+    await withWorkspaceTransaction(ws, (tx: any) => tx.auditEvent.create({
+      data: { workspaceId: ws, type: 'ai_request', data: { outcome: 'success' } },
+    }));
+    const provider = new FakeProvider(() => result(VALID_RESEARCH));
+
+    const output = await runAgentTask({
+      workspaceId: ws,
+      departmentKey: 'research',
+      action: 'research_market',
+      goal: 'Launch a clipping campaign',
+      deterministic: () => ({ summary: 'Planner research' }),
+      provider,
+    });
+
+    expect(output._meta.source).toBe('deterministic_planner');
+    expect(output._meta.fallbackReason).toBe('budget_exhausted');
+    expect(output.summary).toBe('Planner research');
+    expect(provider.calls).toHaveLength(0);
+    expect(await aiAuditEvents(ws)).toHaveLength(1);
+  });
+
+  it('fails with a budget error in required mode when the daily AI budget is exhausted', async () => {
+    process.env.AGENT_AI_MODE = 'required';
+    process.env.AI_MAX_DAILY_REQUESTS_PER_WORKSPACE = '1';
+    const ws = await workspace();
+    await withWorkspaceTransaction(ws, (tx: any) => tx.auditEvent.create({
+      data: { workspaceId: ws, type: 'ai_request', data: { outcome: 'success' } },
+    }));
+    const provider = new FakeProvider(() => result(VALID_RESEARCH));
+
+    await expect(runAgentTask({
+      workspaceId: ws,
+      departmentKey: 'research',
+      action: 'research_market',
+      goal: 'Launch a clipping campaign',
+      deterministic: () => ({ summary: 'Planner research' }),
+      provider,
+    })).rejects.toMatchObject({ code: 'AI_BUDGET_EXCEEDED', retryable: false });
+    expect(provider.calls).toHaveLength(0);
+  });
+
+  it('still propagates upstream failures from the runtime in auto mode', async () => {
+    const ws = await workspace();
+    const provider = new FakeProvider(() => {
+      throw new AIUpstreamError('AI_UPSTREAM_ERROR:503', { httpStatus: 503, retryable: true });
+    });
+
+    await expect(runAgentTask({
+      workspaceId: ws,
+      departmentKey: 'research',
+      action: 'research_market',
+      goal: 'Launch a clipping campaign',
+      deterministic: () => ({ summary: 'Planner research' }),
+      provider,
+    })).rejects.toMatchObject({ code: 'AI_UPSTREAM_ERROR', retryable: true });
+    expect(provider.calls).toHaveLength(1);
+  });
+
+  it('never calls a configured provider in off mode', async () => {
+    process.env.AGENT_AI_MODE = 'off';
+    const ws = await workspace();
+    const provider = new FakeProvider(() => result(VALID_RESEARCH));
+
+    const output = await runAgentTask({
+      workspaceId: ws,
+      departmentKey: 'research',
+      action: 'research_market',
+      goal: 'Launch a clipping campaign',
+      deterministic: () => ({ summary: 'Planner research' }),
+      provider,
+    });
+
+    expect(output._meta.source).toBe('deterministic_planner');
+    expect(output._meta.fallbackReason).toBe('mode_off');
     expect(provider.calls).toHaveLength(0);
   });
 
@@ -235,6 +323,7 @@ describe('ai gateway', () => {
       provider,
     });
     expect(output._meta.source).toBe('ai');
+    expect(output._meta.fallbackReason).toBeNull();
     expect(output._meta.model).toBe('fake-model');
     expect(output.questions).toEqual(['Which niche converts?']);
     expect(provider.calls[0].model).toBe('research-model');

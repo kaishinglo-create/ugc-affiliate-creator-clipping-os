@@ -42,14 +42,14 @@ describe('jobs', () => {
 
     await createJob({ workspaceId: ws, type: 'WORKFLOW_RUN', category: 'workflow', payload: {}, idempotencyKey: `jobr-key-${Date.now()}`, maxAttempts: 2 });
     const claimed = await claimDueJobs(ws, 'worker-test', { now: new Date(), limit: 1, leaseTtlMs: 60_000 });
-    const retry = await failJob(claimed[0].id, { error: 'TRANSIENT', retryable: true, maxAttempts: 2, workspaceId: ws });
+    const retry = await failJob(claimed[0].id, { error: 'TRANSIENT', retryable: true, maxAttempts: 2 }, { workspaceId: ws });
     expect(retry.status).toBe('RETRY_WAIT');
     expect(retry.attempts).toBe(1);
 
     const retryDue = new Date(Date.now() + 60_000);
     const claimed2 = await claimDueJobs(ws, 'worker-test', { now: retryDue, limit: 1, leaseTtlMs: 60_000 });
     expect(claimed2.length).toBe(1);
-    const dead = await failJob(claimed2[0].id, { error: 'TRANSIENT', retryable: true, maxAttempts: 2, workspaceId: ws });
+    const dead = await failJob(claimed2[0].id, { error: 'TRANSIENT', retryable: true, maxAttempts: 2 }, { workspaceId: ws });
     expect(dead.status).toBe('DEAD_LETTER');
     expect(dead.attempts).toBe(2);
 

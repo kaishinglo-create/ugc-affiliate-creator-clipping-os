@@ -79,6 +79,6 @@ describe('browser gateway', () => {
   it('runtime status is honest about unavailability', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/browser/status', headers: { cookie: cookieA, 'x-workspace-id': workspaceA } });
     expect(res.statusCode).toBe(200);
-    expect(res.json().runtime.available).toBe(false);
+    expect(res.json().runtime.available).toBe(!!process.env.BROWSER_RUNTIME_URL);
   });
 });

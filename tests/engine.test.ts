@@ -190,6 +190,11 @@ describe('autonomous execution engine', () => {
       }
       expect(status?.status).toBe('succeeded');
       expect(handle.status().running).toBe(true);
+      // The background tick sets lastTickAt after runEngineTick resolves; wait
+      // for that post-processing on slower machines.
+      for (let attempt = 0; attempt < 20 && !handle.status().lastTickAt; attempt++) {
+        await sleep(50);
+      }
       expect(handle.status().lastTickAt).toBeTruthy();
     } finally {
       await handle.stop();

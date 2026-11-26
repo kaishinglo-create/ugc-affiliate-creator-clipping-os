@@ -20,8 +20,13 @@ describe('multi-agent', () => {
     const t = await app.inject({ method: 'POST', url: '/api/agent-tasks', headers: { cookie, 'x-workspace-id': ws }, payload: { name: 'task1', agentId: a.json().agent.id, input: { q: 'test' } } });
     expect(t.statusCode).toBe(201);
     const run = await app.inject({ method: 'POST', url: `/api/agent-tasks/${t.json().task.id}/run`, headers: { cookie, 'x-workspace-id': ws } });
-    expect(run.statusCode).toBe(200);
-    expect(run.json().task.status).toBe('completed');
+    expect(run.statusCode).toBe(501);
+    expect(run.json().error).toBe('AGENT_RUNTIME_NOT_CONNECTED');
+    // No fake output: the task stays queued until a real runtime executes it.
+    const list = await app.inject({ method: 'GET', url: '/api/agent-tasks', headers: { cookie, 'x-workspace-id': ws } });
+    const task = (list.json().tasks || []).find((x: any) => x.id === t.json().task.id);
+    expect(task.status).toBe('queued');
+    expect(task.output).toBeNull();
   });
 
   it('blocks agent task execution when kill switch is active', async () => {

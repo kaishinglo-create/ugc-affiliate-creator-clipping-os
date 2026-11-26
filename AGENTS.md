@@ -23,7 +23,7 @@ These `.bin` entries may be non-executable in this Android/Termux environment; u
 
 ## Environment
 
-Required: `DATABASE_URL`, `SESSION_JWT_SECRET` (32+ in production), optional `APP_ENV`, `CORS_ORIGIN`, `PORT`, `OLLAMA_API_KEY`, `TRUST_PROXY`, `MECE_DASHBOARD_TOKEN`, `OLLAMA_MAX_DAILY_REQUESTS_PER_WORKSPACE`. `MECE_DASHBOARD_TOKEN` uses fail-closed 401 when absent or shorter than 32 characters; `OLLAMA_MAX_DAILY_REQUESTS_PER_WORKSPACE` defaults to 100 and disables Ollama when `0`.
+Required: `DATABASE_URL`, `SESSION_JWT_SECRET` (32+ in every environment; no static dev fallback), optional `APP_ENV`, `CORS_ORIGIN`, `PORT`, `OLLAMA_API_KEY`, `TRUST_PROXY`, `MECE_DASHBOARD_TOKEN`, `OLLAMA_MAX_DAILY_REQUESTS_PER_WORKSPACE`. `MECE_DASHBOARD_TOKEN` uses fail-closed 401 when absent or shorter than 32 characters; `TRUST_PROXY` is fail-closed unless explicitly set (`loopback`, a hop count, or `true`/`1` to trust all proxies); `OLLAMA_MAX_DAILY_REQUESTS_PER_WORKSPACE` defaults to 100 and disables Ollama when `0`.
 ## Architecture and invariants
 
 - Workspace auth: signup/login sets session cookie; requests use `X-Workspace-Id`. `requireAuthWorkspace` rejects missing/invalid membership.

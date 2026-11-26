@@ -1,4 +1,5 @@
 import { prisma } from './db.js';
+import { redactData } from './redaction.js';
 
 export type AuditEventInput = {
   workspaceId?: string | null;
@@ -19,7 +20,7 @@ export async function writeAuditEvent(input: AuditEventInput) {
       runId: input.runId ?? null,
       type: input.type,
       actor: input.actor ?? null,
-      data: input.data === undefined ? null : (input.data as any),
+      data: input.data === undefined ? null : (redactData(input.data) as any),
     },
   });
 }

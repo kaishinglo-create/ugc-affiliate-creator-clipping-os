@@ -1,0 +1,15 @@
+{
+  "phase": "F.3.1",
+  "status": "not_ready_to_merge_pending_conflict_resolution",
+  "pr": 28,
+  "checkpoint": "b0e5c34b244ccba1f48783bd4e4080810e719d9b",
+  "tests": 284,
+  "qaFullRuns": 2,
+  "ciFinalRun": 45904295044,
+  "ciFinalStatus": "success",
+  "finalCiHead": "3887e5f65f82ab75b1dff11c7075f3c57add3289",
+  "finalLocalTests": {
+    "testFiles": 68,
+    "tests": 284
+  }
+}

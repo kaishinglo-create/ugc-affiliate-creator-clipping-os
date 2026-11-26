@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { prisma, withWorkspaceTransaction } from '../lib/db.js';
 import { writeAuditEvent } from '../lib/audit.js';
 import { isKillSwitchActive } from '../lib/security.js';
+import { newSpan, trace } from './qa-trace.js';
 
 export const DEFAULT_JOB_MAX_ATTEMPTS = 3;
 export const DEFAULT_JOB_LEASE_TTL_MS = 30_000;
@@ -55,7 +56,6 @@ export interface HeartbeatOptions {
 
 export interface FailJobInput {
   error?: string;
-  workspaceId?: string | null;
   retryable?: boolean;
   nextRunAt?: Date | null;
   maxAttempts?: number;
@@ -200,21 +200,21 @@ function withJobTransaction<T>(transaction: any, workspaceId: string, work: (tx:
   return transaction ? work(transaction) : withWorkspaceTransaction(workspaceId, work);
 }
 
-async function readJob(jobId: string, requestedWorkspaceId: string | null = null): Promise<any> {
-  if (requestedWorkspaceId) {
-    return withWorkspaceTransaction(requestedWorkspaceId, (tx) =>
-      tx.job.findFirst({ where: { id: jobId, workspaceId: requestedWorkspaceId } })
-    );
-  }
-  return prisma.job.findUnique({ where: { id: jobId } });
+async function readJob(jobId: string, workspaceId: string): Promise<any> {
+  // Job rows are protected by forced RLS, so every read must be workspace-scoped.
+  if (!workspaceId) return null;
+  return withWorkspaceTransaction(workspaceId, (tx) =>
+    tx.job.findFirst({ where: { id: jobId, workspaceId } })
+  );
 }
 
-export async function getJob(jobId: string, workspaceIdOrOpts: string | { workspaceId: string } | null): Promise<any> {
+export async function getJob(jobId: string, workspaceIdOrOpts: string | { workspaceId: string }): Promise<any> {
   const workspaceId = typeof workspaceIdOrOpts === 'string'
     ? workspaceIdOrOpts
-    : (workspaceIdOrOpts?.workspaceId ?? null);
+    : workspaceIdOrOpts?.workspaceId;
+  if (!workspaceId) return null;
   const job = await readJob(jobId, workspaceId);
-  if (workspaceId && job && job.workspaceId !== workspaceId) return null;
+  if (job && job.workspaceId !== workspaceId) return null;
   return job;
 }
 
@@ -291,26 +291,13 @@ export async function claimDueJobs(workspaceId: string, workerId: string, opts: 
   return Array.isArray(rows) ? rows.map(normalizeLeaseResult) : [];
 }
 
-export async function recoverExpiredJobs(workspaceId?: string | null, opts?: { now?: Date; scope?: string } | Date): Promise<void> {
+export async function recoverExpiredJobs(workspaceId: string, opts?: { now?: Date; scope?: string } | Date): Promise<void> {
+  if (!workspaceId) return;
   const options = opts instanceof Date ? { now: opts } : (opts ?? {});
   const now = toNow(options.now);
-  if (workspaceId) {
-    await withWorkspaceTransaction(workspaceId, async (tx) => {
-      await recoverWorkspaceExpiredJobs(tx, workspaceId, now);
-    });
-    return;
-  }
-
-  const workspaces = await prisma.workspace.findMany({ select: { id: true } });
-  for (const workspace of workspaces) {
-    try {
-      await withWorkspaceTransaction(workspace.id, async (tx) => {
-        await recoverWorkspaceExpiredJobs(tx, workspace.id, now);
-      });
-    } catch {
-      continue;
-    }
-  }
+  await withWorkspaceTransaction(workspaceId, async (tx) => {
+    await recoverWorkspaceExpiredJobs(tx, workspaceId, now);
+  });
 }
 
 async function recoverWorkspaceExpiredJobs(tx: any, workspaceId: string, now: Date): Promise<void> {
@@ -349,7 +336,7 @@ async function recoverWorkspaceExpiredJobs(tx: any, workspaceId: string, now: Da
   `;
 }
 
-export async function heartbeatJob(jobId: string, leaseId: string, workerId: string, opts: HeartbeatOptions = { workspaceId: "" } as HeartbeatOptions, transaction?: any): Promise<any> {
+export async function heartbeatJob(jobId: string, leaseId: string, workerId: string, opts: HeartbeatOptions, transaction?: any): Promise<any> {
   const requestedWorkspaceId = opts.workspaceId ?? null;
   if (!requestedWorkspaceId) return null;
   const job = transaction
@@ -385,7 +372,7 @@ export async function heartbeatJob(jobId: string, leaseId: string, workerId: str
   return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
 }
 
-export async function completeJob(jobId: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions, transaction?: any): Promise<any> {
+export async function completeJob(jobId: string, opts: JobActionOptions, transaction?: any): Promise<any> {
   const requestedWorkspaceId = opts.workspaceId ?? null;
   if (!requestedWorkspaceId) return null;
   const job = transaction
@@ -393,7 +380,10 @@ export async function completeJob(jobId: string, opts: JobActionOptions = { work
     : await readJob(jobId, requestedWorkspaceId);
   if (!job) return null;
   if (job.status === 'SUCCEEDED') return job;
-  if (job.status !== 'RUNNING' && job.status !== 'WAITING_FOR_APPROVAL') return job;
+  // A job that is waiting for an approval must be resumed through the approval
+  // flow, not completed directly.
+  if (job.status === 'WAITING_FOR_APPROVAL') return job;
+  if (job.status !== 'RUNNING') return job;
 
   if (opts.leaseId && !leaseMatches(job, opts.leaseId, opts.workerId)) return job;
 
@@ -425,16 +415,17 @@ export async function completeJob(jobId: string, opts: JobActionOptions = { work
   return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
 }
 
-export async function failJob(jobId: string, input: FailJobInput | string = {}, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions, transaction?: any): Promise<any> {
+export async function failJob(jobId: string, input: FailJobInput | string = {}, opts: JobActionOptions, transaction?: any): Promise<any> {
   const normalizedInput: FailJobInput = typeof input === 'string' ? { error: input } : (input ?? {});
   const mergedOpts: JobActionOptions = { ...normalizedInput, ...opts } as any;
-  const requestedWorkspaceId = ((String(opts.workspaceId || "").trim()) || (typeof input === 'object' && input && !(input instanceof Array) ? (input as any).workspaceId : null) || null);
+  const requestedWorkspaceId = String(opts.workspaceId ?? "").trim();
+  if (!requestedWorkspaceId) return null;
 
   const job = transaction
     ? await transaction.job.findFirst({ where: { id: jobId, workspaceId: requestedWorkspaceId } })
     : await readJob(jobId, requestedWorkspaceId);
   if (!job) return null;
-  if (requestedWorkspaceId && job.workspaceId !== requestedWorkspaceId) return null;
+  if (job.workspaceId !== requestedWorkspaceId) return null;
   if (job.status === 'SUCCEEDED' || job.status === 'CANCELLED' || job.status === 'FAILED' || job.status === 'DEAD_LETTER') return job;
   if (job.status !== 'RUNNING' && job.status !== 'RETRY_WAIT') return job;
 
@@ -522,12 +513,12 @@ export async function failJob(jobId: string, input: FailJobInput | string = {}, 
   return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
 }
 
-function computeBackoffMs(attempt: number): number {
+export function computeBackoffMs(attempt: number): number {
   const exp = Math.min(30_000, 1_000 * Math.pow(2, Math.max(0, attempt - 1)));
   return exp + Math.floor(Math.random() * 100);
 }
 
-export async function cancelJob(jobId: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions, transaction?: any): Promise<any> {
+export async function cancelJob(jobId: string, opts: JobActionOptions, transaction?: any): Promise<any> {
   const requestedWorkspaceId = opts.workspaceId ?? null;
   if (!requestedWorkspaceId) return null;
   const job = transaction
@@ -565,7 +556,7 @@ export async function cancelJob(jobId: string, opts: JobActionOptions = { worksp
   return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
 }
 
-export async function markWaitingForApproval(jobId: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions, transaction?: any): Promise<any> {
+export async function markWaitingForApproval(jobId: string, opts: JobActionOptions, transaction?: any): Promise<any> {
   const requestedWorkspaceId = opts.workspaceId ?? null;
   if (!requestedWorkspaceId) return null;
   const job = transaction
@@ -598,7 +589,9 @@ export async function markWaitingForApproval(jobId: string, opts: JobActionOptio
     })
   );
   if (waitingUpdate.count !== 1) {
-    return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+    const current = await withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+    trace('job.transition', { workspaceId: requestedWorkspaceId, jobId, workerId: opts.workerId ?? null, from: job.status, to: 'WAITING_FOR_APPROVAL', ok: false, currentStatus: (current as any)?.status ?? null });
+    return current;
   }
   const updated = await withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
   await writeAuditEvent({
@@ -609,10 +602,11 @@ export async function markWaitingForApproval(jobId: string, opts: JobActionOptio
     actor: opts.actor ?? null,
     data: { workflowRunId: job.workflowRunId, jobId, status: 'WAITING_FOR_APPROVAL', ...(opts.data as any) },
   });
+  trace('job.transition', { workspaceId: requestedWorkspaceId, jobId, workerId: opts.workerId ?? null, from: job.status, to: 'WAITING_FOR_APPROVAL', ok: true });
   return updated;
 }
 
-export async function resumeAfterApproval(jobId: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+export async function resumeAfterApproval(jobId: string, opts: JobActionOptions): Promise<any> {
   const requestedWorkspaceId = opts.workspaceId ?? null;
   if (!requestedWorkspaceId) return null;
   const job = await readJob(jobId, requestedWorkspaceId);
@@ -649,7 +643,7 @@ export async function resumeAfterApproval(jobId: string, opts: JobActionOptions 
   return updated;
 }
 
-export async function rejectJob(jobId: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+export async function rejectJob(jobId: string, opts: JobActionOptions): Promise<any> {
   const requestedWorkspaceId = opts.workspaceId ?? null;
   if (!requestedWorkspaceId) return null;
   const job = await readJob(jobId, requestedWorkspaceId);
@@ -687,7 +681,7 @@ export async function rejectJob(jobId: string, opts: JobActionOptions = { worksp
   return updated;
 }
 
-export async function requeueDeadLetterJob(jobId: string, opts: RequeueOptions = { workspaceId: "" } as RequeueOptions): Promise<any> {
+export async function requeueDeadLetterJob(jobId: string, opts: RequeueOptions): Promise<any> {
   const requestedWorkspaceId = opts.workspaceId ?? null;
   if (!requestedWorkspaceId) return null;
   const job = await readJob(jobId, requestedWorkspaceId);
@@ -728,15 +722,15 @@ export async function requeueDeadLetterJob(jobId: string, opts: RequeueOptions =
   return updated;
 }
 
-export async function requeueJob(jobId: string, opts: RequeueOptions = { workspaceId: "" } as RequeueOptions): Promise<any> {
+export async function requeueJob(jobId: string, opts: RequeueOptions): Promise<any> {
   return requeueDeadLetterJob(jobId, opts);
 }
 
-export async function retryJob(jobId: string, opts: RequeueOptions = { workspaceId: "" } as RequeueOptions): Promise<any> {
+export async function retryJob(jobId: string, opts: RequeueOptions): Promise<any> {
   return requeueDeadLetterJob(jobId, opts);
 }
 
-export async function resumeJob(jobId: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+export async function resumeJob(jobId: string, opts: JobActionOptions): Promise<any> {
   const requestedWorkspaceId = opts.workspaceId ?? null;
   if (!requestedWorkspaceId) return null;
   const job = await readJob(jobId, requestedWorkspaceId);
@@ -804,6 +798,9 @@ export async function runSchedulerOnce(opts: SchedulerOptions = {}): Promise<any
   const workerId = opts.workerId ?? 'scheduler';
   const batchSize = Math.max(1, Math.min(100, Number(opts.batchSize ?? opts.limit ?? DEFAULT_JOB_SCHEDULER_BATCH_SIZE) || DEFAULT_JOB_SCHEDULER_BATCH_SIZE));
   const leaseTtlMs = Math.max(1, Number(opts.leaseTtlMs ?? DEFAULT_JOB_LEASE_TTL_MS) || DEFAULT_JOB_LEASE_TTL_MS);
+  const span = newSpan();
+  const started = Date.now();
+  trace('scheduler.start', { span, workerId, workspaceId: opts.workspaceId ?? null, batchSize, leaseTtlMs });
 
   const workspaces = opts.workspaceId
     ? [{ id: opts.workspaceId }]
@@ -814,13 +811,18 @@ export async function runSchedulerOnce(opts: SchedulerOptions = {}): Promise<any
     try {
       await recoverExpiredJobs(workspace.id, { now });
       const killActive = await withWorkspaceTransaction(workspace.id, async (tx) => isKillSwitchActive(workspace.id, tx));
-      if (killActive) continue;
+      if (killActive) {
+        trace('scheduler.workspace_skipped', { span, workerId, workspaceId: workspace.id, reason: 'kill_switch' });
+        continue;
+      }
       const rows = await claimDueJobs(workspace.id, workerId, { now, limit: batchSize, leaseTtlMs });
       claimed.push(...rows);
-    } catch {
+    } catch (error) {
+      trace('scheduler.workspace_error', { span, workerId, workspaceId: workspace.id, error: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200) });
       continue;
     }
   }
+  trace('scheduler.end', { span, workerId, claimed: claimed.length, durationMs: Date.now() - started });
   return claimed;
 }
 
@@ -914,7 +916,7 @@ export {
   runSchedulerOnce as workerTick,
 };
 
-export async function transitionJob(jobId: string, toStatus: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+export async function transitionJob(jobId: string, toStatus: string, opts: JobActionOptions): Promise<any> {
   const requestedWorkspaceId = opts.workspaceId ?? null;
   if (!requestedWorkspaceId) return null;
   const job = await readJob(jobId, requestedWorkspaceId);
@@ -953,27 +955,27 @@ export async function transitionJob(jobId: string, toStatus: string, opts: JobAc
   }
 }
 
-export async function updateJobStatus(jobId: string, toStatus: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+export async function updateJobStatus(jobId: string, toStatus: string, opts: JobActionOptions): Promise<any> {
   return transitionJob(jobId, toStatus, opts);
 }
 
-export async function changeJobStatus(jobId: string, toStatus: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+export async function changeJobStatus(jobId: string, toStatus: string, opts: JobActionOptions): Promise<any> {
   return transitionJob(jobId, toStatus, opts);
 }
 
-export async function moveJobToState(jobId: string, toStatus: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+export async function moveJobToState(jobId: string, toStatus: string, opts: JobActionOptions): Promise<any> {
   return transitionJob(jobId, toStatus, opts);
 }
 
-export async function setJobStatus(jobId: string, toStatus: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+export async function setJobStatus(jobId: string, toStatus: string, opts: JobActionOptions): Promise<any> {
   return transitionJob(jobId, toStatus, opts);
 }
 
-export async function applyJobTransition(jobId: string, toStatus: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+export async function applyJobTransition(jobId: string, toStatus: string, opts: JobActionOptions): Promise<any> {
   return transitionJob(jobId, toStatus, opts);
 }
 
-export async function advanceJob(jobId: string, toStatus: string, opts: JobActionOptions = { workspaceId: "" } as JobActionOptions): Promise<any> {
+export async function advanceJob(jobId: string, toStatus: string, opts: JobActionOptions): Promise<any> {
   return transitionJob(jobId, toStatus, opts);
 }
 
@@ -985,6 +987,9 @@ export async function claimJobById(jobId: string, workerId: string, opts: ClaimJ
   const now = toNow(opts.now);
   const leaseTtlMs = Math.max(1, Number(opts.leaseTtlMs ?? DEFAULT_JOB_LEASE_TTL_MS) || DEFAULT_JOB_LEASE_TTL_MS);
   const requestedWorkspaceId = opts.workspaceId ?? null;
+  const span = newSpan();
+  const started = Date.now();
+  trace('job_claim.start', { span, workspaceId: requestedWorkspaceId, jobId, workerId, leaseTtlMs });
   if (!requestedWorkspaceId) return null;
   const job = transaction
     ? await transaction.job.findFirst({ where: { id: jobId, workspaceId: requestedWorkspaceId } })
@@ -996,7 +1001,10 @@ export async function claimJobById(jobId: string, workerId: string, opts: ClaimJ
     await recoverWorkspaceExpiredJobs(tx, job.workspaceId, now);
     return isKillSwitchActive(job.workspaceId, tx);
   });
-  if (killActive) return null;
+  if (killActive) {
+    trace('job_claim.end', { span, workspaceId: requestedWorkspaceId, jobId, workerId, claimed: false, reason: 'kill_switch', durationMs: Date.now() - started });
+    return null;
+  }
 
   const leaseId = randomUUID();
   const leaseExpiresAt = new Date(now.getTime() + leaseTtlMs);
@@ -1021,9 +1029,13 @@ export async function claimJobById(jobId: string, workerId: string, opts: ClaimJ
     });
   });
   if (result.count !== 1) {
-    return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+    const current = await withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+    trace('job_claim.end', { span, workspaceId: requestedWorkspaceId, jobId, workerId, claimed: false, currentStatus: (current as any)?.status ?? null, durationMs: Date.now() - started });
+    return current;
   }
-  return withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+  const claimed = await withJobTransaction(transaction, job.workspaceId, (tx) => tx.job.findUnique({ where: { id: jobId } }));
+  trace('job_claim.end', { span, workspaceId: requestedWorkspaceId, jobId, workerId, claimed: true, status: (claimed as any)?.status ?? null, durationMs: Date.now() - started });
+  return claimed;
 }
 
 export { claimJobById as claimJobByTask };

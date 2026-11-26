@@ -1,0 +1,17 @@
+{
+  "provider": "opencode",
+  "verifiedAt": "2026-11-24",
+  "evidence": "Enumerated with `opencode models`; every listed model has input=0, output=0 and cache.read/write=0 in the OpenCode model catalog.",
+  "models": [
+    "opencode/big-pickle",
+    "opencode/beam-free",
+    "opencode/deepseek-v4.1-flash-free",
+    "opencode/flint-40b-free",
+    "opencode/hy4-flash-free",
+    "opencode/iceman-free",
+    "opencode/mimo-v2.6-flash-free",
+    "opencode/nemotron-3.5-lightning-free",
+    "opencode/nemotron-3.5-super-vl-free",
+    "opencode/tidepool-alpha-free"
+  ]
+}

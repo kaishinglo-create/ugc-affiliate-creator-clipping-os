@@ -1,0 +1,11 @@
+{
+  "status": "stopped",
+  "currentTask": "Complete feature: Agent Runtime (partial) - criteria: Live provider optional; Budget enforced",
+  "completed": [
+    "Complete feature: API Anything (partial) - criteria: MCP client connected; Scheduled searches",
+    "Complete feature: Affiliate Management (partial) - criteria: Attribution/payout"
+  ],
+  "failed": [],
+  "startedAt": "2026-11-24T20:37:21.722Z",
+  "stoppedAt": "2026-11-24T22:22:38.952Z"
+}
