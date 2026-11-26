@@ -30,7 +30,6 @@ jobs:
       NODE_ENV: test
       API_INTEGRATIONS_MASTER_KEY: grIGkEUMScCJRLqDgOU4FIPCK3cvhQbc0sHSE7y1bWc=
       MECE_DASHBOARD_TOKEN: ci-only-mece-token-0123456789abcdef0123456789abcdef
-      OLLAMA_API_KEY: ci-only-ollama-key-0123456789abcdef0123456789abcdef
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -42,7 +41,6 @@ jobs:
           printf '%s\n' 'SESSION_JWT_SECRET=ci-only-secret-that-is-at-least-thirty-two-characters-long' > .env
           printf '%s\n' 'API_INTEGRATIONS_MASTER_KEY=grIGkEUMScCJRLqDgOU4FIPCK3cvhQbc0sHSE7y1bWc=' >> .env
           printf '%s\n' 'MECE_DASHBOARD_TOKEN=ci-only-mece-token-0123456789abcdef0123456789abcdef' >> .env
-          printf '%s\n' 'OLLAMA_API_KEY=ci-only-ollama-key-0123456789abcdef0123456789abcdef' >> .env
           printf '%s\n' 'NODE_ENV=test' >> .env
       - name: Install pilot dependencies
         run: npm --prefix pilots/api-anything ci

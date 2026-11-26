@@ -18,6 +18,7 @@ describe('phase F api integration workspace isolation and RLS', () => {
   let b: any;
 
   beforeAll(async () => {
+    process.env.OLLAMA_API_KEY = process.env.OLLAMA_API_KEY || 'ci-only-ollama-key-0123456789abcdef0123456789abcdef';
     app = await buildServer();
     a = await signup(app, 'aic-iso-a');
     b = await signup(app, 'aic-iso-b');
