@@ -38,12 +38,10 @@ jobs:
           cache: npm
       - name: Create test .env
         run: |
-          cat > .env <<'EOF'
-          SESSION_JWT_SECRET=ci-only-secret-that-is-at-least-thirty-two-characters-long
-          API_INTEGRATIONS_MASTER_KEY=grIGkEUMScCJRLqDgOU4FIPCK3cvhQbc0sHSE7y1bWc=
-          MECE_DASHBOARD_TOKEN=ci-only-mece-token-0123456789abcdef0123456789abcdef
-          NODE_ENV=test
-          EOF
+          printf '%s\n' 'SESSION_JWT_SECRET=ci-only-secret-that-is-at-least-thirty-two-characters-long' > .env
+          printf '%s\n' 'API_INTEGRATIONS_MASTER_KEY=grIGkEUMScCJRLqDgOU4FIPCK3cvhQbc0sHSE7y1bWc=' >> .env
+          printf '%s\n' 'MECE_DASHBOARD_TOKEN=ci-only-mece-token-0123456789abcdef0123456789abcdef' >> .env
+          printf '%s\n' 'NODE_ENV=test' >> .env
       - name: Install pilot dependencies
         run: npm --prefix pilots/api-anything ci
       - name: Install OpenCode CLI
