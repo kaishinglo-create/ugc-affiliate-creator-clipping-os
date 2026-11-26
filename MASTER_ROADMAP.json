@@ -1,8 +1,8 @@
 {
   "phase": "F.3.1",
-  "status": "ci-fixes-pushed",
+  "status": "ci_fixes_pushed_not_ready_to_merge",
   "pr": 28,
-  "checkpoint": "3622ebf",
+  "checkpoint": "7180e02",
   "tests": 284,
   "qaFullRuns": 2,
   "ciFinalStatus": "pending"

@@ -14,8 +14,10 @@ Status: CI fixes in progress; final CI rerun required.
 
 - CI root cause analysis: CI_ROOT_CAUSE_ANALYSIS.md.
 - CI reproducibility report: CI_REPRODUCIBILITY_REPORT.md.
+- Fixes pushed to sync/remote-into-local at checkpoint `7180e02`.
+- Final CI rerun required.
 
 ## Next
 
 - Final CI run after fixes.
-- Await merge approval after CI green.
+- Await CI green before merge approval.
