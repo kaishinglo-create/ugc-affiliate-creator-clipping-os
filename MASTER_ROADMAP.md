@@ -10,13 +10,14 @@ Status: complete locally and published as PR #28.
 
 ## Phase F.3.1
 
-Status: **READY_TO_MERGE** pending explicit user approval.
+Status: **NOT_READY_TO_MERGE**.
 
 - Final CI run: `45904295044` — **SUCCESS**.
 - Final CI head: `3887e5f65f82ab75b1dff11c7075f3c57add3289`.
-- Local suite: 284/284 PASS; typecheck/ESLint/build PASS.
+- Local suite: 68 files, 284 tests PASS; typecheck/ESLint/build PASS.
 - QA full: 2 successful runs.
 
 ## Next
 
-- Await explicit merge approval.
+- Resolve reported merge conflicts before merge approval.
+- Await explicit merge approval after conflict resolution.

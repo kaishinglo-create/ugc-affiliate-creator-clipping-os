@@ -1,6 +1,6 @@
 {
   "phase": "F.3.1",
-  "status": "ready_to_merge_pending_approval",
+  "status": "not_ready_to_merge_pending_conflict_resolution",
   "prUrl": "https://github.com/kaisinglo-create/ugc-affiliate-creator-clipping-os/pull/28",
   "finalCiRun": 45904295044,
   "finalCiStatus": "success",
