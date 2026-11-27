@@ -2257,6 +2257,21 @@ app.post('/api/media/clip-candidates', async (req, reply) => {
   return { candidates: rankClipCandidates({ clips: planned, sceneTimestamps: body.sceneTimestamps, targetDurationSeconds: body.targetDurationSeconds }) };
 });
 
+app.get('/api/production/profiles', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { PRODUCTION_PROFILES } = await import('./content-production.js');
+  return { profiles: PRODUCTION_PROFILES };
+});
+
+app.post('/api/production/suggestions', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const { suggestCopy } = await import('./content-production.js');
+  return suggestCopy({ title: body.title, topic: body.topic, platform: body.platform });
+});
+
 app.get('/api/orchestrations', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;
