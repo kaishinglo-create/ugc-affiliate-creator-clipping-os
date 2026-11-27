@@ -3,7 +3,8 @@
  * checksums, rights metadata and safe storage paths.
  */
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, unlink } from 'node:fs/promises';
+import { isIP } from 'node:net';
 import { dirname } from 'node:path';
 import { withWorkspaceTransaction } from '../lib/db.js';
 import { probeMedia } from './video/clipping.js';
@@ -27,15 +28,24 @@ function rightsStatus(value: unknown): string {
 
 function safeUrl(value: unknown): string {
   const raw = String(value ?? '').trim();
-  if (!raw) throw Object.assign(new Error('INVALID_SOURCE_URL'), { statusCode: 400 });
+  if (!raw || raw.length > 2_000) throw Object.assign(new Error('INVALID_SOURCE_URL'), { statusCode: 400 });
   let url: URL;
   try { url = new URL(raw); } catch { throw Object.assign(new Error('INVALID_SOURCE_URL'), { statusCode: 400 }); }
   if (!['http:', 'https:'].includes(url.protocol)) throw Object.assign(new Error('INVALID_SOURCE_URL'), { statusCode: 400 });
-  const host = url.hostname.toLowerCase();
-  if (host === 'localhost' || host === '0.0.0.0' || /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host)) {
+  const host = url.hostname.toLowerCase().replace(/\.$/, '').replace(/^\[|\]$/g, '');
+  if (url.username || url.password) throw Object.assign(new Error('INVALID_SOURCE_URL'), { statusCode: 400 });
+  const octets = host.split('.').map(Number);
+  const blockedIp = isIP(host) === 6 || (isIP(host) === 4 && (
+    octets[0] === 0 || octets[0] >= 224 ||
+    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+    (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127) ||
+    (octets[0] === 198 && [18, 19].includes(octets[1]))
+  ));
+  if (blockedIp || host.endsWith('.localhost') || host.endsWith('.local') || host === 'localhost' || host === '0.0.0.0' || /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host)) {
     throw Object.assign(new Error('SSRF_BLOCKED'), { statusCode: 400 });
   }
-  return raw.slice(0, 2_000);
+  // Registration only: any future downloader must independently validate DNS and redirects.
+  return url.href;
 }
 
 export async function registerUpload(input: {
@@ -68,7 +78,8 @@ export async function registerUpload(input: {
     throw error;
   });
 
-  return withWorkspaceTransaction(input.workspaceId, (tx: any) => tx.mediaSource.create({
+  try {
+    return await withWorkspaceTransaction(input.workspaceId, (tx: any) => tx.mediaSource.create({
     data: {
       workspaceId: input.workspaceId,
       kind: 'UPLOAD',
@@ -81,7 +92,11 @@ export async function registerUpload(input: {
       licenseNote: input.licenseNote ? String(input.licenseNote).slice(0, 2_000) : null,
       status: 'READY',
     },
-  }));
+    }));
+  } catch (error) {
+    await unlink(path);
+    throw error;
+  }
 }
 
 export async function registerUrlSource(input: {
