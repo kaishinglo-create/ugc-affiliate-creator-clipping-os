@@ -81,14 +81,18 @@ Stand: 2026-11-27 — Branch `feature/phase-g-completion-2026-11-27`
 
 ## G.8 End-to-end verification
 
-- Status: in progress.
-- Planned/executed: `npm run verify:media` (existing real FFmpeg/Whisper proof),
-  `npm run verify:phase-g` (new real end-to-end run producing three aspect ratios),
-  two isolated `qa:full` runs, Playwright, MECE browser check, security audit.
+- Status: complete (local verification).
+- Executed: `npm run verify:phase-g` (`outcome: passed`, real CC0/self-created
+  media, three aspect ratios), two isolated `qa:full` runs (327 tests / 81 files
+  each), Playwright **9/9**, reproducible MECE browser check **27/27**, frontend
+  acceptance **19/19**, security audit CLOSED.
+- Curated, secret-free evidence: `docs/testing/evidence/phase-g/`.
+- External live verification remains pending; no live credentials were used.
 
 ## Test and checkpoint state
 
-- Test inventory: 80 `*.test.ts` + 2 `*.spec.ts`; ≥316 tests (baseline 302 kept).
+- Test inventory: 81 `*.test.ts` + 2 `*.spec.ts`; final `qa:full`: **327 tests /
+  81 Vitest files** (baseline 302 kept, no assertions weakened).
 - Migration `20261127020000_phase_g_pipeline_job_type` applied locally; 41 migrations.
 - No push, merge, deployment or publishing without separate approval.
 

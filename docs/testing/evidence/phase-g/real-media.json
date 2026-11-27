@@ -1,0 +1,68 @@
+{
+  "outcome": "passed",
+  "startedAt": "2026-11-27T05:02:33.224Z",
+  "finishedAt": "2026-11-27T05:05:37.787Z",
+  "command": "npm run verify:phase-g",
+  "authorizedSource": "self-created test video + CC0 speech sample (no third-party copyrighted content)",
+  "binaries": "ffmpeg/ffprobe 7.1.5; local whisper.cpp 1.9.6-dev with free ggml-tiny.en.bin model",
+  "steps": {
+    "source": { "durationSeconds": 6, "bytes": 66374 },
+    "transcription": {
+      "textLength": 75,
+      "segments": 1,
+      "highlights": 0,
+      "srtBytes": 109,
+      "transcriptPreview": "This is a test sentence, this is a test sentence, this is a test sentence."
+    },
+    "analysis": {
+      "sceneTimestamps": [3],
+      "rankedClips": 1,
+      "topReason": "transcriptScore=0.50; lengthFit=0.50; sceneAligned=false"
+    }
+  },
+  "videos": [
+    {
+      "profile": "9:16",
+      "bytes": 82009,
+      "width": 1080,
+      "height": 1920,
+      "codec": "h264",
+      "subtitleSteps": ["probe", "clip", "subtitles"],
+      "thumbnailBytes": 138977,
+      "qualityPassed": true,
+      "approvalStatus": "pending"
+    },
+    {
+      "profile": "16:9",
+      "bytes": 58633,
+      "width": 1920,
+      "height": 1080,
+      "codec": "h264",
+      "subtitleSteps": ["probe", "clip", "subtitles"],
+      "thumbnailBytes": 67703,
+      "qualityPassed": true,
+      "approvalStatus": "pending"
+    },
+    {
+      "profile": "1:1",
+      "bytes": 57503,
+      "width": 1080,
+      "height": 1080,
+      "codec": "h264",
+      "subtitleSteps": ["probe", "clip", "subtitles"],
+      "thumbnailBytes": 67038,
+      "qualityPassed": true,
+      "approvalStatus": "pending"
+    }
+  ],
+  "subtitles": {
+    "vttName": "captions.vtt",
+    "vttBytes": 116,
+    "source": "real whisper SRT"
+  },
+  "metadata": {
+    "source": "rule_based",
+    "note": "Rule-based suggestion; verify facts and rights before use."
+  },
+  "externalLiveVerified": false
+}

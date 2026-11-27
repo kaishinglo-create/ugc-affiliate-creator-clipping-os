@@ -1,4 +1,7 @@
-# EXTERNE BLOCKADEN (Stand 2026-11-26, Phase-E-QA)
+# EXTERNE BLOCKADEN (Stand 2026-11-27, Phase-G-Finalabnahme)
+
+Historische Einträge bleiben als Nachweis erhalten; der aktuelle Stand steht
+am Ende dieser Datei unter „Phase G — Finalabnahme (2026-11-27)“.
 
 Gelöst / verifiziert:
 - RLS: `DATABASE_URL` verwendet die Nicht-Superuser-Rolle `ugc_os_app`
@@ -100,3 +103,26 @@ Phase G (Stand 2026-11-27):
   Freigabe. URL-Downloads werden nicht gegen einen echten öffentlichen Host,
   sondern mit injizierten DNS-/Fetch-Doubles geprüft; Produktivcode nutzt
   ausschließlich echte DNS-Auflösung und echten Fetch.
+
+Phase G — Finalabnahme (2026-11-27):
+- Lokal abgeschlossen und verifiziert: zwei isolierte `qa:full`-Läufe je
+  327/327 Tests und 81/81 Dateien (Watchdog nicht ausgelöst), Playwright 9/9,
+  reproduzierbarer MECE-Browsercheck 27/27, Frontendabnahme 19/19,
+  `verify:phase-g` `outcome: passed` mit echten H.264-Artefakten in drei
+  Seitenverhältnissen, SRT/VTT, Thumbnails und `pending` Freigaben.
+- Keine externen Live-Credentials: `YOUTUBE_API_KEY` leer, kein
+  Discovery-MCP-Provider, `OLLAMA_API_KEY` leer, keine Plattform- und keine
+  Deployment-Credentials. Daher: kein Live-YouTube, keine echte KI-Analyse,
+  kein Upload/Publishing, kein Deployment, kein PR und kein Merge.
+- Kein öffentlicher Host für einen echten URL-Download-Test: IP-Pinning ist
+  lokal mit injizierten DNS-/Transport-Doubles und einem echten lokalen
+  TLS-Socket geprüft, nicht als Live-Internetcall ausgegeben.
+- Controller/Supervisor gestoppt, STOP-Flag vorhanden, kein Neustart ohne
+  ausdrückliche Freigabe.
+- Branch `feature/phase-g-completion-2026-11-27`: 6 lokale Commits vor
+  `origin/main`, nicht gepusht, kein PR. Zwei dieser Commits (`d3a13ac`,
+  `fd9a356`) wurden während der Abnahme von einem anderen lokalen Prozess
+  erstellt und nicht von dieser Sitzung; sie wurden nicht rückgängig gemacht.
+- Lokale Entscheidung `READY_FOR_COMMIT`; externe Live-Verifikation bleibt
+  ausdrücklich `EXTERNAL_LIVE_VERIFIED: none`. Phase H vorbereitet, nicht
+  implementiert (`docs/autonomous-build/PHASE_H_PREPARATION.md`).

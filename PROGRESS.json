@@ -1,13 +1,68 @@
 {
-  "phase": "F.4",
-  "status": "main_integration_complete",
-  "prUrl": "https://github.com/kaisinglo-create/ugc-affiliate-creator-clipping-os/pull/28",
-  "mergeCommit": "3ce5004748ca1d6759a377276179f966af4cacc9",
-  "mainSha": "3ce5004748ca1d6759a377276179f966af4cacc9",
-  "finalCiRun": 45912281880,
-  "finalCiStatus": "success",
+  "phase": "G",
+  "status": "local_acceptance_complete_external_live_pending",
+  "branch": "feature/phase-g-completion-2026-11-27",
+  "baseSha": "a45d06a",
+  "localCommitsAhead": 6,
+  "localCommits": [
+    "9f8efc9",
+    "b685a7b",
+    "a8c732d",
+    "fe9e576",
+    "d3a13ac",
+    "fd9a356"
+  ],
+  "commitNote": "d3a13ac and fd9a356 were created by another local process during the acceptance run, not by this session; no push, PR, merge or deploy occurred.",
+  "prUrl": null,
+  "mergeCommit": null,
   "tests": {
-    "testFiles": 68,
-    "testsPassed": 284
-  }
+    "testFiles": 81,
+    "testsPassed": 327,
+    "focusedSecurityRegression": 25
+  },
+  "qaFullRuns": [
+    {
+      "runId": "qa-full-2026-11-27T04-00-18-842Z-7977",
+      "outcome": "passed",
+      "tests": "327 passed (327)",
+      "testFiles": "81 passed (81)",
+      "duration": "740.37s",
+      "watchdogTriggered": false
+    },
+    {
+      "runId": "qa-full-2026-11-27T04-13-28-352Z-11885",
+      "outcome": "passed",
+      "tests": "327 passed (327)",
+      "testFiles": "81 passed (81)",
+      "duration": "726.86s",
+      "watchdogTriggered": false
+    }
+  ],
+  "browserAcceptance": {
+    "playwright": "9/9",
+    "meceBrowserCheck": "27/27",
+    "frontendTabs": "19/19",
+    "realMediaPipeline": "passed"
+  },
+  "realMediaReport": "/tmp/opencode/phase-g-verify/verification.json",
+  "controller": {
+    "status": "stopped",
+    "stoppedAt": "2026-11-27T03:39:41.145Z",
+    "stopFlagPresent": true,
+    "restarted": false
+  },
+  "externalBlockers": [
+    "YOUTUBE_API_KEY",
+    "discovery_mcp_provider",
+    "OLLAMA_API_KEY",
+    "platform_credentials",
+    "deployment_credentials",
+    "public_host_for_live_url_download"
+  ],
+  "nextPhase": "H",
+  "nextPhaseStatus": "prepared_not_started",
+  "commitDecision": "READY_FOR_COMMIT",
+  "pushAuthorized": false,
+  "mergeAuthorized": false,
+  "deployAuthorized": false
 }

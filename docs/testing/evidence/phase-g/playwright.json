@@ -1,0 +1,13 @@
+{
+  "command": "node --env-file=.env browser-runtime-host/node_modules/playwright/cli.js test --config playwright.config.ts",
+  "checks": 9,
+  "passed": 9,
+  "failed": 0,
+  "result": "9 passed (2.3m)",
+  "scope": "tests/e2e/*.spec.ts against live :3000 and :3031 services",
+  "notes": [
+    "MECE cold unlock timeout raised to 30s after measuring ~26s on a 2-CPU host.",
+    "API Integration Center waits for boot()'s initial view before clicking a nav entry.",
+    "No assertion was weakened."
+  ]
+}

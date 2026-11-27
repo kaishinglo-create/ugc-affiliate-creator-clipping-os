@@ -22,8 +22,9 @@
 
 - Two isolated `qa:full` runs after final integration: **81 files / 327 tests PASS** each.
 - Full local suite: 81 files / 327 tests; typecheck PASS; ESLint PASS; build PASS.
-- Playwright frontend acceptance: **19/19 PASS**.
-- MECE browser check: **27/27 PASS**.
+- Playwright end-to-end: **9/9 PASS**.
+- MECE browser check: **27/27 PASS** (`npm run verify:mece-browser`).
+- Frontend tab acceptance: **19/19 PASS** (`npm run verify:frontend`).
 - CDP host smoke: status endpoint responds with honest `available:false` when no Chrome endpoint exists.
 - Security audit: `docs/testing/PHASE_G_SECURITY_AUDIT.md`.
 

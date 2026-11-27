@@ -19,6 +19,8 @@
     "db:migrate:deploy": "prisma migrate deploy",
     "verify:media": "tsx scripts/verify-media-runtime.ts",
     "verify:phase-g": "tsx scripts/verify-phase-g-pipeline.ts",
+    "verify:mece-browser": "node --env-file=.env scripts/phase-g-mece-browsercheck.mjs",
+    "verify:frontend": "node scripts/phase-g-frontend-acceptance.mjs",
     "qa:full": "flock -n /tmp/opencode/ugc-qa-full.lock node scripts/qa-full.mjs"
   },
   "engines": {

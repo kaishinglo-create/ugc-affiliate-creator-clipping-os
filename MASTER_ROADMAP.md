@@ -35,12 +35,15 @@
 - G.5 Content production: complete (`src/content-production.ts`, VTT, thumbnails, profiles).
 - G.6 Quality/approval: complete (`src/quality-gate.ts`, `src/media-release.ts`).
 - G.7 Frontend/agents: complete (`public/app.js`, `src/phase-g-pipeline.ts`, engine integration).
-- G.8 Local E2E: complete — real FFmpeg/Whisper verification, three aspect profiles, two `qa:full` runs (81 files / 327 tests each), Playwright, MECE browser check, CDP smoke.
-- Final status: **PHASE_G_LIVE_VERIFICATION_PENDING** (implementation and local verification complete; live credentials are the only remaining blocker).
+- G.8 Local E2E: complete — real FFmpeg/Whisper verification, three aspect profiles, two isolated `qa:full` runs (81 files / 327 tests each, watchdog not triggered), Playwright **9/9**, reproducible MECE browser check **27/27**, frontend tab acceptance **19/19**, CDP smoke.
+- Final acceptance report: `PHASE_G_FINAL_ACCEPTANCE_REPORT.md` — local decision **READY_FOR_COMMIT**.
+- Branch `feature/phase-g-completion-2026-11-27` is 6 local commits ahead of `origin/main`; not pushed, no PR, no merge, no deployment.
+- Final status: **PHASE_G_LIVE_VERIFICATION_PENDING** (implementation and local verification complete; only external live credentials remain blocked).
 
 ## Phase H – Live Publishing and Affiliate Tracking
 
-- Prepared, not started. No automatic publishing or deployment added.
+- Prepared, not started: `docs/autonomous-build/PHASE_H_PREPARATION.md` (goals, prerequisites, acceptance criteria, explicit non-implementation).
+- Reuses the existing publishing queue and manual approval gate. No automatic publishing, no adapter stub presented as live, no deployment added.
 
 ## Phase I – Self-Healing and Self-Improving
 
