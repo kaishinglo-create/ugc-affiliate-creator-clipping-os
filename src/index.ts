@@ -2240,6 +2240,23 @@ app.post('/api/media/sources/:id/probe', async (req, reply) => {
   }
 });
 
+app.post('/api/media/clip-candidates', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  if (!Array.isArray(body.highlights)) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const { planHighlightClips } = await import('./video/clipping.js');
+  const { rankClipCandidates } = await import('./clip-ranking.js');
+  const planned = planHighlightClips(body.highlights, {
+    maxClips: body.maxClips,
+    maxDurationMs: body.maxDurationMs,
+    minDurationMs: body.minDurationMs,
+    padMs: body.padMs,
+    sourceDurationSeconds: body.sourceDurationSeconds,
+  });
+  return { candidates: rankClipCandidates({ clips: planned, sceneTimestamps: body.sceneTimestamps, targetDurationSeconds: body.targetDurationSeconds }) };
+});
+
 app.get('/api/orchestrations', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;

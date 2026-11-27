@@ -386,6 +386,26 @@ export async function probeMedia(targetPath: string): Promise<MediaMetadata> {
   };
 }
 
+export interface SceneDetectionResult {
+  timestamps: number[];
+  threshold: number;
+}
+
+/** Detect scene changes with FFmpeg's scene filter; no external ML model needed. */
+export async function detectScenes(targetPath: string, threshold = 0.3): Promise<SceneDetectionResult> {
+  const source = assertSafePath(targetPath, 'targetPath');
+  const safeThreshold = Math.min(1, Math.max(0.05, Number(threshold) || 0.3));
+  const result = await runBinary('ffmpeg', [
+    '-hide_banner', '-nostdin', '-i', source,
+    '-vf', `select=gt(scene\\,${safeThreshold}),showinfo`,
+    '-an', '-f', 'null', '-',
+  ], 120_000);
+  const timestamps = [...result.stderr.matchAll(/pts_time:([0-9.]+)/g)]
+    .map((match) => Number(match[1]))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  return { timestamps, threshold: safeThreshold };
+}
+
 export interface ClipSegmentOptions {
   input: string;
   output: string;
