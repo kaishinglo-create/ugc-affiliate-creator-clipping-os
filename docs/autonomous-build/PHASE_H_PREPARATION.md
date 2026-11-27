@@ -1,9 +1,9 @@
 # Phase H — Vorbereitung (2026-11-27)
 
-Status: **prepared, not started**. Es wurde kein Phase-H-Code geschrieben, kein
-Service gestartet und keine Freigabe eingeholt. Dieses Dokument legt nur den
-Rahmen fest, damit Phase H nach einer expliziten Entscheidung begonnen werden
-kann.
+Status: **prepared, not started, handoff ready**. Es wurde kein Phase-H-Code
+geschrieben, kein Service gestartet und keine Phase-H-Freigabe eingeholt. Dieses
+Dokument legt nur den Rahmen fest, damit Phase H nach einer expliziten
+Entscheidung begonnen werden kann.
 
 ## Ziel
 
@@ -24,7 +24,8 @@ ehrlichen Infrastruktur:
 - `API_INTEGRATIONS_OAUTH_BASE_URL` mit öffentlicher HTTPS-URL (Produktion).
 - `API_INTEGRATIONS_MASTER_KEY` bzw. `..._FILE` aus sicherer Quelle.
 - `YOUTUBE_API_KEY` bzw. Discovery-MCP-Provider für echte Quellen.
-- Deployment-Credentials und ausdrückliche Freigabe für Push/PR/Merge/Deploy.
+- Deployment-Credentials und ausdrückliche Freigabe für die Phase-H-Umsetzung
+  und ein späteres Deploy (Phase-G-Push/PR/Merge sind bereits abgeschlossen).
 
 Ohne diese Voraussetzungen bleibt jeder Status ehrlich `NOT_CONFIGURED`,
 `CREDENTIALS_ONLY` oder `ADAPTER_NOT_IMPLEMENTED`. Es gibt keinen Paid-Fallback,
@@ -52,6 +53,20 @@ keinen simulierten Upload und keine erfundenen Kennzahlen.
 - Kein automatisches Veröffentlichen und kein Umgehen von Login/MFA/CAPTCHA.
 - Kein Start des autonomen Controllers ohne neue, ausdrückliche Freigabe.
 
+## Übergabe nach Phase G (2026-11-27)
+
+- Phase G ist lokal implementiert, lokal verifiziert und als PR #32 in `main`
+  integriert (`45cacf55`, Post-Merge-CI `45946760934` grün, Regression auf
+  `main` 327/327 und 81/81). Nachweis:
+  `PHASE_G_MAIN_INTEGRATION_REPORT.md`.
+- Der Übergabepunkt ist erreicht; Phase H bleibt **nicht gestartet** und
+  erfordert eine ausdrückliche, separate Freigabe.
+- Beim Start von Phase H zuerst die externen Voraussetzungen oben prüfen;
+  ohne echte Credentials bleibt jeder Provider ehrlich `NOT_CONFIGURED` /
+  `CREDENTIALS_ONLY` / `ADAPTER_NOT_IMPLEMENTED`.
+- Controller/Supervisor bleiben gestoppt und das STOP-Flag bleibt gesetzt;
+  ein Neustart ist kein Teil der Übergabe.
+
 Nachweis: `PHASE_G_FINAL_ACCEPTANCE_REPORT.md` Abschnitt 8; Roadmap
 `MASTER_ROADMAP.md` / `MASTER_ROADMAP.json` (`nextPhaseStatus:
-prepared_not_started`).
+prepared_not_started`, `nextPhaseHandoffReady: true`).

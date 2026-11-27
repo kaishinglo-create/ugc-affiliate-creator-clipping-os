@@ -1,15 +1,19 @@
 # STATE
 
-## Phase G — Finalabnahme (2026-11-27, Finalstand)
+## Phase G — Finalabnahme und Main-Integration (2026-11-27, Finalstand)
 
-- Branch `feature/phase-g-completion-2026-11-27`, Basis `origin/main` / `a45d06a`.
-  Der Branch liegt jetzt **7 Commits** vor `origin/main`: `9f8efc9`, `b685a7b`,
-  `a8c732d`, `fe9e576`, `d3a13ac`, `fd9a356`, `df5f967`. `d3a13ac` und `fd9a356`
-  wurden während der laufenden Abnahme von einem anderen lokalen Prozess
-  erstellt (nicht durch diese Sitzung); sie enthalten genau den geprüften
-  Quellcodestand inklusive der E2E-Timing-Fixes. `df5f967` enthält nur Skripte,
-  Nachweise und Dokumentation. Sie wurden nicht rückgängig gemacht.
-  **Push und PR #32 erstellt; kein Merge und kein Deploy.**
+- Feature-Branch `feature/phase-g-completion-2026-11-27`, Basis `a45d06a`. Die
+  Commits `9f8efc9`, `b685a7b`, `a8c732d`, `fe9e576`, `d3a13ac`, `fd9a356`,
+  `df5f967`, `e156e5d` sind jetzt in `main` enthalten. `d3a13ac` und `fd9a356`
+  wurden während der Abnahme von einem anderen lokalen Prozess erstellt
+  (nicht durch diese Sitzung); sie enthalten genau den geprüften Quellstand
+  inklusive der E2E-Timing-Fixes. `df5f967` und `e156e5d` enthalten nur Skripte,
+  Nachweise und Dokumentation. Nichts wurde verworfen.
+- PR #32 wurde mit Freigabe regulär in `main` gemergt: Merge-Commit
+  `45cacf5502783cfbd8f634f2d8dc7c52c8a84375`, `mergedAt
+  2026-11-27T05:35:54Z`. Lokales `main` wurde per Fast-Forward synchronisiert;
+  lokales und entferntes `main` sind identisch (`45cacf55`). Post-Merge-CI
+  `45946760934` `success`. Kein Deployment und kein Publishing.
 - Zwei isolierte `qa:full`-Läufe unter `flock`, identischer eingefrorener Stand:
   `qa-full-2026-11-27T04-00-18-842Z-7977` und
   `qa-full-2026-11-27T04-13-28-352Z-11885`; je **327/327 Tests, 81/81 Dateien**,
@@ -29,11 +33,16 @@
   2026-11-27T03:39:41.145Z`), `docs/completion/controller/STOP` vorhanden,
   kein Neustart. Externe Live-Verifikation weiterhin blockiert (siehe
   `docs/completion/EXTERNAL_BLOCKERS.txt`).
-- Finalreports: `PHASE_G_FINAL_ACCEPTANCE_REPORT.md` und
-  `GITHUB_INTEGRATION_REPORT.md`. Push/PR freigegeben und ausgeführt (PR #32,
-  `df5f967`, CI `success`, MERGEABLE/CLEAN); Abschlussstatus **READY_TO_MERGE**.
-  Merge und Deploy weiterhin nicht freigegeben. Phase H ist vorbereitet
-  (`docs/autonomous-build/PHASE_H_PREPARATION.md`), nicht implementiert.
+- Nach dem Merge auf `main`: Typecheck, ESLint und Build PASS; isolierter
+  `qa:full`-Lauf `qa-full-2026-11-27T05-40-19-843Z-29623` **327/327 Tests,
+  81/81 Dateien**, Exit 0, Watchdog nicht ausgelöst. Keine Testabschwächung,
+  keine kostenpflichtigen Modelle.
+- Finalreports: `PHASE_G_FINAL_ACCEPTANCE_REPORT.md`,
+  `GITHUB_INTEGRATION_REPORT.md` und `PHASE_G_MAIN_INTEGRATION_REPORT.md`.
+  Abschlussstatus **PHASE_G_MAIN_INTEGRATION_COMPLETE**: lokal implementiert,
+  lokal verifiziert und in `main` integriert. Externe Live-Verifikation bleibt
+  ausstehend. Phase-H-Übergabe vorbereitet
+  (`docs/autonomous-build/PHASE_H_PREPARATION.md`), Phase H nicht gestartet.
 
 ## Autonomer Controller (2026-11-27)
 
@@ -81,9 +90,9 @@
   Ausgabe in `/tmp/opencode/phase-g-verify/verification.json`.
 - Ergänzung Finalabnahme: die oben genannten lokalen Punkte sind abgeschlossen;
   Details im Abschnitt „Phase G — Finalabnahme (2026-11-27, Finalstand)“.
-  Push/PR #32 und CI inzwischen ausgeführt und grün (siehe
-  `GITHUB_INTEGRATION_REPORT.md`); Merge, Deploy und Publishing weiterhin nicht
-  freigegeben.
+  Push/PR #32, Merge in `main`, Post-Merge-CI und lokale Regression sind
+  abgeschlossen (siehe `PHASE_G_MAIN_INTEGRATION_REPORT.md`); Deploy,
+  Publishing und Phase H weiterhin nicht freigegeben.
 
 ## Phase F: API Integration Center (2026-11-26)
 

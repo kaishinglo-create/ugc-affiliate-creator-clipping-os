@@ -1,28 +1,42 @@
 {
   "phase": "G",
-  "status": "github_sync_complete_external_live_pending",
-  "branch": "feature/phase-g-completion-2026-11-27",
-  "baseSha": "a45d06a",
+  "status": "phase_g_main_integration_complete_external_live_pending",
+  "branch": "main",
+  "featureBranch": "feature/phase-g-completion-2026-11-27",
+  "baseSha": "a45d06a7c433cc0efc8848c48243a7d201f8648b",
   "verifiedSourceSha": "fd9a35689fef4e9f785942e02b03034ea2717f36",
-  "headSha": "df5f96784c64eb5d48aa3d1b04558a03933f48af",
-  "localCommitsAhead": 7,
+  "prHeadSha": "e156e5d84c519f92eca3911cbe85d4a73530e67b",
+  "mainSha": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
+  "localMainSha": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
+  "remoteMainSha": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
+  "mergeCommit": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
+  "mergedAt": "2026-11-27T05:35:54Z",
   "pr": {
     "number": 32,
     "url": "https://github.com/kaishinglo-create/ugc-affiliate-creator-clipping-os/pull/32",
-    "state": "OPEN",
-    "headRefOid": "df5f96784c64eb5d48aa3d1b04558a03933f48af",
+    "state": "MERGED",
+    "headRefOid": "e156e5d84c519f92eca3911cbe85d4a73530e67b",
     "mergeable": "MERGEABLE",
     "mergeStateStatus": "CLEAN"
   },
-  "prState": "open",
+  "prState": "merged",
   "ci": {
-    "runId": 45945647539,
-    "conclusion": "success",
-    "headSha": "df5f96784c64eb5d48aa3d1b04558a03933f48af"
+    "prRuns": [
+      { "runId": 45945647539, "conclusion": "success", "headSha": "df5f96784c64eb5d48aa3d1b04558a03933f48af" },
+      { "runId": 45946271046, "conclusion": "success", "headSha": "e156e5d84c519f92eca3911cbe85d4a73530e67b" }
+    ],
+    "postMergeRun": {
+      "runId": 45946760934,
+      "status": "completed",
+      "conclusion": "success",
+      "headSha": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
+      "url": "https://github.com/kaishinglo-create/ugc-affiliate-creator-clipping-os/actions/runs/45946760934"
+    }
   },
   "pushAuthorized": true,
   "pushCompleted": true,
-  "mergeAuthorized": false,
+  "mergeAuthorized": true,
+  "mergeCompleted": true,
   "deployAuthorized": false,
   "tests": 327,
   "testFiles": 81,
@@ -38,6 +52,13 @@
       "outcome": "passed",
       "tests": 327,
       "testFiles": 81
+    },
+    {
+      "runId": "qa-full-2026-11-27T05-40-19-843Z-29623",
+      "scope": "post-merge on main",
+      "outcome": "passed",
+      "tests": 327,
+      "testFiles": 81
     }
   ],
   "browserAcceptance": {
@@ -46,10 +67,19 @@
     "frontendTabs": "19/19"
   },
   "realMediaPipeline": "passed",
+  "localGatesOnMain": {
+    "typecheck": "pass",
+    "eslint": "pass",
+    "build": "pass",
+    "regression": "327 passed (327)"
+  },
   "finalReport": "PHASE_G_FINAL_ACCEPTANCE_REPORT.md",
-  "commitDecision": "READY_FOR_COMMIT",
-  "finalStatus": "READY_TO_MERGE",
+  "githubReport": "GITHUB_INTEGRATION_REPORT.md",
+  "mainIntegrationReport": "PHASE_G_MAIN_INTEGRATION_REPORT.md",
+  "finalStatus": "PHASE_G_MAIN_INTEGRATION_COMPLETE",
+  "externalLiveVerification": "pending",
   "nextPhase": "H",
   "nextPhaseStatus": "prepared_not_started",
+  "nextPhaseHandoffReady": true,
   "nextPhasePreparation": "docs/autonomous-build/PHASE_H_PREPARATION.md"
 }

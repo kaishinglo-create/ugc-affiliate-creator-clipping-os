@@ -1,11 +1,14 @@
 {
   "phase": "G",
-  "status": "github_sync_complete_external_live_pending",
-  "branch": "feature/phase-g-completion-2026-11-27",
-  "baseSha": "a45d06a",
+  "status": "phase_g_main_integration_complete_external_live_pending",
+  "branch": "main",
+  "featureBranch": "feature/phase-g-completion-2026-11-27",
+  "baseSha": "a45d06a7c433cc0efc8848c48243a7d201f8648b",
   "verifiedSourceSha": "fd9a35689fef4e9f785942e02b03034ea2717f36",
-  "headSha": "df5f96784c64eb5d48aa3d1b04558a03933f48af",
-  "localCommitsAhead": 7,
+  "prHeadSha": "e156e5d84c519f92eca3911cbe85d4a73530e67b",
+  "mainSha": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
+  "localMainSha": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
+  "remoteMainSha": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
   "localCommits": [
     "9f8efc9",
     "b685a7b",
@@ -13,26 +16,31 @@
     "fe9e576",
     "d3a13ac",
     "fd9a356",
-    "df5f967"
+    "df5f967",
+    "e156e5d"
   ],
-  "commitNote": "d3a13ac and fd9a356 were created by another local process during acceptance; df5f967 contains scripts, curated evidence and documentation only. Push and PR were authorized; merge was not.",
+  "commitNote": "d3a13ac and fd9a356 were created by another local process during acceptance; df5f967 and e156e5d contain scripts, evidence and documentation only. PR #32 was merged into main as 45cacf55.",
   "prUrl": "https://github.com/kaishinglo-create/ugc-affiliate-creator-clipping-os/pull/32",
   "pr": {
     "number": 32,
-    "state": "OPEN",
-    "headRefOid": "df5f96784c64eb5d48aa3d1b04558a03933f48af",
+    "state": "MERGED",
+    "headRefOid": "e156e5d84c519f92eca3911cbe85d4a73530e67b",
     "baseRefName": "main",
     "mergeable": "MERGEABLE",
     "mergeStateStatus": "CLEAN"
   },
   "ci": {
-    "runId": 45945647539,
-    "status": "completed",
-    "conclusion": "success",
-    "headSha": "df5f96784c64eb5d48aa3d1b04558a03933f48af",
-    "url": "https://github.com/kaishinglo-create/ugc-affiliate-creator-clipping-os/actions/runs/45945647539"
+    "prRuns": [45945647539, 45946271046],
+    "postMergeRun": {
+      "runId": 45946760934,
+      "status": "completed",
+      "conclusion": "success",
+      "headSha": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
+      "url": "https://github.com/kaishinglo-create/ugc-affiliate-creator-clipping-os/actions/runs/45946760934"
+    }
   },
-  "mergeCommit": null,
+  "mergeCommit": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
+  "mergedAt": "2026-11-27T05:35:54Z",
   "tests": {
     "testFiles": 81,
     "testsPassed": 327,
@@ -54,6 +62,15 @@
       "testFiles": "81 passed (81)",
       "duration": "726.86s",
       "watchdogTriggered": false
+    },
+    {
+      "runId": "qa-full-2026-11-27T05-40-19-843Z-29623",
+      "scope": "post-merge on main",
+      "outcome": "passed",
+      "tests": "327 passed (327)",
+      "testFiles": "81 passed (81)",
+      "duration": "748.15s",
+      "watchdogTriggered": false
     }
   ],
   "browserAcceptance": {
@@ -63,6 +80,12 @@
     "realMediaPipeline": "passed"
   },
   "realMediaReport": "docs/testing/evidence/phase-g/real-media.json",
+  "localGatesOnMain": {
+    "typecheck": "pass",
+    "eslint": "pass",
+    "build": "pass",
+    "regression": "327 passed (327)"
+  },
   "controller": {
     "status": "stopped",
     "stoppedAt": "2026-11-27T03:39:41.145Z",
@@ -79,12 +102,15 @@
   ],
   "nextPhase": "H",
   "nextPhaseStatus": "prepared_not_started",
+  "nextPhaseHandoffReady": true,
   "commitDecision": "READY_FOR_COMMIT",
-  "finalStatus": "READY_TO_MERGE",
+  "finalStatus": "PHASE_G_MAIN_INTEGRATION_COMPLETE",
+  "externalLiveVerification": "pending",
   "pushAuthorized": true,
   "pushCompleted": true,
   "prAuthorized": true,
   "prCompleted": true,
-  "mergeAuthorized": false,
+  "mergeAuthorized": true,
+  "mergeCompleted": true,
   "deployAuthorized": false
 }

@@ -121,12 +121,24 @@ Phase G — Finalabnahme (2026-11-27):
   TLS-Socket geprüft, nicht als Live-Internetcall ausgegeben.
 - Controller/Supervisor gestoppt, STOP-Flag vorhanden, kein Neustart ohne
   ausdrückliche Freigabe.
-- Branch `feature/phase-g-completion-2026-11-27`: 7 Commits vor `origin/main`,
-  gepusht als `df5f967`, PR #32 offen und MERGEABLE/CLEAN. Zwei der Commits
-  (`d3a13ac`, `fd9a356`) wurden während der Abnahme von einem anderen lokalen
-  Prozess erstellt und nicht von dieser Sitzung; sie wurden nicht rückgängig
-  gemacht.
-- Abschlussstatus `READY_TO_MERGE`; Merge weiterhin nicht freigegeben. Externe
-  Live-Verifikation bleibt ausdrücklich `EXTERNAL_LIVE_VERIFIED: none`. Phase H
-  vorbereitet, nicht implementiert
-  (`docs/autonomous-build/PHASE_H_PREPARATION.md`).
+- Branch `feature/phase-g-completion-2026-11-27`: PR #32 wurde regulär in
+  `main` gemergt (`45cacf55`); lokales und entferntes `main` stimmen überein.
+  Zwei der Commits (`d3a13ac`, `fd9a356`) wurden während der Abnahme von einem
+  anderen lokalen Prozess erstellt und nicht von dieser Sitzung; sie wurden
+  nicht rückgängig gemacht.
+- Abschlussstatus `PHASE_G_MAIN_INTEGRATION_COMPLETE`; Merge war ausdrücklich
+  freigegeben. Externe Live-Verifikation bleibt ausdrücklich
+  `EXTERNAL_LIVE_VERIFIED: none`. Phase-H-Übergabe vorbereitet, nicht
+  implementiert (`docs/autonomous-build/PHASE_H_PREPARATION.md`).
+
+Phase G — Main-Integration (Final, 2026-11-27):
+- PR #32 (Head `e156e5d`) mit erwarteter SHA, OPEN/MERGEABLE/CLEAN und zwei
+  grünen CI-Läufen verifiziert; regulär gemergt als `45cacf55`.
+- Post-Merge-CI `45946760934` `success`; lokales `main` per Fast-Forward
+  synchronisiert und identisch mit `origin/main`.
+- Auf `main`: Typecheck, ESLint, Build PASS; isolierter `qa:full`-Lauf
+  `qa-full-2026-11-27T05-40-19-843Z-29623` 327/327 Tests und 81/81 Dateien,
+  Exit 0, Watchdog nicht ausgelöst.
+- Kein Deployment, kein Publishing, kein Controller-Neustart; STOP-Flag weiter
+  vorhanden. Keine kostenpflichtigen Modelle, keine Fake-Erfolge, keine
+  Testabschwächungen. Phase H nicht gestartet; Freigabe erforderlich.
