@@ -94,5 +94,5 @@ Stand: 2026-11-27 — Branch `feature/phase-g-completion-2026-11-27`
 
 ## Overall status
 
-Implementation: **complete**. Final status: **PHASE_G_PARTIAL** until verification,
-PR and CI are green.
+Implementation and local verification: **complete**.
+Final status: **PHASE_G_LIVE_VERIFICATION_PENDING** — only external live credentials remain.

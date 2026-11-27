@@ -1,43 +1,55 @@
 # Master Roadmap
 
-## Phases A–F.4
+## Phases A–F (complete)
 
-Status: complete and merged into `main` (Phase F.4 integration commit `3ce5004`).
+- A–F.4: local implementation, consolidation, CI repair and final merge completed.
+- PR #28 merged into `main` as `3ce5004748ca1d6759a377276179f966af4cacc9`.
+- Main integration final status: **MAIN_INTEGRATION_COMPLETE**.
 
-## Phase G
+## Phase F.1 – Repository consolidation
 
-Status: **implementation complete, final verification in progress** (`PHASE_G_PARTIAL`
-until both isolated QA runs, the real-media verification, PR and CI are green).
+- Local Phase F committed as `061c391`; integration branch `sync/remote-into-local` created.
+- Remote commits processed: `ddcaf72` integrated, `63ab78b` skipped (already present), `4da26dd` replaced by local implementation, `c229333` CDP fallback integrated, `3f77552` excluded (duplicate scheduler), `d32c378` documentation consolidated.
 
-Merged into `main` (merge commit `a45d06a`, PRs #29/#30/#31):
+## Phase F.2 – QA
 
-- G.0 baseline audit complete.
-- G.1 YouTube discovery adapter, schedules, cursor/retry and persistent candidates.
-- G.2 explainable 10-dimension research scoring.
-- G.3 persistent media ingestion with rights, SHA-256, MIME and SSRF guards.
-- G.4 scene detection and deterministic clip ranking.
-- G.5 production profiles, VTT, thumbnails and rule-based copy.
-- G.6 persistent quality reports (including the fixed real-duration check).
-- G.7 Phase G Studio frontend wiring.
+- QA reports created; 284 tests baseline; two isolated `qa:full` runs passed.
 
-Completed on `feature/phase-g-completion-2026-11-27` (not yet merged):
+## Phase F.3 / F.3.1 / F.3.2 – GitHub synchronization and CI repair
 
-- Persistent, workspace-scoped research reports (`ResearchReport`), persisted from
-  `POST /api/discovery/score` with candidate linkage and detail/list routes.
-- Bounded URL media downloader with DNS- and redirect-level SSRF validation.
-- Real ffmpeg thumbnails, SRT→VTT route and automatic
-  detect-scenes → plan → rank chain.
-- Manual clip-release gate: passing persisted quality report plus explicit
-  approval before `POST /api/media/releases/:id/export`.
-- Production profiles (`9:16`, `16:9`, `1:1`) honoured in single and batch export.
-- Autonomous `PHASE_G_PIPELINE` job executed by the engine, covering probe,
-  transcription, scene detection, ranking, export, thumbnail, copy, quality and
-  pending release; wired into the dashboard.
-- 14 new regression tests; full suite ≥316 tests / 82 files.
+- PR #28 published; CI reproducibility fixed; merge conflicts resolved.
+- Final PR state before merge: MERGEABLE/CLEAN; CI green.
 
-Open verification steps: real-media pipeline run, two isolated `qa:full` runs,
-Playwright, MECE browser check, security audit, PR and CI.
+## Phase F.4 – Final main integration
 
-## Phase H
+- PR #28 merged into `main`; local and remote main SHA identical.
+- Final report: `PHASE_F4_FINAL_INTEGRATION_REPORT.md`.
 
-Status: prepared, not started. Publishing queue and approval gate already exist.
+## Phase G – Live Discovery, AI Analysis & Video Clipping
+
+- G.0 Baseline audit: complete (`PHASE_G_BASELINE_AUDIT.md`).
+- G.1 Live discovery: code complete (`src/youtube.ts`, schedules, browser/API pilot wiring).
+- G.2 Research scoring: complete (`src/research-scoring.ts`, `src/research-reports.ts`).
+- G.3 Media ingestion: complete (`src/media-ingest.ts`, `src/media-download.ts`, rights/checksum/SSRF/RLS).
+- G.4 Intelligent clipping: complete (`src/video/clipping.ts`, `src/clip-ranking.ts`, `src/media-composition.ts`).
+- G.5 Content production: complete (`src/content-production.ts`, VTT, thumbnails, profiles).
+- G.6 Quality/approval: complete (`src/quality-gate.ts`, `src/media-release.ts`).
+- G.7 Frontend/agents: complete (`public/app.js`, `src/phase-g-pipeline.ts`, engine integration).
+- G.8 Local E2E: complete — real FFmpeg/Whisper verification, three aspect profiles, two `qa:full` runs (81 files / 327 tests each), Playwright, MECE browser check, CDP smoke.
+- Final status: **PHASE_G_LIVE_VERIFICATION_PENDING** (implementation and local verification complete; live credentials are the only remaining blocker).
+
+## Phase H – Live Publishing and Affiliate Tracking
+
+- Prepared, not started. No automatic publishing or deployment added.
+
+## Phase I – Self-Healing and Self-Improving
+
+- Planned, not started.
+
+## Phase J – Autonomous 24/7 operation
+
+- Planned, not started.
+
+## Phase K – Production acceptance
+
+- Planned, not started.

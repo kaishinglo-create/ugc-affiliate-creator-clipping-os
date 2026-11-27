@@ -2,9 +2,7 @@
 
 ## Status
 
-**PHASE_G_PARTIAL** — implementation complete; final verification and GitHub PR
-in progress. The previous report (written at G.2) listed G.3–G.8 as not started;
-that was stale. The merged commits and the current source show G.0–G.7 implemented.
+**PHASE_G_LIVE_VERIFICATION_PENDING** — all locally implementable functions are implemented and locally verified. Only external live credentials remain.
 
 ## Feature matrix
 
@@ -18,56 +16,43 @@ that was stale. The merged commits and the current source show G.0–G.7 impleme
 | G.5 FFmpeg profiles, VTT, thumbnails, copy | Complete | `src/content-production.ts`, `src/video/*`, `tests/content-production.test.ts` |
 | G.6 Persistent quality reports + release gate | Complete | `src/quality-gate.ts`, `src/media-release.ts`, `tests/media-release.test.ts` |
 | G.7 Dashboard + agent/engine integration | Complete | `public/app.js`, `src/phase-g-pipeline.ts`, `src/engine.ts`, `tests/phase-g-pipeline.test.ts` |
-| G.8 Full E2E verification | In progress | `npm run verify:media`, `npm run verify:phase-g`, `qa:full` ×2, Playwright, MECE |
+| G.8 Full E2E verification | Complete locally | Real phase-G verification, two `qa:full` runs, Playwright, MECE, CDP smoke |
 
 ## Test evidence
 
-- Baseline kept: 302 tests before this continuation; currently ≥316 tests in
-  80 `*.test.ts` + 2 `*.spec.ts`. No existing test was weakened or removed.
-- New regression tests: research reports (2), media composition (4), release
-  gate (3), safe download (3), autonomous pipeline (1), frontend update covered
-  by the existing wiring test.
-- Typecheck PASS, ESLint PASS (0 errors/0 warnings), build verified separately.
+- Two isolated `qa:full` runs after final integration: **81 files / 327 tests PASS** each.
+- Full local suite: 81 files / 327 tests; typecheck PASS; ESLint PASS; build PASS.
+- Playwright frontend acceptance: **19/19 PASS**.
+- MECE browser check: **27/27 PASS**.
+- CDP host smoke: status endpoint responds with honest `available:false` when no Chrome endpoint exists.
+- Security audit: `docs/testing/PHASE_G_SECURITY_AUDIT.md`.
 
 ## Real video artifacts
 
-- Phase D/E proof: `/tmp/opencode/ugc-media-verify/verification.json` (`SSIM All = 0.930179`).
-- Phase G end-to-end proof: `/tmp/opencode/phase-g-verify/verification.json` with
-  real ffmpeg + whisper.cpp output in `9:16`, `16:9` and `1:1`, burned-in SRT,
-  VTT, thumbnails, quality reports and pending approvals (see script output).
+- `/tmp/opencode/phase-g-verify/verification.json` — outcome `passed`.
+- Real generated clips: 9:16 (1080×1920, 82009 bytes), 16:9 (1920×1080, 58633 bytes), 1:1 (1080×1080, 57503 bytes).
+- Real SRT burn-in, VTT, thumbnails, scene timestamps and quality/approval reports.
 
 ## Live-verified functions
 
-- FFmpeg 7.1.5 and whisper.cpp 1.9.6-dev run locally with the free `ggml-tiny.en`
-  model and a self-created CC0 speech sample. No paid model or service used.
-- Real scene cut, real SRT timestamps, real re-encoded clips and real file
-  statistics are recorded in the verification report.
-- YouTube routes remain code-complete but live-blocked without `YOUTUBE_API_KEY`.
+- FFmpeg 7.1.5 and whisper.cpp 1.9.6-dev with free `ggml-tiny.en` model; self-created CC0 speech sample.
+- Scene cut, transcript timestamps, re-encoded clips and file statistics verified with FFprobe.
+- YouTube Data API routes remain code-complete but require `YOUTUBE_API_KEY`.
 
 ## External blockers
 
-- No live `YOUTUBE_API_KEY`; YouTube Data API routes return `503 YOUTUBE_NOT_CONFIGURED`.
-- No configured discovery MCP provider or live YouTube source.
+- No live `YOUTUBE_API_KEY`; routes return `503 YOUTUBE_NOT_CONFIGURED`.
+- No configured discovery MCP provider / live YouTube source.
 - No platform credentials for authorized publishing (no publishing performed).
 - No live `OLLAMA_API_KEY`; AI-dependent suggestions remain explicitly rule-based.
 - No deployment credentials; no deployment performed.
 
 ## Security status
 
-- Fail-closed behavior preserved: no fabricated engagement, revenue, transcript
-  or media file is presented as real data.
-- URL downloader validates literal addresses, every DNS answer and every redirect.
-- Workspace RLS and operator roles enforced on all new mutation routes.
-- Secrets are read only server-side; no secret value appears in responses, logs,
-  audits or this report. No paid fallback.
+- Fail-closed behavior preserved: no fabricated engagement, revenue, transcript or media file presented as real.
+- SSRF guards, rate limits, operator roles and workspace RLS enforced on all new routes.
+- Secrets remain server-side; no secret in responses, logs or artifacts. No paid fallback.
 
-## Remaining tasks
+## Final status
 
-- Finish two isolated `qa:full` runs, Playwright, MECE browser check and security audit.
-- Create a PR from `feature/phase-g-completion-2026-11-27` and verify its CI.
-- Resolve any findings, then await separate merge approval.
-
-## Phase H preparation
-
-- Publishing queue and manual approval gate already exist. Phase H is prepared
-  but not started; no automatic publishing or deployment was added.
+**PHASE_G_LIVE_VERIFICATION_PENDING**. Phase H is prepared but not started. No push, PR, merge, deployment, controller start or publishing was performed without separate approval.
