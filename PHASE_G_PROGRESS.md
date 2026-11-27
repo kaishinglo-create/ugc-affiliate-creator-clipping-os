@@ -22,6 +22,12 @@
 - External blockers: no live AI provider key; estimated dimensions are heuristics, not measured facts.
 - Next: persist score reports and link to discovery candidates.
 
+## Final state
+
+- Full suite: 70 files, 290 tests PASS.
+- No push, PR, merge, deployment, controller start or publishing.
+- Final report: PHASE_G_FINAL_REPORT.md.
+
 ## Overall status
 
 PHASE_G_PARTIAL
