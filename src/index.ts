@@ -2168,6 +2168,78 @@ app.post('/api/media/upload', async (req, reply) => {
   }
 });
 
+app.post('/api/media/sources/upload', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  if (!requireOperatorRole(ctx, reply)) return;
+  try {
+    const body = (req.body ?? {}) as any;
+    const encoded = String(body.contentBase64 ?? '');
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return reply.code(400).send({ error: 'INVALID_UPLOAD' });
+    const { registerUpload } = await import('./media-ingest.js');
+    const source = await registerUpload({
+      workspaceId: ctx.workspaceId,
+      name: body.name,
+      mimeType: body.mimeType,
+      data: Buffer.from(encoded, 'base64'),
+      rights: body.rights,
+      licenseNote: body.licenseNote,
+    });
+    return reply.code(201).send({ source });
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
+app.post('/api/media/sources/url', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  try {
+    const body = (req.body ?? {}) as any;
+    const { registerUrlSource } = await import('./media-ingest.js');
+    const source = await registerUrlSource({
+      workspaceId: ctx.workspaceId, name: body.name, sourceUrl: body.sourceUrl,
+      mimeType: body.mimeType, rights: body.rights, licenseNote: body.licenseNote,
+    });
+    return reply.code(201).send({ source });
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
+app.get('/api/media/sources', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { listMediaSources } = await import('./media-ingest.js');
+  return { sources: await listMediaSources(ctx.workspaceId, Number((req.query as any)?.limit ?? 100)) };
+});
+
+app.patch('/api/media/sources/:id/rights', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const body = (req.body ?? {}) as any;
+  const { updateMediaRights } = await import('./media-ingest.js');
+  const ok = await updateMediaRights(ctx.workspaceId, String((req.params as any)?.id ?? ''), body.rights, body.licenseNote);
+  if (!ok) return reply.code(404).send({ error: 'MEDIA_SOURCE_NOT_FOUND' });
+  return { updated: true };
+});
+
+app.post('/api/media/sources/:id/probe', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  try {
+    const { probeMediaSource } = await import('./media-ingest.js');
+    const result = await probeMediaSource(ctx.workspaceId, String((req.params as any)?.id ?? ''));
+    if (!result) return reply.code(404).send({ error: 'MEDIA_SOURCE_NOT_FOUND' });
+    return result;
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
 app.get('/api/orchestrations', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;

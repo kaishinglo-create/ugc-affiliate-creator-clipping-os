@@ -22,6 +22,16 @@
 - External blockers: no live AI provider key; estimated dimensions are heuristics, not measured facts.
 - Next: persist score reports and link to discovery candidates.
 
+## G.3 Media ingestion
+
+- Status: implemented locally.
+- Files: `src/media-ingest.ts`, `src/index.ts`, `prisma/schema.prisma`, `prisma/migrations/20261127010000_phase_g_media_research_quality`, `tests/media-ingest.test.ts`.
+- Models: `MediaSource`, `ResearchReport`, `QualityReport`.
+- Features: authorized uploads, SHA-256 dedup, MIME validation, rights metadata, URL SSRF guard, ffprobe persistence, workspace RLS.
+- Tests: 3 tests PASS.
+- Migration applied locally and in QA DB.
+- Next: persist research reports, quality reports and frontend wiring.
+
 ## Final state
 
 - Full suite: 70 files, 290 tests PASS.
