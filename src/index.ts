@@ -2272,6 +2272,32 @@ app.post('/api/production/suggestions', async (req, reply) => {
   return suggestCopy({ title: body.title, topic: body.topic, platform: body.platform });
 });
 
+app.post('/api/quality/evaluate', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const body = (req.body ?? {}) as any;
+  const clipPath = String(body.clipPath ?? '').trim();
+  if (!clipPath) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  try {
+    const { evaluateClip } = await import('./quality-gate.js');
+    return await evaluateClip({
+      workspaceId: ctx.workspaceId, clipPath, rightsStatus: body.rightsStatus,
+      minWidth: body.minWidth, minHeight: body.minHeight,
+      minDurationSeconds: body.minDurationSeconds, jobId: body.jobId,
+    });
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
+app.get('/api/quality/reports', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { listQualityReports } = await import('./quality-gate.js');
+  return { reports: await listQualityReports(ctx.workspaceId, Number((req.query as any)?.limit ?? 100)) };
+});
+
 app.get('/api/orchestrations', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;
