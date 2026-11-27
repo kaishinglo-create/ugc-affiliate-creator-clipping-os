@@ -1433,6 +1433,87 @@ app.delete('/api/discovery/schedules/:id', async (req, reply) => {
   return reply.code(204).send();
 });
 
+app.patch('/api/discovery/schedules/:id/enabled', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const enabled = (req.body as any)?.enabled;
+  if (typeof enabled !== 'boolean') return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const { setDiscoveryScheduleEnabled } = await import('./discovery.js');
+  const ok = await setDiscoveryScheduleEnabled(ctx.workspaceId, String((req.params as any)?.id ?? ''), enabled);
+  if (!ok) return reply.code(404).send({ error: 'SCHEDULE_NOT_FOUND' });
+  return { enabled };
+});
+
+function youtubeError(reply: any, error: unknown): any {
+  const code = String((error as Error)?.message ?? 'YOUTUBE_FAILED');
+  if (code === 'YOUTUBE_NOT_CONFIGURED') return reply.code(503).send({ error: code });
+  if (code.startsWith('YOUTUBE_HTTP_')) return reply.code(502).send({ error: code });
+  return reply.code(502).send({ error: 'YOUTUBE_FAILED' });
+}
+
+app.get('/api/discovery/youtube/search', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const query = String((req.query as any)?.query ?? '').trim();
+  if (!query || query.length > 200) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const cursor = String((req.query as any)?.cursor ?? '').trim() || undefined;
+  try {
+    const { youtubeSearch } = await import('./youtube.js');
+    return await youtubeSearch(query, cursor);
+  } catch (error) {
+    return youtubeError(reply, error);
+  }
+});
+
+app.get('/api/discovery/youtube/trending', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const regionCode = String((req.query as any)?.regionCode ?? '').trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(regionCode)) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  try {
+    const { youtubeTrending } = await import('./youtube.js');
+    return await youtubeTrending(regionCode);
+  } catch (error) {
+    return youtubeError(reply, error);
+  }
+});
+
+app.get('/api/discovery/youtube/creators', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const query = String((req.query as any)?.query ?? '').trim();
+  if (!query || query.length > 200) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  try {
+    const { youtubeCreators } = await import('./youtube.js');
+    return await youtubeCreators(query);
+  } catch (error) {
+    return youtubeError(reply, error);
+  }
+});
+
+app.get('/api/discovery/youtube/keywords', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const query = String((req.query as any)?.query ?? '').trim();
+  if (!query || query.length > 200) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  try {
+    const { youtubeKeywords } = await import('./youtube.js');
+    return await youtubeKeywords(query);
+  } catch (error) {
+    return youtubeError(reply, error);
+  }
+});
+
+app.post('/api/discovery/score', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const title = String(body.title ?? '').trim();
+  if (!title || title.length > 500) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const { scoreContentCandidate } = await import('./research-scoring.js');
+  return scoreContentCandidate(body);
+});
+
 async function engineTickHandler(ctx: any, reply: any, body: any) {
   const { runEngineTick } = await import('./engine.js');
   let now: Date | undefined;
@@ -2085,6 +2166,136 @@ app.post('/api/media/upload', async (req, reply) => {
     const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
     return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
   }
+});
+
+app.post('/api/media/sources/upload', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  if (!requireOperatorRole(ctx, reply)) return;
+  try {
+    const body = (req.body ?? {}) as any;
+    const encoded = String(body.contentBase64 ?? '');
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return reply.code(400).send({ error: 'INVALID_UPLOAD' });
+    const { registerUpload } = await import('./media-ingest.js');
+    const source = await registerUpload({
+      workspaceId: ctx.workspaceId,
+      name: body.name,
+      mimeType: body.mimeType,
+      data: Buffer.from(encoded, 'base64'),
+      rights: body.rights,
+      licenseNote: body.licenseNote,
+    });
+    return reply.code(201).send({ source });
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
+app.post('/api/media/sources/url', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  try {
+    const body = (req.body ?? {}) as any;
+    const { registerUrlSource } = await import('./media-ingest.js');
+    const source = await registerUrlSource({
+      workspaceId: ctx.workspaceId, name: body.name, sourceUrl: body.sourceUrl,
+      mimeType: body.mimeType, rights: body.rights, licenseNote: body.licenseNote,
+    });
+    return reply.code(201).send({ source });
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
+app.get('/api/media/sources', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { listMediaSources } = await import('./media-ingest.js');
+  return { sources: await listMediaSources(ctx.workspaceId, Number((req.query as any)?.limit ?? 100)) };
+});
+
+app.patch('/api/media/sources/:id/rights', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const body = (req.body ?? {}) as any;
+  const { updateMediaRights } = await import('./media-ingest.js');
+  const ok = await updateMediaRights(ctx.workspaceId, String((req.params as any)?.id ?? ''), body.rights, body.licenseNote);
+  if (!ok) return reply.code(404).send({ error: 'MEDIA_SOURCE_NOT_FOUND' });
+  return { updated: true };
+});
+
+app.post('/api/media/sources/:id/probe', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  try {
+    const { probeMediaSource } = await import('./media-ingest.js');
+    const result = await probeMediaSource(ctx.workspaceId, String((req.params as any)?.id ?? ''));
+    if (!result) return reply.code(404).send({ error: 'MEDIA_SOURCE_NOT_FOUND' });
+    return result;
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
+app.post('/api/media/clip-candidates', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  if (!Array.isArray(body.highlights)) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const { planHighlightClips } = await import('./video/clipping.js');
+  const { rankClipCandidates } = await import('./clip-ranking.js');
+  const planned = planHighlightClips(body.highlights, {
+    maxClips: body.maxClips,
+    maxDurationMs: body.maxDurationMs,
+    minDurationMs: body.minDurationMs,
+    padMs: body.padMs,
+    sourceDurationSeconds: body.sourceDurationSeconds,
+  });
+  return { candidates: rankClipCandidates({ clips: planned, sceneTimestamps: body.sceneTimestamps, targetDurationSeconds: body.targetDurationSeconds }) };
+});
+
+app.get('/api/production/profiles', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { PRODUCTION_PROFILES } = await import('./content-production.js');
+  return { profiles: PRODUCTION_PROFILES };
+});
+
+app.post('/api/production/suggestions', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const { suggestCopy } = await import('./content-production.js');
+  return suggestCopy({ title: body.title, topic: body.topic, platform: body.platform });
+});
+
+app.post('/api/quality/evaluate', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const body = (req.body ?? {}) as any;
+  const clipPath = String(body.clipPath ?? '').trim();
+  if (!clipPath) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  try {
+    const { evaluateClip } = await import('./quality-gate.js');
+    return await evaluateClip({
+      workspaceId: ctx.workspaceId, clipPath, rightsStatus: body.rightsStatus,
+      minWidth: body.minWidth, minHeight: body.minHeight,
+      minDurationSeconds: body.minDurationSeconds, jobId: body.jobId,
+    });
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
+app.get('/api/quality/reports', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { listQualityReports } = await import('./quality-gate.js');
+  return { reports: await listQualityReports(ctx.workspaceId, Number((req.query as any)?.limit ?? 100)) };
 });
 
 app.get('/api/orchestrations', async (req, reply) => {

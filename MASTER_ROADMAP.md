@@ -1,12 +1,19 @@
 # Master Roadmap
 
-## Phases A–F
+## Phases A–F.4
 
-Status: **complete and merged into `main`**.
-
-- Phase F.4: PR #28 merged into `main` as merge commit `3ce5004748ca1d6759a377276179f966af4cacc9`.
-- Final status: **MAIN_INTEGRATION_COMPLETE**.
+Status: complete and merged into `main`.
 
 ## Phase G
+
+Status: **PHASE_G_PARTIAL**.
+
+- G.0 baseline audit complete.
+- G.1 YouTube discovery adapter and schedule controls partial.
+- G.2 explainable content scoring partial.
+- G.3–G.8 remain open.
+- Full suite: 70 files, 290 tests PASS.
+
+## Phase H
 
 Status: prepared, not started.

@@ -203,6 +203,15 @@ export async function deleteDiscoverySchedule(workspaceId: string, id: string): 
   return result?.count === 1;
 }
 
+/** Pause or resume a stored recurring schedule. */
+export async function setDiscoveryScheduleEnabled(workspaceId: string, id: string, enabled: boolean): Promise<boolean> {
+  if (typeof enabled !== 'boolean') return false;
+  const result: any = await withWorkspaceTransaction<any>(workspaceId, (tx) =>
+    tx.discoverySchedule.updateMany({ where: { id, workspaceId }, data: { enabled } })
+  );
+  return result?.count === 1;
+}
+
 /** Advance a missed schedule past `now` while keeping its interval cadence. */
 function nextScheduleRun(from: Date, intervalMinutes: number, now: Date): Date {
   const step = Math.max(1, intervalMinutes) * 60_000;
@@ -233,9 +242,13 @@ export async function enqueueDueDiscoverySchedules(workspaceId: string, now = ne
         data: { lastRunAt: schedule.nextRunAt, nextRunAt: nextScheduleRun(schedule.nextRunAt, schedule.intervalMinutes, now) },
       });
       if (advanced.count !== 1) continue;
+      const cursorRow: any = await tx.operationalPolicy.findUnique({
+        where: { workspaceId_key: { workspaceId, key: discoveryCursorKey(schedule.query) } },
+      });
+      const cursor = cursorRow?.value && typeof cursorRow.value === 'object' ? (cursorRow.value as any).cursor : null;
       await createJob({
         workspaceId, type: 'CONTENT_DISCOVERY', category: 'youtube_search',
-        payload: { query: schedule.query, scheduleId: schedule.id },
+        payload: { query: schedule.query, scheduleId: schedule.id, ...(typeof cursor === 'string' && cursor ? { cursor } : {}) },
         idempotencyKey: `discovery:schedule:${schedule.id}:${schedule.nextRunAt.getTime()}`,
         runAt: now, maxAttempts: 2,
       }, tx);
