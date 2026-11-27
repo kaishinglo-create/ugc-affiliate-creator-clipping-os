@@ -48,6 +48,10 @@ describe('Phase G media ingestion', () => {
     await expect(registerUrlSource({
       workspaceId, name: 'private', sourceUrl: 'http://127.0.0.1/secret', rights: 'AUTHORIZED',
     })).rejects.toThrow('SSRF_BLOCKED');
+    for (const sourceUrl of ['http://172.16.0.1/a', 'http://100.64.0.1/a', 'http://[::1]/a', 'http://localhost./a', 'http://host.local/a']) {
+      await expect(registerUrlSource({ workspaceId, name: 'blocked', sourceUrl, rights: 'AUTHORIZED' })).rejects.toThrow('SSRF_BLOCKED');
+    }
+    await expect(registerUrlSource({ workspaceId, name: 'blocked', sourceUrl: 'https://user:pass@example.test/a', rights: 'AUTHORIZED' })).rejects.toThrow('INVALID_SOURCE_URL');
     const source: any = await registerUrlSource({
       workspaceId, name: 'remote.mp4', sourceUrl: 'https://example.test/video.mp4', rights: 'AUTHORIZED',
     });
