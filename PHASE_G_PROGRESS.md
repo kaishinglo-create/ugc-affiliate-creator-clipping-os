@@ -14,6 +14,14 @@
 - External blockers: no live `YOUTUBE_API_KEY`; browser-based discovery not yet wired.
 - Next: browser-based permitted discovery, creator/keyword/trend persistence.
 
+## G.2 AI research and content scoring
+
+- Status: partial (explainable 10-dimension scoring module and API route).
+- Files: `src/research-scoring.ts`, `src/index.ts`, `tests/research-scoring.test.ts`.
+- Tests: 2 files / 6 tests PASS.
+- External blockers: no live AI provider key; estimated dimensions are heuristics, not measured facts.
+- Next: persist score reports and link to discovery candidates.
+
 ## Overall status
 
 PHASE_G_PARTIAL

@@ -1504,6 +1504,16 @@ app.get('/api/discovery/youtube/keywords', { config: { rateLimit: { max: 20, tim
   }
 });
 
+app.post('/api/discovery/score', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const body = (req.body ?? {}) as any;
+  const title = String(body.title ?? '').trim();
+  if (!title || title.length > 500) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const { scoreContentCandidate } = await import('./research-scoring.js');
+  return scoreContentCandidate(body);
+});
+
 async function engineTickHandler(ctx: any, reply: any, body: any) {
   const { runEngineTick } = await import('./engine.js');
   let now: Date | undefined;
