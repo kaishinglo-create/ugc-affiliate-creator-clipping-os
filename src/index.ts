@@ -2355,7 +2355,7 @@ app.post('/api/media/sources/:id/download', { config: { rateLimit: { max: 20, ti
   }
 });
 
-app.post('/api/media/thumbnail', async (req, reply) => {
+app.post('/api/media/thumbnail', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx || !requireOperatorRole(ctx, reply)) return;
   const body = (req.body ?? {}) as any;
@@ -2387,7 +2387,7 @@ app.post('/api/media/subtitles/vtt', async (req, reply) => {
   }
 });
 
-app.post('/api/media/clip-candidates/auto', async (req, reply) => {
+app.post('/api/media/clip-candidates/auto', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx || !requireOperatorRole(ctx, reply)) return;
   const body = (req.body ?? {}) as any;
@@ -2407,7 +2407,7 @@ app.post('/api/media/clip-candidates/auto', async (req, reply) => {
   }
 });
 
-app.post('/api/media/releases/request', async (req, reply) => {
+app.post('/api/media/releases/request', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx || !requireOperatorRole(ctx, reply)) return;
   const body = (req.body ?? {}) as any;
@@ -2435,7 +2435,7 @@ app.get('/api/media/releases', async (req, reply) => {
   return { releases: await listClipReleases(ctx.workspaceId, Number((req.query as any)?.limit ?? 100)) };
 });
 
-app.post('/api/media/releases/:id/export', async (req, reply) => {
+app.post('/api/media/releases/:id/export', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx || !requireOperatorRole(ctx, reply)) return;
   const body = (req.body ?? {}) as any;
