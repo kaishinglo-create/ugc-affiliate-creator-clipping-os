@@ -1,5 +1,32 @@
 # STATE
 
+## Phase G continuation (2026-11-27)
+
+- Lokal sicher mit `origin/main` synchronisiert: `main` fast-forward auf
+  `a45d06a` (PRs #29/#30/#31), working tree vorher sauber, Checkpoint
+  `backup/pre-phase-g-continuation`. Neuer Branch
+  `feature/phase-g-completion-2026-11-27`.
+- Tatsächlicher Stand (Code, nicht veraltete Doku): G.0–G.7 waren in `main`
+  bereits implementiert; die Doku behauptete fälschlich G.3–G.8 offen und 290
+  Tests. Gemessen: 302 Baseline-Tests, 75 `.test.ts` + 2 `.spec.ts`.
+- Geschlossene Lücken: persistente `ResearchReport`s inkl. routes/RLS; sicherer
+  URL-Downloader mit DNS-/Redirect-Prüfung; echte Thumbnails, SRT→VTT und
+  automatische Szenenerkennung→Ranking; manueller Freigabe-Gate;
+  Produktionsprofile im Exportpfad; autonomer `PHASE_G_PIPELINE`-Engine-Job mit
+  Dashboard-Anbindung. Dabei echten Bug behoben: `quality-gate.ts` las
+  `metadata.format.duration` statt `metadata.durationSeconds`, wodurch nie ein
+  Qualitätsbericht bestehen konnte.
+- Neue Tests: 14 Regressionstests (Research Reports 2, Composition 4, Release 3,
+  Download 3, Pipeline 1); Gesamt jetzt ≥316 Tests / 82 Dateien. Baseline
+  unverändert, keine Tests abgeschwächt.
+- Migration `20261127020000_phase_g_pipeline_job_type` lokal angewendet
+  (41 Migrationen), Prisma-Client generiert.
+- Echter Medienlauf: `npm run verify:phase-g` mit ffmpeg 7.1.5 + whisper.cpp
+  1.9.6-dev, selbst erzeugtem 6-s-Video mit echtem Schnitt und CC0-Sprachsample;
+  Ausgabe in `/tmp/opencode/phase-g-verify/verification.json`.
+- Noch offen: zwei isolierte `qa:full`-Läufe, Playwright, MECE-Browsercheck,
+  Security-Audit, PR/CI. Kein Push, Merge, Deploy oder Publishing ohne Freigabe.
+
 ## Phase F: API Integration Center (2026-11-26)
 
 - Freigabe umgesetzt und lokal als `061c391` gesichert (Backup-Branch

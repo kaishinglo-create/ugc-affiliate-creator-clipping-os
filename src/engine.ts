@@ -29,6 +29,7 @@ import {
 } from './jobs.js';
 import { executeRun } from './workflows.js';
 import { discoveryEnabled, enqueueDueDiscoverySchedules, executeDiscovery } from './discovery.js';
+import { executePhaseGPipelineJob } from './phase-g-pipeline.js';
 import { runOrchestration } from './orchestration.js';
 import { newSpan, trace } from './qa-trace.js';
 
@@ -198,6 +199,10 @@ async function executeClaimedJob(workspaceId: string, job: any, workerId: string
       const result = await executeDiscovery(workspaceId, job, workerId, leaseTtlMs);
       outcome = result.outcome;
       error = result.error;
+    } else if (job.type === 'PHASE_G_PIPELINE') {
+      const result = await executePhaseGPipelineJob(workspaceId, job, workerId, leaseTtlMs);
+      outcome = result.outcome;
+      error = result.error;
     } else {
       // Other job types are owned by their own driver (orchestration owns
       // AGENT_TASK); leave the claim decision to them.
@@ -301,7 +306,9 @@ export async function runEngineTick(opts: EngineTickOptions = {}): Promise<Engin
         now,
         limit: batchSize,
         leaseTtlMs,
-        types: discoveryEnabled() ? ['WORKFLOW_RUN', 'CONTENT_DISCOVERY'] : ['WORKFLOW_RUN'],
+        types: discoveryEnabled()
+          ? ['WORKFLOW_RUN', 'CONTENT_DISCOVERY', 'PHASE_G_PIPELINE']
+          : ['WORKFLOW_RUN', 'PHASE_G_PIPELINE'],
       });
       summary.claimed += claimed.length;
 

@@ -1511,7 +1511,35 @@ app.post('/api/discovery/score', async (req, reply) => {
   const title = String(body.title ?? '').trim();
   if (!title || title.length > 500) return reply.code(400).send({ error: 'INVALID_INPUT' });
   const { scoreContentCandidate } = await import('./research-scoring.js');
-  return scoreContentCandidate(body);
+  const report = scoreContentCandidate(body);
+  if (body.persist === true) {
+    const { persistResearchReport } = await import('./research-reports.js');
+    const stored = await persistResearchReport({
+      workspaceId: ctx.workspaceId,
+      title,
+      report,
+      candidateId: body.candidateId === undefined ? null : body.candidateId,
+      origin: body.origin === undefined ? undefined : body.origin,
+    });
+    return { ...report, reportId: stored.id };
+  }
+  return report;
+});
+
+app.get('/api/discovery/scores', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { listResearchReports } = await import('./research-reports.js');
+  return { reports: await listResearchReports(ctx.workspaceId, Number((req.query as any)?.limit ?? 100)) };
+});
+
+app.get('/api/discovery/scores/:id', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { getResearchReport } = await import('./research-reports.js');
+  const report = await getResearchReport(ctx.workspaceId, String((req.params as any)?.id ?? ''));
+  if (!report) return reply.code(404).send({ error: 'REPORT_NOT_FOUND' });
+  return { report };
 });
 
 async function engineTickHandler(ctx: any, reply: any, body: any) {
@@ -1652,14 +1680,21 @@ app.post('/api/media/export', async (req, reply) => {
   try {
     const { exportVideo } = await import('./video/clipping.js');
     const { workspaceMediaPath } = await import('./media-workspace.js');
+    const { profileDimensions } = await import('./content-production.js');
+    let dimensions: { width: number; height: number } | null = null;
+    try {
+      dimensions = profileDimensions(body.profile);
+    } catch {
+      return reply.code(400).send({ error: 'UNKNOWN_PRODUCTION_PROFILE' });
+    }
     const result = await exportVideo({
       input: workspaceMediaPath(ctx.workspaceId, body.inputName),
       output: workspaceMediaPath(ctx.workspaceId, body.outputName),
       start: Number(body.start ?? 0),
       duration: Number(body.duration),
-      vertical: body.vertical === true,
-      width: body.width === undefined ? undefined : Number(body.width),
-      height: body.height === undefined ? undefined : Number(body.height),
+      vertical: body.vertical === true || dimensions !== null,
+      width: body.width === undefined ? dimensions?.width : Number(body.width),
+      height: body.height === undefined ? dimensions?.height : Number(body.height),
       subtitles: body.subtitlesName ? workspaceMediaPath(ctx.workspaceId, body.subtitlesName) : undefined,
       allowedTempDir: (await import('./media-workspace.js')).workspaceMediaRoot(ctx.workspaceId),
     });
@@ -1780,6 +1815,12 @@ app.post('/api/media/export/batch', async (req, reply) => {
   let clips: MediaClipSpec[];
   let input: string;
   let root: string;
+  let profile: { width: number; height: number } | null = null;
+  try {
+    profile = (await import('./content-production.js')).profileDimensions(body.profile);
+  } catch {
+    return reply.code(400).send({ error: 'UNKNOWN_PRODUCTION_PROFILE' });
+  }
   try {
     const mod = await import('./media-workspace.js');
     clips = parseMediaClipSpecs(ctx.workspaceId, body.clips, mod.workspaceMediaPath);
@@ -1811,9 +1852,9 @@ app.post('/api/media/export/batch', async (req, reply) => {
         output: join(root, clip.name),
         start: clip.start,
         duration: clip.duration,
-        vertical: clip.vertical,
-        width: clip.width,
-        height: clip.height,
+        vertical: clip.vertical || profile !== null,
+        width: clip.width === undefined ? profile?.width : clip.width,
+        height: clip.height === undefined ? profile?.height : clip.height,
         subtitles: clip.subtitlesName ? join(root, clip.subtitlesName) : undefined,
         allowedTempDir: root,
         threads: 1,
@@ -2296,6 +2337,171 @@ app.get('/api/quality/reports', async (req, reply) => {
   if (!ctx) return;
   const { listQualityReports } = await import('./quality-gate.js');
   return { reports: await listQualityReports(ctx.workspaceId, Number((req.query as any)?.limit ?? 100)) };
+});
+
+/* ---- Phase G completion: download, composition, auto-ranking, release ----- */
+
+app.post('/api/media/sources/:id/download', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  try {
+    const { downloadUrlSource } = await import('./media-download.js');
+    const result = await downloadUrlSource(ctx.workspaceId, String((req.params as any)?.id ?? ''));
+    if (!result) return reply.code(404).send({ error: 'MEDIA_SOURCE_NOT_FOUND' });
+    return result;
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
+app.post('/api/media/thumbnail', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const body = (req.body ?? {}) as any;
+  try {
+    const { generateThumbnail } = await import('./media-composition.js');
+    return { thumbnail: await generateThumbnail({
+      workspaceId: ctx.workspaceId,
+      sourceName: body.sourceName,
+      outputName: body.outputName,
+      atSeconds: body.atSeconds,
+      profile: body.profile ?? '9:16',
+    }) };
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
+app.post('/api/media/subtitles/vtt', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const body = (req.body ?? {}) as any;
+  try {
+    const { createVtt } = await import('./media-composition.js');
+    return { vtt: await createVtt({ workspaceId: ctx.workspaceId, srtName: body.srtName, vttName: body.vttName }) };
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
+app.post('/api/media/clip-candidates/auto', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const body = (req.body ?? {}) as any;
+  try {
+    const { autoRankClips } = await import('./media-composition.js');
+    return { analysis: await autoRankClips({
+      workspaceId: ctx.workspaceId,
+      sourceName: body.sourceName,
+      highlights: body.highlights,
+      sceneThreshold: body.sceneThreshold,
+      targetDurationSeconds: body.targetDurationSeconds,
+      maxClips: body.maxClips,
+    }) };
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
+app.post('/api/media/releases/request', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const body = (req.body ?? {}) as any;
+  try {
+    const { requestClipRelease } = await import('./media-release.js');
+    return await requestClipRelease({
+      workspaceId: ctx.workspaceId,
+      clipName: body.clipName,
+      jobId: body.jobId,
+      rightsStatus: body.rightsStatus,
+      requestedBy: ctx.userId,
+      minWidth: body.minWidth,
+      minHeight: body.minHeight,
+    });
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
+app.get('/api/media/releases', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { listClipReleases } = await import('./media-release.js');
+  return { releases: await listClipReleases(ctx.workspaceId, Number((req.query as any)?.limit ?? 100)) };
+});
+
+app.post('/api/media/releases/:id/export', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const body = (req.body ?? {}) as any;
+  try {
+    const { assertClipReleased } = await import('./media-release.js');
+    await assertClipReleased({
+      workspaceId: ctx.workspaceId,
+      approvalId: String((req.params as any)?.id ?? ''),
+      outputName: body.outputName,
+    });
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+  try {
+    const { exportVideo } = await import('./video/clipping.js');
+    const { workspaceMediaPath, workspaceMediaRoot } = await import('./media-workspace.js');
+    const { profileDimensions } = await import('./content-production.js');
+    let dimensions: { width: number; height: number } | null = null;
+    try {
+      dimensions = profileDimensions(body.profile);
+    } catch {
+      return reply.code(400).send({ error: 'UNKNOWN_PRODUCTION_PROFILE' });
+    }
+    const result = await exportVideo({
+      input: workspaceMediaPath(ctx.workspaceId, body.inputName),
+      output: workspaceMediaPath(ctx.workspaceId, body.outputName),
+      start: Number(body.start ?? 0),
+      duration: Number(body.duration),
+      vertical: body.vertical === true || dimensions !== null,
+      width: body.width === undefined ? dimensions?.width : Number(body.width),
+      height: body.height === undefined ? dimensions?.height : Number(body.height),
+      allowedTempDir: workspaceMediaRoot(ctx.workspaceId),
+      threads: 1,
+    });
+    if (!result.ok) return reply.code(mediaResultStatus(result.error)).send({ error: result.error, result });
+    return { export: result, releasedBy: ctx.userId };
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
+app.post('/api/phase-g/pipeline', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const body = (req.body ?? {}) as any;
+  try {
+    const { enqueuePhaseGPipeline } = await import('./phase-g-pipeline.js');
+    const job = await enqueuePhaseGPipeline(ctx.workspaceId, body, body.idempotencyKey);
+    const { publicMediaJob } = await import('./media-workspace.js');
+    return reply.code(202).send({ job: publicMediaJob(job) });
+  } catch (error) {
+    const { mediaErrorBody, mediaErrorStatus } = await import('./media-workspace.js');
+    return reply.code(mediaErrorStatus(error)).send(mediaErrorBody(error));
+  }
+});
+
+app.get('/api/phase-g/pipeline/:id', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { getJob } = await import('./jobs.js');
+  const { publicMediaJob } = await import('./media-workspace.js');
+  const job = await getJob(String((req.params as any)?.id ?? ''), ctx.workspaceId);
+  if (!job || job.type !== 'PHASE_G_PIPELINE') return reply.code(404).send({ error: 'NOT_FOUND' });
+  return { job: publicMediaJob(job) };
 });
 
 app.get('/api/orchestrations', async (req, reply) => {

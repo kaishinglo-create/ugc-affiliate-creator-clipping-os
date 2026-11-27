@@ -421,6 +421,15 @@ function phaseg() {
   '<div class="field"><button class="btn" data-action="phaseg-sources">Media sources</button></div>'+
   '<div class="field"><button class="btn" data-action="phaseg-profiles">Production profiles</button></div>'+
   '<div class="field"><button class="btn" data-action="phaseg-quality">Quality reports</button></div>'+
+  '<div class="field"><button class="btn" data-action="phaseg-score-save">Persist score</button></div>'+
+  '<div class="field"><button class="btn" data-action="phaseg-scores">Stored scores</button></div>'+
+  '<div class="field"><button class="btn" data-action="phaseg-auto-clips">Auto clip ranking</button></div>'+
+  '<div class="field"><button class="btn" data-action="phaseg-thumbnail">Thumbnail (9:16)</button></div>'+
+  '<div class="field"><button class="btn" data-action="phaseg-vtt">SRT → VTT</button></div>'+
+  '<div class="field"><button class="btn" data-action="phaseg-release">Request release</button></div>'+
+  '<div class="field"><button class="btn" data-action="phaseg-releases">Releases</button></div>'+
+  '<div class="field"><button class="btn primary" data-action="phaseg-pipeline">Run full pipeline job</button></div>'+
+  '<div class="field full"><label>Source / output name</label><input id="phaseg-source" value="source.mp4"><input id="phaseg-output" value="clip-9x16.mp4"></div>'+
   '</div></section>';
   return heading("Phase G Studio","Discovery, research, media and quality controls backed by real APIs.") + form + out + loadingBlock();
 }
@@ -942,6 +951,14 @@ async function wireEvents() {
         else if (name === "phaseg-sources") res = await api("/api/media/sources");
         else if (name === "phaseg-profiles") res = await api("/api/production/profiles");
         else if (name === "phaseg-quality") res = await api("/api/quality/reports");
+        else if (name === "phaseg-score-save") res = await api("/api/discovery/score", {method:"POST", body: JSON.stringify({title:query, rightsStatus:"UNKNOWN", persist:true})});
+        else if (name === "phaseg-scores") res = await api("/api/discovery/scores");
+        else if (name === "phaseg-auto-clips") res = await api("/api/media/clip-candidates/auto", {method:"POST", body: JSON.stringify({sourceName: (document.getElementById("phaseg-source")||{}).value||"source.mp4", highlights: [], targetDurationSeconds: 15})});
+        else if (name === "phaseg-thumbnail") res = await api("/api/media/thumbnail", {method:"POST", body: JSON.stringify({sourceName: (document.getElementById("phaseg-source")||{}).value||"source.mp4", outputName: "thumbnail-9x16.png", profile:"9:16", atSeconds:1})});
+        else if (name === "phaseg-vtt") res = await api("/api/media/subtitles/vtt", {method:"POST", body: JSON.stringify({srtName: (document.getElementById("phaseg-source")||{}).value||"captions.srt"})});
+        else if (name === "phaseg-release") res = await api("/api/media/releases/request", {method:"POST", body: JSON.stringify({clipName: (document.getElementById("phaseg-output")||{}).value||"clip-9x16.mp4", rightsStatus:"AUTHORIZED"})});
+        else if (name === "phaseg-releases") res = await api("/api/media/releases");
+        else if (name === "phaseg-pipeline") res = await api("/api/phase-g/pipeline", {method:"POST", body: JSON.stringify({sourceName: (document.getElementById("phaseg-source")||{}).value||"source.mp4", outputPrefix: "studio", profile:"9:16", rightsStatus:"AUTHORIZED", highlights: [], topic: query})});
         else throw new Error("UNKNOWN_PHASEG_ACTION");
         state.data.phasegOutput = res;
         render();

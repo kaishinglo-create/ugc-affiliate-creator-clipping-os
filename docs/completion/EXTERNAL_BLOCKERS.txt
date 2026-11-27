@@ -85,3 +85,18 @@ Phase F.3.2 final: merge conflicts resolved, CI green, status READY_TO_MERGE.
 Phase F.3.2 final: final CI/check green, status READY_TO_MERGE.
 
 Phase F.4 final: main integration complete; no open technical blocker.
+
+Phase G (Stand 2026-11-27):
+- `YOUTUBE_API_KEY` fehlt weiterhin. Alle YouTube-Routen geben ehrlich
+  `503 YOUTUBE_NOT_CONFIGURED` zurück; Discovery-Code ist vollständig und
+  gegen kontrollierte Doubles getestet, aber nicht live verifiziert.
+- Kein konfigurierter Discovery-MCP-Provider; echte Live-Suche bleibt extern
+  blockiert. Kein Tier-2- oder Paid-Fallback.
+- Keine Plattform-Credentials: Freigabe erzeugt nur eine ausstehende manuelle
+  Entscheidung, niemals einen Upload oder eine Veröffentlichung.
+- Kein `OLLAMA_API_KEY`: Hook-/Metadaten-Vorschläge bleiben ausdrücklich
+  regelbasiert (`source: rule_based`) statt eine KI-Analyse vorzutäuschen.
+- Keine Deployment-Credentials: kein Deployment und kein Merge ohne separate
+  Freigabe. URL-Downloads werden nicht gegen einen echten öffentlichen Host,
+  sondern mit injizierten DNS-/Fetch-Doubles geprüft; Produktivcode nutzt
+  ausschließlich echte DNS-Auflösung und echten Fetch.
