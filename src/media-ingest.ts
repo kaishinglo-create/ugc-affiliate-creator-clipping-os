@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { prisma, withWorkspaceTransaction } from '../lib/db.js';
+import { withWorkspaceTransaction } from '../lib/db.js';
 import { probeMedia } from './video/clipping.js';
 import { mediaUploadLimitBytes, workspaceMediaPath, workspaceMediaRoot } from './media-workspace.js';
 

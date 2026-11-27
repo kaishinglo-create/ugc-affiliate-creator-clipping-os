@@ -410,6 +410,21 @@ function youtube() {
   return heading("YouTube Intelligence","Real discovery candidates and searches; no fabricated research.") + notice + form + body + loadingBlock();
 }
 
+function phaseg() {
+  const out = state.data.phasegOutput ? '<pre class="panel" id="phaseg-output">'+esc(JSON.stringify(state.data.phasegOutput,null,2))+'</pre>' : '<div class="panel" id="phaseg-output">No Phase G request run yet.</div>';
+  const form = '<section class="panel"><h2>Phase G Studio</h2><p class="sub">Live YouTube routes fail closed with YOUTUBE_NOT_CONFIGURED until a server-side API key is configured. All other actions use real backend endpoints.</p>'+
+  '<div class="field-grid"><div class="field full"><label>Discovery query</label><input id="phaseg-query" value="creator workflow"></div>'+
+  '<div class="field"><button class="btn primary" data-action="phaseg-youtube">YouTube search</button></div>'+
+  '<div class="field"><button class="btn" data-action="phaseg-trending">Trending (DE)</button></div>'+
+  '<div class="field"><button class="btn" data-action="phaseg-creators">Creator discovery</button></div>'+
+  '<div class="field"><button class="btn" data-action="phaseg-score">Score candidate</button></div>'+
+  '<div class="field"><button class="btn" data-action="phaseg-sources">Media sources</button></div>'+
+  '<div class="field"><button class="btn" data-action="phaseg-profiles">Production profiles</button></div>'+
+  '<div class="field"><button class="btn" data-action="phaseg-quality">Quality reports</button></div>'+
+  '</div></section>';
+  return heading("Phase G Studio","Discovery, research, media and quality controls backed by real APIs.") + form + out + loadingBlock();
+}
+
 function calendar() {
   const rows = state.data.tasks || [];
   const body = rows.length ? '<section class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Task</th><th>Status</th><th>Priority</th><th>Due</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+esc(r.title)+'</td><td>'+esc(r.status)+'</td><td>'+esc(r.priority)+'</td><td>'+esc(r.dueDate?new Date(r.dueDate).toLocaleDateString():"—")+'</td></tr>').join("")+'</tbody></table></div></section>' : '<div class="panel">No tasks yet.</div>';
@@ -831,7 +846,7 @@ function apiIntegrationCenter() {
     '<div class="cards">'+cards+'</div>'+loadingBlock();
 }
 
-const views = {overview,radar,creators,campaigns,scripts,clipping,youtube,content,calendar,analytics,agents,integrations,"api-integrations":apiIntegrationCenter,"agent-browser":agentBrowser};
+const views = {overview,radar,creators,campaigns,scripts,clipping,youtube,phaseg,content,calendar,analytics,agents,integrations,"api-integrations":apiIntegrationCenter,"agent-browser":agentBrowser};
 
 function renderAuth() {
   const auth = $("#auth-container");
@@ -917,6 +932,21 @@ async function wireEvents() {
     const name = a.dataset.action;
     try {
       if (name === "refresh") { await loadView(state.view); return; }
+      if (name && name.startsWith("phaseg-")) {
+        const query = (document.getElementById("phaseg-query") || {}).value || "creator workflow";
+        let res;
+        if (name === "phaseg-youtube") res = await api("/api/discovery/youtube/search?query=" + encodeURIComponent(query));
+        else if (name === "phaseg-trending") res = await api("/api/discovery/youtube/trending?regionCode=DE");
+        else if (name === "phaseg-creators") res = await api("/api/discovery/youtube/creators?query=" + encodeURIComponent(query));
+        else if (name === "phaseg-score") res = await api("/api/discovery/score", {method:"POST", body: JSON.stringify({title:query, rightsStatus:"UNKNOWN"})});
+        else if (name === "phaseg-sources") res = await api("/api/media/sources");
+        else if (name === "phaseg-profiles") res = await api("/api/production/profiles");
+        else if (name === "phaseg-quality") res = await api("/api/quality/reports");
+        else throw new Error("UNKNOWN_PHASEG_ACTION");
+        state.data.phasegOutput = res;
+        render();
+        return;
+      }
       if (name && name.startsWith("api-integration-")) {
         const provider = String(a.dataset.provider||"");
         const base = "/api/api-integrations/" + encodeURIComponent(provider);

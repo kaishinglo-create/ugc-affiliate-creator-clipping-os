@@ -19,7 +19,7 @@ export function rankClipCandidates(input: RankInput): RankedClip[] {
   const clips = Array.isArray(input.clips) ? input.clips : [];
   const scenes = (input.sceneTimestamps ?? []).filter((value) => Number.isFinite(value) && value >= 0);
   const target = Math.max(1, Math.min(60, Number(input.targetDurationSeconds) || 15));
-  return clips.map((clip, index) => {
+  return clips.map((clip, _index) => {
     const startsAtScene = scenes.some((timestamp) => Math.abs(timestamp - clip.start) <= 1.5);
     const lengthFit = 1 - Math.min(1, Math.abs(clip.duration - target) / target);
     const score = Math.max(0, Math.min(1, (Number.isFinite(clip.score) ? clip.score : 0.5) * 0.7 + lengthFit * 0.2 + (startsAtScene ? 0.1 : 0)));
