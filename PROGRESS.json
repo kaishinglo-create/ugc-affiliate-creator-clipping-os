@@ -1,19 +1,37 @@
 {
   "phase": "G",
-  "status": "local_acceptance_complete_external_live_pending",
+  "status": "github_sync_complete_external_live_pending",
   "branch": "feature/phase-g-completion-2026-11-27",
   "baseSha": "a45d06a",
-  "localCommitsAhead": 6,
+  "verifiedSourceSha": "fd9a35689fef4e9f785942e02b03034ea2717f36",
+  "headSha": "df5f96784c64eb5d48aa3d1b04558a03933f48af",
+  "localCommitsAhead": 7,
   "localCommits": [
     "9f8efc9",
     "b685a7b",
     "a8c732d",
     "fe9e576",
     "d3a13ac",
-    "fd9a356"
+    "fd9a356",
+    "df5f967"
   ],
-  "commitNote": "d3a13ac and fd9a356 were created by another local process during the acceptance run, not by this session; no push, PR, merge or deploy occurred.",
-  "prUrl": null,
+  "commitNote": "d3a13ac and fd9a356 were created by another local process during acceptance; df5f967 contains scripts, curated evidence and documentation only. Push and PR were authorized; merge was not.",
+  "prUrl": "https://github.com/kaishinglo-create/ugc-affiliate-creator-clipping-os/pull/32",
+  "pr": {
+    "number": 32,
+    "state": "OPEN",
+    "headRefOid": "df5f96784c64eb5d48aa3d1b04558a03933f48af",
+    "baseRefName": "main",
+    "mergeable": "MERGEABLE",
+    "mergeStateStatus": "CLEAN"
+  },
+  "ci": {
+    "runId": 45945647539,
+    "status": "completed",
+    "conclusion": "success",
+    "headSha": "df5f96784c64eb5d48aa3d1b04558a03933f48af",
+    "url": "https://github.com/kaishinglo-create/ugc-affiliate-creator-clipping-os/actions/runs/45945647539"
+  },
   "mergeCommit": null,
   "tests": {
     "testFiles": 81,
@@ -44,7 +62,7 @@
     "frontendTabs": "19/19",
     "realMediaPipeline": "passed"
   },
-  "realMediaReport": "/tmp/opencode/phase-g-verify/verification.json",
+  "realMediaReport": "docs/testing/evidence/phase-g/real-media.json",
   "controller": {
     "status": "stopped",
     "stoppedAt": "2026-11-27T03:39:41.145Z",
@@ -62,7 +80,11 @@
   "nextPhase": "H",
   "nextPhaseStatus": "prepared_not_started",
   "commitDecision": "READY_FOR_COMMIT",
-  "pushAuthorized": false,
+  "finalStatus": "READY_TO_MERGE",
+  "pushAuthorized": true,
+  "pushCompleted": true,
+  "prAuthorized": true,
+  "prCompleted": true,
   "mergeAuthorized": false,
   "deployAuthorized": false
 }

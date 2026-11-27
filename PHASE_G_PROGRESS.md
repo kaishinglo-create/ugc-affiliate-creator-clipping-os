@@ -94,9 +94,11 @@ Stand: 2026-11-27 — Branch `feature/phase-g-completion-2026-11-27`
 - Test inventory: 81 `*.test.ts` + 2 `*.spec.ts`; final `qa:full`: **327 tests /
   81 Vitest files** (baseline 302 kept, no assertions weakened).
 - Migration `20261127020000_phase_g_pipeline_job_type` applied locally; 41 migrations.
-- No push, merge, deployment or publishing without separate approval.
+- Push and PR were explicitly authorized; merge, deployment and publishing remain
+  unapproved. See `GITHUB_INTEGRATION_REPORT.md` for PR #32 and CI results.
 
 ## Overall status
 
 Implementation and local verification: **complete**.
-Final status: **PHASE_G_LIVE_VERIFICATION_PENDING** — only external live credentials remain.
+External live verification: **pending** (only external live credentials remain).
+GitHub synchronization: **READY_TO_MERGE** — PR #32, CI green, CLEAN, `df5f967`.

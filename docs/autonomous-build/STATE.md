@@ -3,12 +3,13 @@
 ## Phase G — Finalabnahme (2026-11-27, Finalstand)
 
 - Branch `feature/phase-g-completion-2026-11-27`, Basis `origin/main` / `a45d06a`.
-  Der Branch liegt jetzt **6 lokale Commits** vor `origin/main`: `9f8efc9`,
-  `b685a7b`, `a8c732d`, `fe9e576`, `d3a13ac`, `fd9a356`. Die beiden letzten
+  Der Branch liegt jetzt **7 Commits** vor `origin/main`: `9f8efc9`, `b685a7b`,
+  `a8c732d`, `fe9e576`, `d3a13ac`, `fd9a356`, `df5f967`. `d3a13ac` und `fd9a356`
   wurden während der laufenden Abnahme von einem anderen lokalen Prozess
   erstellt (nicht durch diese Sitzung); sie enthalten genau den geprüften
-  Quellcodestand inklusive der E2E-Timing-Fixes sowie die neuen Roadmap-Dokumente.
-  Sie wurden nicht rückgängig gemacht. **Kein Push, PR, Merge oder Deploy.**
+  Quellcodestand inklusive der E2E-Timing-Fixes. `df5f967` enthält nur Skripte,
+  Nachweise und Dokumentation. Sie wurden nicht rückgängig gemacht.
+  **Push und PR #32 erstellt; kein Merge und kein Deploy.**
 - Zwei isolierte `qa:full`-Läufe unter `flock`, identischer eingefrorener Stand:
   `qa-full-2026-11-27T04-00-18-842Z-7977` und
   `qa-full-2026-11-27T04-13-28-352Z-11885`; je **327/327 Tests, 81/81 Dateien**,
@@ -28,10 +29,11 @@
   2026-11-27T03:39:41.145Z`), `docs/completion/controller/STOP` vorhanden,
   kein Neustart. Externe Live-Verifikation weiterhin blockiert (siehe
   `docs/completion/EXTERNAL_BLOCKERS.txt`).
-- Finalreport: `PHASE_G_FINAL_ACCEPTANCE_REPORT.md`. Lokale Entscheidung
-  **READY_FOR_COMMIT**; Push/PR/Merge/Deploy weiterhin nicht freigegeben.
-  Phase H ist vorbereitet (`docs/autonomous-build/PHASE_H_PREPARATION.md`),
-  nicht implementiert.
+- Finalreports: `PHASE_G_FINAL_ACCEPTANCE_REPORT.md` und
+  `GITHUB_INTEGRATION_REPORT.md`. Push/PR freigegeben und ausgeführt (PR #32,
+  `df5f967`, CI `success`, MERGEABLE/CLEAN); Abschlussstatus **READY_TO_MERGE**.
+  Merge und Deploy weiterhin nicht freigegeben. Phase H ist vorbereitet
+  (`docs/autonomous-build/PHASE_H_PREPARATION.md`), nicht implementiert.
 
 ## Autonomer Controller (2026-11-27)
 
@@ -79,8 +81,9 @@
   Ausgabe in `/tmp/opencode/phase-g-verify/verification.json`.
 - Ergänzung Finalabnahme: die oben genannten lokalen Punkte sind abgeschlossen;
   Details im Abschnitt „Phase G — Finalabnahme (2026-11-27, Finalstand)“.
-  PR/CI für diesen Branch weiterhin offen und nicht freigegeben. Kein Push,
-  Merge, Deploy oder Publishing ohne Freigabe.
+  Push/PR #32 und CI inzwischen ausgeführt und grün (siehe
+  `GITHUB_INTEGRATION_REPORT.md`); Merge, Deploy und Publishing weiterhin nicht
+  freigegeben.
 
 ## Phase F: API Integration Center (2026-11-26)
 

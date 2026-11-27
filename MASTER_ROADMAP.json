@@ -1,12 +1,27 @@
 {
   "phase": "G",
-  "status": "local_acceptance_complete_external_live_pending",
+  "status": "github_sync_complete_external_live_pending",
   "branch": "feature/phase-g-completion-2026-11-27",
   "baseSha": "a45d06a",
-  "localCommitsAhead": 6,
-  "pr": null,
-  "prState": "not_created",
-  "pushAuthorized": false,
+  "verifiedSourceSha": "fd9a35689fef4e9f785942e02b03034ea2717f36",
+  "headSha": "df5f96784c64eb5d48aa3d1b04558a03933f48af",
+  "localCommitsAhead": 7,
+  "pr": {
+    "number": 32,
+    "url": "https://github.com/kaishinglo-create/ugc-affiliate-creator-clipping-os/pull/32",
+    "state": "OPEN",
+    "headRefOid": "df5f96784c64eb5d48aa3d1b04558a03933f48af",
+    "mergeable": "MERGEABLE",
+    "mergeStateStatus": "CLEAN"
+  },
+  "prState": "open",
+  "ci": {
+    "runId": 45945647539,
+    "conclusion": "success",
+    "headSha": "df5f96784c64eb5d48aa3d1b04558a03933f48af"
+  },
+  "pushAuthorized": true,
+  "pushCompleted": true,
   "mergeAuthorized": false,
   "deployAuthorized": false,
   "tests": 327,
@@ -33,6 +48,7 @@
   "realMediaPipeline": "passed",
   "finalReport": "PHASE_G_FINAL_ACCEPTANCE_REPORT.md",
   "commitDecision": "READY_FOR_COMMIT",
+  "finalStatus": "READY_TO_MERGE",
   "nextPhase": "H",
   "nextPhaseStatus": "prepared_not_started",
   "nextPhasePreparation": "docs/autonomous-build/PHASE_H_PREPARATION.md"

@@ -1,24 +1,26 @@
 # Phase G — Final Acceptance Report (2026-11-27)
 
-Branch: `feature/phase-g-completion-2026-11-27` (6 local commits ahead of `origin/main`:
-`9f8efc9`, `b685a7b`, `a8c732d`, `fe9e576`, `d3a13ac`, `fd9a356`). Not pushed,
-no PR, no merge, no deployment. Uncommitted at the end of this pass: this report,
-`PROGRESS.json`, `MASTER_ROADMAP.*`, `docs/autonomous-build/STATE.md`,
-`docs/completion/EXTERNAL_BLOCKERS.txt`, `docs/autonomous-build/PHASE_H_PREPARATION.md`.
+Branch: `feature/phase-g-completion-2026-11-27`, pushed to origin at
+`df5f96784c64eb5d48aa3d1b04558a03933f48af` (seven commits ahead of `origin/main`:
+the six reviewed commits `9f8efc9`, `b685a7b`, `a8c732d`, `fe9e576`, `d3a13ac`,
+`fd9a356`, plus the final documentation/scripts commit `df5f967`). Open PR:
+[#32](https://github.com/kaishinglo-create/ugc-affiliate-creator-clipping-os/pull/32).
+No merge or deployment was performed.
 
-Commit provenance note: the two most recent local commits (`d3a13ac`, `fd9a356`)
-were created during the acceptance run by another local process, not by this
-session. They contain the reviewed source stand including the E2E timing fixes
-and the already-finalized roadmap documents. They were not reverted and no
-user change was discarded. This session performed no commit, push, merge or
-deployment.
+Commit provenance note: `d3a13ac` and `fd9a356` were created during the
+acceptance run by another local process, not by this session. They contain the
+reviewed source stand including the E2E timing fixes and the roadmap documents.
+They were not reverted and no user change was discarded. `df5f967` contains only
+the reproducible scripts, curated evidence and documentation finalized in this
+pass; it does not change application source.
 
 ## Decision
 
-**READY_FOR_COMMIT** as the local QA/acceptance verdict. This is *not* an approval
-for push, PR, merge or deployment; those remain blocked. External live
-verification remains blocked (see below) and is deliberately **not** reported as
-passed.
+**READY_TO_MERGE** as the final synchronization verdict: local commit and push
+done, PR #32 open against `main`, CI green, mergeable/CLEAN and PR head equal to
+the verified SHA `df5f967`. This is *not* an approval to merge; the explicit
+merge approval is still outstanding. External live verification remains blocked
+(see below) and is deliberately **not** reported as passed.
 
 ## 1. LOCAL_IMPLEMENTED
 
@@ -147,15 +149,20 @@ identical artifact sizes; both are `outcome: passed`. Files verified directly:
 ## 6. Local and GitHub progress
 
 - Local: Phase G implementation complete on the named branch; all local checks
-  green. Six local commits exist; the two newest were made by another local
-  process during the run (see provenance note). The remaining acceptance and
-  Phase-H-preparation documents are uncommitted for the requested approval gate.
-- GitHub: branch is **not pushed**; `gh pr list --head
-  feature/phase-g-completion-2026-11-27 --state all` returns no PR; no CI run for
-  this branch exists. Older merged Phase G PRs (#29/#30/#31) are part of
-  `origin/main` and are not evidence for this branch.
-- This session performed no commit, push, merge, deployment, secret creation or
-  controller restart. No controller process ran during the acceptance work.
+  green. Seven commits now exist on the branch; the provenance of the two
+  unexpected ones is documented above. Final local commit `df5f967` contains
+  scripts, curated evidence and documentation only.
+- GitHub: branch pushed without force; PR
+  [#32](https://github.com/kaishinglo-create/ugc-affiliate-creator-clipping-os/pull/32)
+  is open against `main`. CI run
+  [45945647539](https://github.com/kaishinglo-create/ugc-affiliate-creator-clipping-os/actions/runs/45945647539)
+  completed `success` (check job 2m55s, `npm run check` green). PR is
+  `MERGEABLE`, `mergeStateStatus: CLEAN`, `headRefOid = df5f967…`, matching the
+  local and remote branch HEAD. Older merged Phase G PRs (#29/#30/#31) are part
+  of `origin/main` and are not evidence for this branch.
+- No merge, deployment, secret creation or controller restart was performed. No
+  controller process ran during the acceptance work. Details:
+  `GITHUB_INTEGRATION_REPORT.md`.
 
 ## 7. External blockers
 
@@ -185,5 +192,5 @@ npm run verify:frontend
 node --env-file=.env node_modules/tsx/dist/cli.mjs scripts/verify-phase-g-pipeline.ts
 ```
 
-Status: **READY_FOR_COMMIT**. Awaiting explicit approval; no further action until
-instruction is received.
+Status: **READY_TO_MERGE**. Awaiting explicit merge approval; no merge or
+deployment will be performed until instruction is received.

@@ -113,16 +113,20 @@ Phase G — Finalabnahme (2026-11-27):
 - Keine externen Live-Credentials: `YOUTUBE_API_KEY` leer, kein
   Discovery-MCP-Provider, `OLLAMA_API_KEY` leer, keine Plattform- und keine
   Deployment-Credentials. Daher: kein Live-YouTube, keine echte KI-Analyse,
-  kein Upload/Publishing, kein Deployment, kein PR und kein Merge.
+  kein Upload/Publishing, kein Deployment und kein Merge. Der GitHub-PR #32
+  wurde mit ausdrücklicher Freigabe erstellt (CI grün), ersetzt aber keine
+  externe Live-Verifikation.
 - Kein öffentlicher Host für einen echten URL-Download-Test: IP-Pinning ist
   lokal mit injizierten DNS-/Transport-Doubles und einem echten lokalen
   TLS-Socket geprüft, nicht als Live-Internetcall ausgegeben.
 - Controller/Supervisor gestoppt, STOP-Flag vorhanden, kein Neustart ohne
   ausdrückliche Freigabe.
-- Branch `feature/phase-g-completion-2026-11-27`: 6 lokale Commits vor
-  `origin/main`, nicht gepusht, kein PR. Zwei dieser Commits (`d3a13ac`,
-  `fd9a356`) wurden während der Abnahme von einem anderen lokalen Prozess
-  erstellt und nicht von dieser Sitzung; sie wurden nicht rückgängig gemacht.
-- Lokale Entscheidung `READY_FOR_COMMIT`; externe Live-Verifikation bleibt
-  ausdrücklich `EXTERNAL_LIVE_VERIFIED: none`. Phase H vorbereitet, nicht
-  implementiert (`docs/autonomous-build/PHASE_H_PREPARATION.md`).
+- Branch `feature/phase-g-completion-2026-11-27`: 7 Commits vor `origin/main`,
+  gepusht als `df5f967`, PR #32 offen und MERGEABLE/CLEAN. Zwei der Commits
+  (`d3a13ac`, `fd9a356`) wurden während der Abnahme von einem anderen lokalen
+  Prozess erstellt und nicht von dieser Sitzung; sie wurden nicht rückgängig
+  gemacht.
+- Abschlussstatus `READY_TO_MERGE`; Merge weiterhin nicht freigegeben. Externe
+  Live-Verifikation bleibt ausdrücklich `EXTERNAL_LIVE_VERIFIED: none`. Phase H
+  vorbereitet, nicht implementiert
+  (`docs/autonomous-build/PHASE_H_PREPARATION.md`).
