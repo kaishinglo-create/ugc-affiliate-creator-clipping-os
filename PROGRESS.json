@@ -1,14 +1,13 @@
 {
-  "phase": "F.3.2",
-  "status": "ready_to_merge",
+  "phase": "F.4",
+  "status": "main_integration_complete",
   "prUrl": "https://github.com/kaisinglo-create/ugc-affiliate-creator-clipping-os/pull/28",
-  "mergeCommit": "4a19bed0f1d85eb392c002222868ce0caf062b26",
-  "finalCiRun": 45910004771,
+  "mergeCommit": "3ce5004748ca1d6759a377276179f966af4cacc9",
+  "mainSha": "3ce5004748ca1d6759a377276179f966af4cacc9",
+  "finalCiRun": 45912281880,
   "finalCiStatus": "success",
-  "finalCiHead": "cfb9a5e9faf9a7d469602c293a8c3b377785b93b",
-  "finalPrState": "OPEN_MERGEABLE_CLEAN",
-  "finalLocalTests": {
+  "tests": {
     "testFiles": 68,
-    "tests": 284
+    "testsPassed": 284
   }
 }

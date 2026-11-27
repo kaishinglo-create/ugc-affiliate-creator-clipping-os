@@ -1,26 +1,12 @@
 # Master Roadmap
 
-## Phase F.1/F.2
+## Phases A–F
 
-Status: complete locally and published as PR #28.
+Status: **complete and merged into `main`**.
 
-- Phase F: API Integration Center committed.
-- Phase F.1: repository consolidation.
-- Phase F.2: QA gate passed (284 tests, 2 qa:full runs).
+- Phase F.4: PR #28 merged into `main` as merge commit `3ce5004748ca1d6759a377276179f966af4cacc9`.
+- Final status: **MAIN_INTEGRATION_COMPLETE**.
 
-## Phase F.3.1
+## Phase G
 
-Status: final CI green; merge conflict reported.
-
-## Phase F.3.2
-
-Status: **READY_TO_MERGE**.
-
-- Final merge: `4a19bed0f1d85eb392c002222868ce0caf062b26`.
-- Final CI run: `45910004771` — success.
-- Final PR state: MERGEABLE/CLEAN.
-- Local QA: green.
-
-## Next
-
-- Await explicit merge approval before merge into `main`.
+Status: prepared, not started.

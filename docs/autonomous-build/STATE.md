@@ -797,3 +797,13 @@ and verification on the target device are follow-up steps.
 - Final rerun check: job `140217570804` — **PASS**.
 - Final PR state: OPEN, MERGEABLE, CLEAN.
 - Final status: **READY_TO_MERGE**.
+
+## Phase F.4 Final Main Integration (2026-11-27)
+
+- PR #28 merged into `main`.
+- Merge commit: `3ce5004748ca1d6759a377276179f966af4cacc9`.
+- Local and remote main SHA identical.
+- Main CI final: SUCCESS.
+- Full local QA: 284/284 tests PASS.
+- Final status: **MAIN_INTEGRATION_COMPLETE**.
+- Phase G prepared, not started.

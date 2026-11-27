@@ -83,3 +83,5 @@ Phase F.3.1 final: CI green; merge is pending explicit user approval.
 Phase F.3.2 final: merge conflicts resolved, CI green, status READY_TO_MERGE.
 
 Phase F.3.2 final: final CI/check green, status READY_TO_MERGE.
+
+Phase F.4 final: main integration complete; no open technical blocker.

@@ -200,3 +200,9 @@ bash scripts/controller-watchdog.sh                 # respektiert Cooldowns
 
 - Final CI/check rerun green at head `cfb9a5e`.
 - Final status: READY_TO_MERGE; awaiting explicit merge approval.
+
+## Phase F.4 (2026-11-27)
+
+- Final merge into main complete.
+- Status MAIN_INTEGRATION_COMPLETE.
+- Next: Phase G (prepared, not started).
