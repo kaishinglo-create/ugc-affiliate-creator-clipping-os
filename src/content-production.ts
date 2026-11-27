@@ -24,6 +24,13 @@ export function resolveProfile(key: string): ProductionProfile {
   return profile;
 }
 
+/** Resolve a profile key only when supplied; invalid keys are rejected. */
+export function profileDimensions(key: unknown): { width: number; height: number } | null {
+  if (key === undefined || key === null || key === '') return null;
+  const profile = resolveProfile(String(key));
+  return { width: profile.width, height: profile.height };
+}
+
 export function srtToVtt(srt: string): string {
   const normalized = srt.replace(/\r/g, '').replace(/^\uFEFF/, '');
   return `WEBVTT\n\n${normalized.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2').trim()}\n`;

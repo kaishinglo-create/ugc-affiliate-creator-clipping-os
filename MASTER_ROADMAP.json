@@ -1,14 +1,55 @@
 {
-  "phase": "F.4",
-  "status": "main_integration_complete",
-  "mergeCommit": "3ce5004748ca1d6759a377276179f966af4cacc9",
-  "pr": 28,
-  "prState": "MERGED",
-  "mainShaLocal": "3ce5004748ca1d6759a377276179f966af4cacc9",
-  "mainShaRemote": "3ce5004748ca1d6759a377276179f966af4cacc9",
-  "finalCiRun": 45912281880,
-  "finalCiStatus": "success",
-  "tests": 284,
-  "nextPhase": "G",
-  "nextPhaseStatus": "prepared_not_started"
+  "phase": "G",
+  "status": "github_sync_complete_external_live_pending",
+  "branch": "feature/phase-g-completion-2026-11-27",
+  "baseSha": "a45d06a",
+  "verifiedSourceSha": "fd9a35689fef4e9f785942e02b03034ea2717f36",
+  "headSha": "df5f96784c64eb5d48aa3d1b04558a03933f48af",
+  "localCommitsAhead": 7,
+  "pr": {
+    "number": 32,
+    "url": "https://github.com/kaishinglo-create/ugc-affiliate-creator-clipping-os/pull/32",
+    "state": "OPEN",
+    "headRefOid": "df5f96784c64eb5d48aa3d1b04558a03933f48af",
+    "mergeable": "MERGEABLE",
+    "mergeStateStatus": "CLEAN"
+  },
+  "prState": "open",
+  "ci": {
+    "runId": 45945647539,
+    "conclusion": "success",
+    "headSha": "df5f96784c64eb5d48aa3d1b04558a03933f48af"
+  },
+  "pushAuthorized": true,
+  "pushCompleted": true,
+  "mergeAuthorized": false,
+  "deployAuthorized": false,
+  "tests": 327,
+  "testFiles": 81,
+  "qaFullRuns": [
+    {
+      "runId": "qa-full-2026-11-27T04-00-18-842Z-7977",
+      "outcome": "passed",
+      "tests": 327,
+      "testFiles": 81
+    },
+    {
+      "runId": "qa-full-2026-11-27T04-13-28-352Z-11885",
+      "outcome": "passed",
+      "tests": 327,
+      "testFiles": 81
+    }
+  ],
+  "browserAcceptance": {
+    "playwright": "9/9",
+    "meceBrowserCheck": "27/27",
+    "frontendTabs": "19/19"
+  },
+  "realMediaPipeline": "passed",
+  "finalReport": "PHASE_G_FINAL_ACCEPTANCE_REPORT.md",
+  "commitDecision": "READY_FOR_COMMIT",
+  "finalStatus": "READY_TO_MERGE",
+  "nextPhase": "H",
+  "nextPhaseStatus": "prepared_not_started",
+  "nextPhasePreparation": "docs/autonomous-build/PHASE_H_PREPARATION.md"
 }

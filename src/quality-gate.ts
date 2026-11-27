@@ -53,7 +53,7 @@ export async function evaluateClip(input: {
   });
   checks.push({ key: 'codec', passed: Boolean(video?.codecName), detail: video?.codecName ?? 'No video codec.' });
   checks.push({ key: 'audio', passed: Boolean(audio?.codecName), detail: audio?.codecName ?? 'No audio stream.' });
-  const duration = Number(metadata.format?.duration ?? 0);
+  const duration = Number(metadata.durationSeconds ?? 0);
   const minDuration = Math.max(0.1, Number(input.minDurationSeconds) || 1);
   checks.push({ key: 'duration', passed: duration >= minDuration, detail: `Duration ${duration}s (minimum ${minDuration}s).` });
   checks.push({

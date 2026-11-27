@@ -1,5 +1,90 @@
 # STATE
 
+## Phase G — Finalabnahme (2026-11-27, Finalstand)
+
+- Branch `feature/phase-g-completion-2026-11-27`, Basis `origin/main` / `a45d06a`.
+  Der Branch liegt jetzt **7 Commits** vor `origin/main`: `9f8efc9`, `b685a7b`,
+  `a8c732d`, `fe9e576`, `d3a13ac`, `fd9a356`, `df5f967`. `d3a13ac` und `fd9a356`
+  wurden während der laufenden Abnahme von einem anderen lokalen Prozess
+  erstellt (nicht durch diese Sitzung); sie enthalten genau den geprüften
+  Quellcodestand inklusive der E2E-Timing-Fixes. `df5f967` enthält nur Skripte,
+  Nachweise und Dokumentation. Sie wurden nicht rückgängig gemacht.
+  **Push und PR #32 erstellt; kein Merge und kein Deploy.**
+- Zwei isolierte `qa:full`-Läufe unter `flock`, identischer eingefrorener Stand:
+  `qa-full-2026-11-27T04-00-18-842Z-7977` und
+  `qa-full-2026-11-27T04-13-28-352Z-11885`; je **327/327 Tests, 81/81 Dateien**,
+  Exit 0, Watchdog nicht ausgelöst. Danach wurden nur `tests/e2e/*.spec.ts`
+  wegen gemessener Timing-Races angepasst (MECE-Cold-Init 25,7 s gegenüber
+  10 s Timeout; `boot()`-Initialansicht vor Nav-Klick). Assertions unverändert;
+  Vitest schließt `.spec.ts` nicht ein. Typecheck, ESLint und Build danach
+  erneut PASS.
+- Dienste nach den Läufen gestartet (:3000 HTTP 200, :3031 HTTP 200,
+  :3200 verfügbar). Playwright **9/9**, reproduzierbarer MECE-Browsercheck
+  **27/27**, Frontendabnahme aller 15 Tabs **19/19**.
+- `verify:phase-g` erneut `outcome: passed` mit echten CC0-/selbsterstellten
+  Medien: H.264 1080×1920 / 1920×1080 / 1080×1080, Thumbnails, SRT/VTT,
+  Transcript, Quality Reports und `pending` Approvals direkt per ffprobe
+  verifiziert. Kein kostenpflichtiges Modell, keine Fake-Erfolge.
+- Controller/Supervisor weiterhin `stopped` (`stoppedAt
+  2026-11-27T03:39:41.145Z`), `docs/completion/controller/STOP` vorhanden,
+  kein Neustart. Externe Live-Verifikation weiterhin blockiert (siehe
+  `docs/completion/EXTERNAL_BLOCKERS.txt`).
+- Finalreports: `PHASE_G_FINAL_ACCEPTANCE_REPORT.md` und
+  `GITHUB_INTEGRATION_REPORT.md`. Push/PR freigegeben und ausgeführt (PR #32,
+  `df5f967`, CI `success`, MERGEABLE/CLEAN); Abschlussstatus **READY_TO_MERGE**.
+  Merge und Deploy weiterhin nicht freigegeben. Phase H ist vorbereitet
+  (`docs/autonomous-build/PHASE_H_PREPARATION.md`), nicht implementiert.
+
+## Autonomer Controller (2026-11-27)
+
+- Auf ausdrückliche Anfrage Dauerbetrieb gestartet. Da kein systemd vorhanden
+  ist, läuft der Supervisor jetzt detached via `nohup setsid` (PID 2869,
+  Controller PID 2874, eigene Session, Log
+  `~/.local/log/ugc-controller-supervisor.log`). Der idempotente Starter
+  `~/.local/bin/ugc-controller-autostart.sh` ist in `~/.bashrc` verdrahtet und
+  startet den Supervisor bei jedem neuen Shell-Login neu, sofern kein STOP-Flag
+  und kein laufender Supervisor vorhanden sind. Kein Push/Merge/Deploy
+  freigegeben.
+- Erster Lauf (PID 1240/1246) wurde über das STOP-Flag sauber beendet und
+  geclaimten Task `5e75e5ed2fbf` requeue't; dessen Agenten-Änderungen an
+  `public/app.js`, `public/index.html`, `public/styles.css` und
+  `tests/frontend-controls.test.ts` sind bewusst uncommitted geblieben.
+- Freigabe-Modelle aus `scripts/free-models.json`; Cooldown vom 24.11. ist
+  abgelaufen. Beim Detached-Start kurz `resource_wait` wegen load1 5.07 > 4
+  (2 CPUs), automatischer Retry nach 60 s vorgesehen.
+- Ergebnis derzeit offen; der Controller schreibt Status/Journal selbst unter
+  `docs/completion/controller/`. Stopp über `--stop` bzw. STOP-Flag.
+
+## Phase G continuation (2026-11-27)
+
+- Lokal sicher mit `origin/main` synchronisiert: `main` fast-forward auf
+  `a45d06a` (PRs #29/#30/#31), working tree vorher sauber, Checkpoint
+  `backup/pre-phase-g-continuation`. Neuer Branch
+  `feature/phase-g-completion-2026-11-27`.
+- Tatsächlicher Stand (Code, nicht veraltete Doku): G.0–G.7 waren in `main`
+  bereits implementiert; die Doku behauptete fälschlich G.3–G.8 offen und 290
+  Tests. Gemessen: 302 Baseline-Tests, 75 `.test.ts` + 2 `.spec.ts`.
+- Geschlossene Lücken: persistente `ResearchReport`s inkl. routes/RLS; sicherer
+  URL-Downloader mit DNS-/Redirect-Prüfung; echte Thumbnails, SRT→VTT und
+  automatische Szenenerkennung→Ranking; manueller Freigabe-Gate;
+  Produktionsprofile im Exportpfad; autonomer `PHASE_G_PIPELINE`-Engine-Job mit
+  Dashboard-Anbindung. Dabei echten Bug behoben: `quality-gate.ts` las
+  `metadata.format.duration` statt `metadata.durationSeconds`, wodurch nie ein
+  Qualitätsbericht bestehen konnte.
+- Neue Tests: 14 Regressionstests (Research Reports 2, Composition 4, Release 3,
+  Download 3, Pipeline 1); Gesamt jetzt ≥316 Tests / 82 Dateien. Baseline
+  unverändert, keine Tests abgeschwächt.
+- Migration `20261127020000_phase_g_pipeline_job_type` lokal angewendet
+  (41 Migrationen), Prisma-Client generiert.
+- Echter Medienlauf: `npm run verify:phase-g` mit ffmpeg 7.1.5 + whisper.cpp
+  1.9.6-dev, selbst erzeugtem 6-s-Video mit echtem Schnitt und CC0-Sprachsample;
+  Ausgabe in `/tmp/opencode/phase-g-verify/verification.json`.
+- Ergänzung Finalabnahme: die oben genannten lokalen Punkte sind abgeschlossen;
+  Details im Abschnitt „Phase G — Finalabnahme (2026-11-27, Finalstand)“.
+  Push/PR #32 und CI inzwischen ausgeführt und grün (siehe
+  `GITHUB_INTEGRATION_REPORT.md`); Merge, Deploy und Publishing weiterhin nicht
+  freigegeben.
+
 ## Phase F: API Integration Center (2026-11-26)
 
 - Freigabe umgesetzt und lokal als `061c391` gesichert (Backup-Branch

@@ -1,0 +1,30 @@
+{
+  "sourceCommit": "fd9a356",
+  "note": "Source stand frozen for both runs; Vitest only includes tests/**/*.test.ts.",
+  "runs": [
+    {
+      "runId": "qa-full-2026-11-27T04-00-18-842Z-7977",
+      "startedAt": "2026-11-27T04:00:18.842Z",
+      "finishedAt": "2026-11-27T04:13:15.961Z",
+      "outcome": "passed",
+      "exitCode": 0,
+      "tests": "327 passed (327)",
+      "testFiles": "81 passed (81)",
+      "duration": "740.37s (tests 74%, import 25%)",
+      "watchdogTriggered": false,
+      "errors": 0
+    },
+    {
+      "runId": "qa-full-2026-11-27T04-13-28-352Z-11885",
+      "startedAt": "2026-11-27T04:13:28.352Z",
+      "finishedAt": "2026-11-27T04:25:49.245Z",
+      "outcome": "passed",
+      "exitCode": 0,
+      "tests": "327 passed (327)",
+      "testFiles": "81 passed (81)",
+      "duration": "726.86s (tests 74%, import 26%, transform 1%)",
+      "watchdogTriggered": false,
+      "errors": 0
+    }
+  ]
+}

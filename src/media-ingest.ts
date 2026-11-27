@@ -26,7 +26,7 @@ function rightsStatus(value: unknown): string {
   return ALLOWED_RIGHTS.has(status) ? status : 'UNKNOWN';
 }
 
-function safeUrl(value: unknown): string {
+export function validateSourceUrl(value: unknown): string {
   const raw = String(value ?? '').trim();
   if (!raw || raw.length > 2_000) throw Object.assign(new Error('INVALID_SOURCE_URL'), { statusCode: 400 });
   let url: URL;
@@ -108,7 +108,7 @@ export async function registerUrlSource(input: {
   licenseNote?: unknown;
 }): Promise<any> {
   const name = normalizeName(input.name);
-  const sourceUrl = safeUrl(input.sourceUrl);
+  const sourceUrl = validateSourceUrl(input.sourceUrl);
   const status = rightsStatus(input.rights);
   if (status !== 'AUTHORIZED') throw Object.assign(new Error('MEDIA_NOT_AUTHORIZED'), { statusCode: 403 });
   const sha256 = createHash('sha256').update(sourceUrl).digest('hex');

@@ -20,7 +20,7 @@ export type JobStatusValue =
   | 'DEAD_LETTER'
   | 'WAITING_FOR_APPROVAL';
 
-export type JobTypeValue = 'WORKFLOW_RUN' | 'AGENT_TASK' | 'CONTENT_DISCOVERY';
+export type JobTypeValue = 'WORKFLOW_RUN' | 'AGENT_TASK' | 'CONTENT_DISCOVERY' | 'PHASE_G_PIPELINE';
 
 export interface CreateJobInput {
   workspaceId: string;
@@ -893,6 +893,7 @@ export const JobType = {
   WORKFLOW_RUN: 'WORKFLOW_RUN',
   AGENT_TASK: 'AGENT_TASK',
   CONTENT_DISCOVERY: 'CONTENT_DISCOVERY',
+  PHASE_G_PIPELINE: 'PHASE_G_PIPELINE',
 };
 
 export {

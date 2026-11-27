@@ -26,7 +26,7 @@ export async function withWorkspaceTransaction<T>(workspaceId: string, work: (tx
       trace('db_tx.acquired', { span, workspaceId, waitMs: Date.now() - queuedAt });
       await tx.$executeRawUnsafe(`select set_config('app.current_workspace_id', $1, true)`, workspaceId);
       return work(tx);
-    });
+    }, { timeout: 30_000, maxWait: 10_000 });
   } catch (error) {
     trace('db_tx.error', { span, workspaceId, durationMs: Date.now() - queuedAt, error: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200) });
     throw error;

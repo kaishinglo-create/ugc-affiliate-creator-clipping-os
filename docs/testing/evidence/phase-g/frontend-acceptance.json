@@ -1,0 +1,34 @@
+{
+  "at": "2026-11-27T04:48:14.747Z",
+  "checks": 19,
+  "passed": 19,
+  "failures": [],
+  "script": "scripts/phase-g-frontend-acceptance.mjs",
+  "repositoryReverification": {
+    "at": "2026-11-27T05:21:50.204Z",
+    "checks": 19,
+    "passed": 19,
+    "failures": []
+  },
+  "results": [
+    { "name": "01 unauthenticated app renders login form", "status": "PASS" },
+    { "name": "02 badge reports workspace data, not live data", "status": "PASS" },
+    { "name": "03 tab overview renders real Overview view", "status": "PASS" },
+    { "name": "04 tab radar renders real Product Radar view", "status": "PASS" },
+    { "name": "05 tab creators renders real Creators view", "status": "PASS" },
+    { "name": "06 tab campaigns renders real Campaigns view", "status": "PASS" },
+    { "name": "07 tab scripts renders real Script Studio view", "status": "PASS" },
+    { "name": "08 tab clipping renders real Clipping Studio view", "status": "PASS" },
+    { "name": "09 tab youtube renders real YouTube Intelligence view", "status": "PASS" },
+    { "name": "10 tab phaseg renders real Phase G Studio view", "status": "PASS" },
+    { "name": "11 tab content renders real Content Factory view", "status": "PASS" },
+    { "name": "12 tab calendar renders real Publishing Calendar view", "status": "PASS" },
+    { "name": "13 tab analytics renders real Analytics & Revenue view", "status": "PASS" },
+    { "name": "14 tab agents renders real Agent Control view", "status": "PASS" },
+    { "name": "15 tab integrations renders real Integrations view", "status": "PASS" },
+    { "name": "16 tab api-integrations renders real API Integration Center view", "status": "PASS" },
+    { "name": "17 tab agent-browser renders real Agent Browser view", "status": "PASS" },
+    { "name": "18 Phase G honesty notices are present", "status": "PASS" },
+    { "name": "19 no browser page errors during full tab tour", "status": "PASS" }
+  ]
+}

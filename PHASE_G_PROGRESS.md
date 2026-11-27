@@ -1,43 +1,104 @@
 # Phase G Progress
 
+Stand: 2026-11-27 — Branch `feature/phase-g-completion-2026-11-27`
+(basierend auf `origin/main` / `a45d06a`).
+
 ## G.0 Baseline audit
 
 - Status: complete.
-- Report: PHASE_G_BASELINE_AUDIT.md.
+- Report: `PHASE_G_BASELINE_AUDIT.md`.
 - Checkpoint: `77149bb`.
 
 ## G.1 Live content discovery
 
-- Status: partial (YouTube Data API adapter, creator/keyword/trending routes, schedule enable/disable, scheduled cursor propagation).
+- Status: complete at code level (live provider still externally blocked).
 - Files: `src/youtube.ts`, `src/discovery.ts`, `src/index.ts`, `tests/youtube.test.ts`.
-- Tests: 3 files / 7 tests PASS.
-- External blockers: no live `YOUTUBE_API_KEY`; browser-based discovery not yet wired.
-- Next: browser-based permitted discovery, creator/keyword/trend persistence.
+- Features: keyword/creator/trending Data-API adapters, recurring schedules,
+  cursor propagation, bounded retry, persistent `DiscoveryCandidate` rows,
+  engine dispatch and workspace RLS. Without `YOUTUBE_API_KEY` all routes fail
+  closed with `503 YOUTUBE_NOT_CONFIGURED`.
+- External blocker: no live YouTube API key / discovery MCP provider.
 
-## G.2 AI research and content scoring
+## G.2 Research and persistent scoring
 
-- Status: partial (explainable 10-dimension scoring module and API route).
-- Files: `src/research-scoring.ts`, `src/index.ts`, `tests/research-scoring.test.ts`.
-- Tests: 2 files / 6 tests PASS.
-- External blockers: no live AI provider key; estimated dimensions are heuristics, not measured facts.
-- Next: persist score reports and link to discovery candidates.
+- Status: complete.
+- Files: `src/research-scoring.ts`, `src/research-reports.ts`, `tests/research-scoring.test.ts`,
+  `tests/research-reports.test.ts`.
+- Features: 10 explainable dimensions with `provided`/`estimated`/`missing`
+  provenance, persisted `ResearchReport` rows with candidate linkage, list and
+  detail routes. No invented engagement or revenue value.
+- External blocker: no live AI provider key; estimated dimensions remain heuristics.
 
-## G.3 Media ingestion
+## G.3 Media ingestion and license check
 
-- Status: implemented locally.
-- Files: `src/media-ingest.ts`, `src/index.ts`, `prisma/schema.prisma`, `prisma/migrations/20261127010000_phase_g_media_research_quality`, `tests/media-ingest.test.ts`.
-- Models: `MediaSource`, `ResearchReport`, `QualityReport`.
-- Features: authorized uploads, SHA-256 dedup, MIME validation, rights metadata, URL SSRF guard, ffprobe persistence, workspace RLS.
-- Tests: 3 tests PASS.
-- Migration applied locally and in QA DB.
-- Next: persist research reports, quality reports and frontend wiring.
+- Status: complete.
+- Files: `src/media-ingest.ts`, `src/media-download.ts`, `src/index.ts`,
+  `prisma/migrations/20261127010000_phase_g_media_research_quality`, `tests/media-ingest.test.ts`,
+  `tests/media-download.test.ts`.
+- Features: authorized uploads, SHA-256 dedup, MIME/size validation, rights
+  metadata, literal + DNS + redirect SSRF guards, bounded downloader, ffprobe
+  persistence, workspace RLS.
+- External blocker: no public media host is used; URL download is exercised with
+  injected DNS/fetch doubles, never with fabricated production data.
 
-## Final state
+## G.4 Scene detection and automatic clip ranking
 
-- Full suite: 70 files, 290 tests PASS.
-- No push, PR, merge, deployment, controller start or publishing.
-- Final report: PHASE_G_FINAL_REPORT.md.
+- Status: complete.
+- Files: `src/video/clipping.ts`, `src/clip-ranking.ts`, `src/media-composition.ts`,
+  `tests/clip-ranking.test.ts`, `tests/media-composition.test.ts`.
+- Features: real ffmpeg `select=gt(scene,…),showinfo` detection, transcript-based
+  non-overlapping clip planning, deterministic ranking with visible reason,
+  automatic `autoRankClips` chain and route.
+- Verified live: real hard cut detected at 3 s in the generated verification source.
+
+## G.5 Production and metadata
+
+- Status: complete.
+- Files: `src/content-production.ts`, `src/video/subtitles.ts`, `src/media-composition.ts`,
+  `tests/content-production.test.ts`, `tests/media-composition.test.ts`.
+- Features: `9:16` / `16:9` / `1:1` profiles applied in single, batch and
+  release exports, real ffmpeg thumbnails, SRT burn-in, SRT→VTT, rule-based
+  title/description/hooks/hashtags explicitly labelled `rule_based`.
+
+## G.6 Persistent quality reports and release gate
+
+- Status: complete.
+- Files: `src/quality-gate.ts`, `src/media-release.ts`, `tests/quality-gate.test.ts`,
+  `tests/media-release.test.ts`.
+- Features: six persisted checks for success and failure, real duration check
+  (fixed from the non-existent `format.duration` field), pending manual approval
+  only for passing clips, export route guarded by `assertClipReleased`.
+- No automatic publishing; release means "ready for human decision".
+
+## G.7 Dashboard and agent integration
+
+- Status: complete.
+- Files: `public/app.js`, `src/index.ts`, `src/phase-g-pipeline.ts`, `src/engine.ts`,
+  `src/jobs.ts`, `tests/phase-g-frontend.test.ts`, `tests/phase-g-pipeline.test.ts`.
+- Features: Phase G Studio buttons for every backend area, autonomous
+  `PHASE_G_PIPELINE` job type executed by the engine with lease fencing,
+  heartbeats, audit and persisted redacted results.
+
+## G.8 End-to-end verification
+
+- Status: complete (local verification).
+- Executed: `npm run verify:phase-g` (`outcome: passed`, real CC0/self-created
+  media, three aspect ratios), two isolated `qa:full` runs (327 tests / 81 files
+  each), Playwright **9/9**, reproducible MECE browser check **27/27**, frontend
+  acceptance **19/19**, security audit CLOSED.
+- Curated, secret-free evidence: `docs/testing/evidence/phase-g/`.
+- External live verification remains pending; no live credentials were used.
+
+## Test and checkpoint state
+
+- Test inventory: 81 `*.test.ts` + 2 `*.spec.ts`; final `qa:full`: **327 tests /
+  81 Vitest files** (baseline 302 kept, no assertions weakened).
+- Migration `20261127020000_phase_g_pipeline_job_type` applied locally; 41 migrations.
+- Push and PR were explicitly authorized; merge, deployment and publishing remain
+  unapproved. See `GITHUB_INTEGRATION_REPORT.md` for PR #32 and CI results.
 
 ## Overall status
 
-PHASE_G_PARTIAL
+Implementation and local verification: **complete**.
+External live verification: **pending** (only external live credentials remain).
+GitHub synchronization: **READY_TO_MERGE** — PR #32, CI green, CLEAN, `df5f967`.

@@ -58,12 +58,19 @@ test('API Integration Center renders real provider data without secrets', async 
     }]);
     await page.goto(`${UGC_BASE}/`);
     await expect(page.locator('#login')).toBeHidden();
+    // boot() finishes with an async loadView('overview') that can replace the
+    // DOM after a nav click. Wait until that initial load has settled.
+    await expect(page.locator('#crumb')).toHaveText('Overview');
+    await page.waitForLoadState('networkidle');
 
     const nav = page.locator('button.nav[data-view="api-integrations"]');
     await expect(nav).toBeVisible();
     await nav.click();
     await expect(page.locator('#crumb')).toHaveText('API Integration Center');
     const cards = page.locator('article.card[data-provider]');
+    // The view title renders before the provider data resolves; wait for the
+    // first real card instead of racing the async load (assertion unchanged).
+    await expect(cards.first()).toBeVisible();
     expect(await cards.count()).toBe(registry.providers.length);
     await expect(page.locator('body')).toContainText('CONNECTED is shown only after a successful official API call');
     await expect(page.locator('button[data-action="api-integration-test"]').first()).toBeVisible();

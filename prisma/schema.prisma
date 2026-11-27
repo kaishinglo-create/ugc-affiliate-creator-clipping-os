@@ -257,6 +257,7 @@ enum JobType {
   WORKFLOW_RUN
   AGENT_TASK
   CONTENT_DISCOVERY
+  PHASE_G_PIPELINE
 }
 
 model WorkflowDefinition {
