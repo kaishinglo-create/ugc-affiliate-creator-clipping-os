@@ -29,7 +29,7 @@ function lines(file: string): string[] {
 
 function fakeWatchdog(dir: string, body: string): string {
   const script = join(dir, 'fake-watchdog.sh');
-  writeFileSync(script, `#!/bin/sh\nprintf '%s\\n' "$(date +%s%3N)" >> "$FAKE_MARKER"\n${body}\n`);
+  writeFileSync(script, `#!/bin/sh\nprintf '%s\\n' "$(node -p 'Number(process.hrtime.bigint() / 1000000n)')" >> "$FAKE_MARKER"\n${body}\n`);
   chmodSync(script, 0o755);
   return script;
 }
