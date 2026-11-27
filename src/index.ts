@@ -1433,6 +1433,77 @@ app.delete('/api/discovery/schedules/:id', async (req, reply) => {
   return reply.code(204).send();
 });
 
+app.patch('/api/discovery/schedules/:id/enabled', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const enabled = (req.body as any)?.enabled;
+  if (typeof enabled !== 'boolean') return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const { setDiscoveryScheduleEnabled } = await import('./discovery.js');
+  const ok = await setDiscoveryScheduleEnabled(ctx.workspaceId, String((req.params as any)?.id ?? ''), enabled);
+  if (!ok) return reply.code(404).send({ error: 'SCHEDULE_NOT_FOUND' });
+  return { enabled };
+});
+
+function youtubeError(reply: any, error: unknown): any {
+  const code = String((error as Error)?.message ?? 'YOUTUBE_FAILED');
+  if (code === 'YOUTUBE_NOT_CONFIGURED') return reply.code(503).send({ error: code });
+  if (code.startsWith('YOUTUBE_HTTP_')) return reply.code(502).send({ error: code });
+  return reply.code(502).send({ error: 'YOUTUBE_FAILED' });
+}
+
+app.get('/api/discovery/youtube/search', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const query = String((req.query as any)?.query ?? '').trim();
+  if (!query || query.length > 200) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const cursor = String((req.query as any)?.cursor ?? '').trim() || undefined;
+  try {
+    const { youtubeSearch } = await import('./youtube.js');
+    return await youtubeSearch(query, cursor);
+  } catch (error) {
+    return youtubeError(reply, error);
+  }
+});
+
+app.get('/api/discovery/youtube/trending', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const regionCode = String((req.query as any)?.regionCode ?? '').trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(regionCode)) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  try {
+    const { youtubeTrending } = await import('./youtube.js');
+    return await youtubeTrending(regionCode);
+  } catch (error) {
+    return youtubeError(reply, error);
+  }
+});
+
+app.get('/api/discovery/youtube/creators', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const query = String((req.query as any)?.query ?? '').trim();
+  if (!query || query.length > 200) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  try {
+    const { youtubeCreators } = await import('./youtube.js');
+    return await youtubeCreators(query);
+  } catch (error) {
+    return youtubeError(reply, error);
+  }
+});
+
+app.get('/api/discovery/youtube/keywords', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const query = String((req.query as any)?.query ?? '').trim();
+  if (!query || query.length > 200) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  try {
+    const { youtubeKeywords } = await import('./youtube.js');
+    return await youtubeKeywords(query);
+  } catch (error) {
+    return youtubeError(reply, error);
+  }
+});
+
 async function engineTickHandler(ctx: any, reply: any, body: any) {
   const { runEngineTick } = await import('./engine.js');
   let now: Date | undefined;
