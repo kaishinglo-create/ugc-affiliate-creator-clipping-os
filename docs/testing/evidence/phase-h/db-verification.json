@@ -1,0 +1,43 @@
+{
+  "startedAt": "2026-11-27T20:31:28.185Z",
+  "checks": [
+    {
+      "name": "phase_g_to_phase_h_upgrade",
+      "ok": true,
+      "detail": "41 + 3 migrations"
+    },
+    {
+      "name": "affiliate_link_columns",
+      "ok": true,
+      "detail": "campaignId,commissionBps,createdAt,creatorId,destinationUrl,disclosureText,id,offerId,productId,status,token,updatedAt,workspaceId"
+    },
+    {
+      "name": "force_rls_on_new_tables",
+      "ok": true,
+      "detail": "AffiliateLink:true,PublishingAccount:true,PublishingSchedule:true"
+    },
+    {
+      "name": "check_constraints_present",
+      "ok": true,
+      "detail": "AffiliateConversion_pkey,AffiliateConversion_workspaceId_fkey,AffiliateLink_pkey,AffiliateLink_workspaceId_fkey,AffiliateConversion_amount_nonnegative,AffiliateConversion_commission_nonnegative,AffiliateLink_commission_bps_range,QualityReport_checksum_format"
+    },
+    {
+      "name": "negative_commission_rejected",
+      "ok": true,
+      "detail": "ERROR:  new row for relation \"AffiliateConversion\" violates check constraint \"AffiliateConversion_commission_nonnegative\""
+    },
+    {
+      "name": "restored_schema_has_phase_h",
+      "ok": true,
+      "detail": "PublishingSchedule present"
+    },
+    {
+      "name": "restored_constraints",
+      "ok": true,
+      "detail": "CHECK constraints restored"
+    }
+  ],
+  "dataBackupNote": "A full data dump requires a BYPASSRLS/superuser role; the local app role is non-superuser with FORCE RLS.",
+  "outcome": "passed",
+  "finishedAt": "2026-11-27T20:31:36.218Z"
+}

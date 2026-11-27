@@ -1,9 +1,22 @@
 /**
  * Phase G persistent media quality reports derived from real probed facts.
  */
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { withWorkspaceTransaction } from '../lib/db.js';
 import { probeMedia } from './video/clipping.js';
+
+/** Content checksum bound to a human approval; no metadata or filename is used. */
+async function clipChecksum(path: string): Promise<string | null> {
+  try {
+    const hash = createHash('sha256');
+    for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
+    return `sha256:${hash.digest('hex')}`;
+  } catch {
+    return null;
+  }
+}
 
 export interface QualityCheck {
   key: string;
@@ -63,11 +76,13 @@ export async function evaluateClip(input: {
   });
 
   const passed = checks.every((check) => check.passed);
+  const checksum = passed ? await clipChecksum(input.clipPath) : null;
   const report: any = await withWorkspaceTransaction(input.workspaceId, (tx: any) => tx.qualityReport.create({
     data: {
       workspaceId: input.workspaceId,
       jobId: input.jobId ?? null,
       clipPath: input.clipPath,
+      checksum,
       passed,
       checksJson: checks,
     },
@@ -78,6 +93,6 @@ export async function evaluateClip(input: {
 export async function listQualityReports(workspaceId: string, take = 100): Promise<any[]> {
   return withWorkspaceTransaction<any[]>(workspaceId, (tx: any) => tx.qualityReport.findMany({
     where: { workspaceId }, orderBy: { createdAt: 'desc' }, take: Math.min(500, Math.max(1, take)),
-    select: { id: true, jobId: true, clipPath: true, passed: true, createdAt: true, checksJson: true },
+    select: { id: true, jobId: true, clipPath: true, checksum: true, passed: true, createdAt: true, checksJson: true },
   }));
 }

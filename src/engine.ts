@@ -29,6 +29,7 @@ import {
 } from './jobs.js';
 import { executeRun } from './workflows.js';
 import { discoveryEnabled, enqueueDueDiscoverySchedules, executeDiscovery } from './discovery.js';
+import { enqueueDuePublishingSchedules, recoverStalePublishingSchedules } from './publishing.js';
 import { executePhaseGPipelineJob } from './phase-g-pipeline.js';
 import { runOrchestration } from './orchestration.js';
 import { newSpan, trace } from './qa-trace.js';
@@ -76,6 +77,8 @@ export interface EngineTickSummary {
   workflowRunsRecovered: number;
   orchestrationsResumed: number;
   scheduledSearchesQueued: number;
+  scheduledPublishingQueued: number;
+  publishingSchedulesRecovered: number;
   /** Workspace-level failures that would otherwise be silently swallowed. */
   errors: string[];
   jobs: { id: string; type: string; outcome: EngineOutcome; runId: string | null; error?: string }[];
@@ -277,6 +280,8 @@ export async function runEngineTick(opts: EngineTickOptions = {}): Promise<Engin
     workflowRunsRecovered: 0,
     orchestrationsResumed: 0,
     scheduledSearchesQueued: 0,
+    scheduledPublishingQueued: 0,
+    publishingSchedulesRecovered: 0,
     errors: [],
     jobs: [],
   };
@@ -301,6 +306,8 @@ export async function runEngineTick(opts: EngineTickOptions = {}): Promise<Engin
       if (discoveryEnabled()) {
         summary.scheduledSearchesQueued += await enqueueDueDiscoverySchedules(workspace.id, now);
       }
+      summary.publishingSchedulesRecovered += await recoverStalePublishingSchedules(workspace.id, now);
+      summary.scheduledPublishingQueued += await enqueueDuePublishingSchedules(workspace.id, now);
 
       const claimed = await claimDueJobs(workspace.id, workerId, {
         now,

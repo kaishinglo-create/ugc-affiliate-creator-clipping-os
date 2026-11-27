@@ -45,6 +45,9 @@ model Workspace {
   analyticsSnapshots   AnalyticsSnapshot[]
   affiliateClicks      AffiliateClick[]
   affiliateConversions AffiliateConversion[]
+  affiliateLinks       AffiliateLink[]
+  publishingAccounts   PublishingAccount[]
+  publishingSchedules  PublishingSchedule[]
   creators             Creator[]
   brands               Brand[]
   campaigns            Campaign[]
@@ -361,30 +364,128 @@ model AnalyticsSnapshot {
 }
 
 model AffiliateClick {
-  id             String    @id @default(cuid())
-  workspaceId    String
-  contentId      String?
-  offerId        String?
-  clickedAt      DateTime  @default(now())
-  idempotencyKey String?
-  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  id              String    @id @default(cuid())
+  workspaceId     String
+  contentId       String?
+  offerId         String?
+  linkId          String?
+  postId          String?
+  campaignId      String?
+  creatorId       String?
+  productId       String?
+  platform        String?
+  utmSource       String?
+  utmMedium       String?
+  utmCampaign     String?
+  utmContent      String?
+  utmTerm         String?
+  referrer        String?
+  externalEventId String?
+  clickedAt       DateTime  @default(now())
+  idempotencyKey  String?
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@unique([workspaceId, idempotencyKey])
+  @@unique([workspaceId, externalEventId])
   @@index([workspaceId])
+  @@index([workspaceId, campaignId])
+  @@index([workspaceId, creatorId])
+  @@index([workspaceId, platform])
 }
 
 model AffiliateConversion {
-  id             String    @id @default(cuid())
-  workspaceId    String
-  clickId        String?
-  amountCents    Int
-  status         String    @default("pending")
-  convertedAt    DateTime  @default(now())
-  idempotencyKey String?
-  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  id              String    @id @default(cuid())
+  workspaceId     String
+  clickId         String?
+  amountCents     Int
+  commissionCents Int?
+  currency        String?
+  status          String    @default("pending")
+  convertedAt     DateTime  @default(now())
+  payoutReference String?
+  paidAt          DateTime?
+  externalEventId String?
+  idempotencyKey  String?
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@unique([workspaceId, idempotencyKey])
+  @@unique([workspaceId, externalEventId])
   @@index([workspaceId])
+}
+
+/**
+ * Phase H: stored affiliate links. Tokens are public identifiers, never
+ * secrets. Commission is derived from real conversion amounts only.
+ */
+model AffiliateLink {
+  id             String    @id @default(cuid())
+  workspaceId    String
+  token          String
+  campaignId     String?
+  creatorId      String?
+  productId      String?
+  offerId        String
+  destinationUrl String
+  commissionBps  Int?
+  disclosureText String?
+  status         String    @default("active")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, token])
+  @@index([workspaceId, campaignId])
+}
+
+/**
+ * Phase H: explicit target accounts for publishing. No credential value is
+ * stored here; credentials remain in the encrypted API Integration Center.
+ */
+model PublishingAccount {
+  id          String    @id @default(cuid())
+  workspaceId String
+  platform    String
+  accountKey  String
+  displayName String?
+  note        String?
+  status      String    @default("ACTIVE")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, platform, accountKey])
+  @@index([workspaceId, platform])
+}
+
+/**
+ * Phase H: one durable, timezone-aware publishing plan. An engine tick
+ * enqueues at most one job per plan; approval and quality binding are checked
+ * again at enqueue and at upload settlement.
+ */
+model PublishingSchedule {
+  id               String    @id @default(cuid())
+  workspaceId      String
+  platform         String
+  accountKey       String?
+  entityType       String
+  entityId         String
+  idempotencyKey   String
+  approvalId       String
+  qualityReportId  String?
+  checksum         String?
+  options          Json?
+  localTime        String
+  timezone         String
+  runAt            DateTime
+  status           String    @default("PENDING")
+  lastError        String?
+  lastRunAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  workspace        Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId, status, runAt])
 }
 
 model Creator {
@@ -542,6 +643,8 @@ model Approval {
   requestedBy String?
   decidedBy   String?
   decidedAt   DateTime?
+  expiresAt   DateTime?
+  revokedAt   DateTime?
   reason      String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -973,6 +1076,7 @@ model QualityReport {
   workspaceId  String
   jobId        String?
   clipPath     String
+  checksum     String?
   passed       Boolean  @default(false)
   checksJson   Json
   createdAt    DateTime @default(now())

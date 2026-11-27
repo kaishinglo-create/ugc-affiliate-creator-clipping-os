@@ -21,8 +21,8 @@
  */
 
 import { withWorkspaceTransaction } from '../lib/db.js';
-import { summarizeAttribution, summarizePayouts } from './affiliate.js';
-import type { AttributionSummary, PayoutSummary } from './affiliate.js';
+import { summarizeAffiliateRevenue, summarizeAttribution, summarizePayouts } from './affiliate.js';
+import type { AffiliateRevenueSummary, AttributionSummary, PayoutSummary } from './affiliate.js';
 
 export const ANALYTICS_SOURCE_NAMES = [
   'analytics_snapshots',
@@ -117,6 +117,8 @@ export type WorkspaceAnalytics = {
   attribution: AttributionSummary | null;
   /** Null unless conversion rows exist. Derived via summarizePayouts. */
   payouts: PayoutSummary | null;
+  /** Phase H.4: revenue per clip/creator/platform/campaign/UTM source. */
+  affiliateRevenue: AffiliateRevenueSummary | null;
   performance: PerformanceAnalytics[];
   /** Stable `${target}:${reason}` keys for unavailable sources and derived metrics. */
   missing: string[];
@@ -230,7 +232,7 @@ export async function collectWorkspaceAnalytics(
   const from = windowMs === null ? null : new Date(to.getTime() - windowMs);
 
   return withWorkspaceTransaction(workspaceId, async (tx: any) => {
-    const [snapshots, clicks, conversions, campaignRows, creators, brands, posts, performanceSnapshots] = await Promise.all([
+    const [snapshots, clicks, conversions, campaignRows, creators, brands, posts, performanceSnapshots, links] = await Promise.all([
       tx.analyticsSnapshot.findMany({
         where: {
           workspaceId,
@@ -251,6 +253,7 @@ export async function collectWorkspaceAnalytics(
         where: { workspaceId, ...within('capturedAt', from, to) },
         orderBy: { capturedAt: 'asc' },
       }),
+      tx.affiliateLink.findMany({ where: { workspaceId, ...within('createdAt', from, to) } }),
     ]);
 
     const counts: Record<AnalyticsSourceName, number> = {
@@ -277,6 +280,9 @@ export async function collectWorkspaceAnalytics(
       : null;
     const payouts = sourceMap.get('affiliate_conversions')!.available ? summarizePayouts(conversions) : null;
     const commissionsCents = payouts ? payouts.approved.amountCents + payouts.paid.amountCents : null;
+    const affiliateRevenue = sourceMap.get('affiliate_conversions')!.available
+      ? summarizeAffiliateRevenue({ clicks, conversions, links, posts })
+      : null;
 
     const campaigns = campaignRows.slice(0, limit).map((row: any) => campaignView(row, workspaceId));
     const performance = performanceViews(posts, performanceSnapshots).slice(0, limit);
@@ -285,6 +291,8 @@ export async function collectWorkspaceAnalytics(
       .filter((source) => !source.available)
       .map((source) => `${source.source}:${source.reason}`);
     if (commissionsCents === null) missing.push(`commissionsCents:${sourceMap.get('affiliate_conversions')!.reason}`);
+    // The H.4 revenue view exposes a null commission explicitly via its own
+    // endpoint; the legacy missing list must keep its documented shape.
     if (cashRevenue.cents === null) missing.push(`revenueCents:${cashRevenue.reason}`);
 
     return {
@@ -300,6 +308,7 @@ export async function collectWorkspaceAnalytics(
       cashRevenue,
       attribution,
       payouts,
+      affiliateRevenue,
       performance,
       missing,
     };

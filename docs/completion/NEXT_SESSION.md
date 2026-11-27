@@ -1,5 +1,27 @@
 # NEXT SESSION
 
+## Aktueller Stand (2026-11-27, Phase H)
+
+- Branch `feature/phase-h-live-publishing-2026-11-27`, Basis `main` `55d28c4`.
+  Alle Änderungen uncommitted. Kein Commit/Push/PR/Merge/Deploy/Publishing und
+  kein Controller-Neustart ohne separate Freigabe; STOP-Flag vorhanden.
+- Phase G ist abgeschlossen und in `main` gemergt (PR #32, Post-Merge-CI
+  `45946760934` grün, `main` = `origin/main` = `55d28c4`).
+- Phase H lokal implementiert: Publishing-Queue/Pläne/Kill-Switch/Crash-Recovery,
+  offizielle Adapter mit verschlüsselten Credentials und `NOT_CONFIGURED` ohne
+  echte Zugangsdaten, menschliche v2-Freigabekette mit Checksumme, Affiliate-
+  Links/UTM/Webhooks/Dedup/Provisionen/Payouts und lesende H.5-Panels.
+- `EXTERNAL_LIVE_VERIFIED: none`: keine Plattform-Credentials/OAuth-Freigaben,
+  kein `YOUTUBE_API_KEY`/`OLLAMA_API_KEY`, kein öffentlicher Host, keine
+  Deployment-Credentials. Statusdateien und Finalreport siehe Repository-Root.
+- Lokale Finalabnahme abgeschlossen: `READY_FOR_COMMIT` (zwei isolierte
+  `qa:full`-Läufe je 353/353, Browser-Gates 9/9 + 23/23 + 30/30,
+  `verify:phase-g` passed, Finalstand `0fa61ade…`). Kein Commit ohne separate
+  ausdrückliche Freigabe.
+- Beim Wiederaufnehmen zuerst `PHASE_H_FINAL_ACCEPTANCE_REPORT.md` und
+  `PHASE_H_TASKS.json` lesen; Phase I ist vorbereitet (`PHASE_I_PREPARATION.md`),
+  aber nicht gestartet.
+
 ## Einstieg
 
 - Repo: `/home/kaishinglo/ugc-affiliate-creator-clipping-os`
@@ -206,3 +228,17 @@ bash scripts/controller-watchdog.sh                 # respektiert Cooldowns
 - Final merge into main complete.
 - Status MAIN_INTEGRATION_COMPLETE.
 - Next: Phase G (prepared, not started).
+
+## Korrektur Phase H (Finalabnahme 2026-11-27)
+
+- Phase G ist in `main` gemergt; Phase H läuft auf
+  `feature/phase-h-live-publishing-2026-11-27`, weiterhin uncommitted.
+- Konkurrierende Prozesse wurden kontrolliert beendet; der während einer
+  laufenden Quelländerung gestartete QA-Lauf wurde verworfen.
+- Quellstand eingefroren: `docs/testing/evidence/phase-h/source-freeze.json`
+  (Manifest `a415f820…`). Danach nur Dokumentation geändert.
+- Neu: IP-Pinning/Redirect-Schutz im Publishing-Pfad, realpath/O_NOFOLLOW für
+  Medien, Workspace-/Provider-gebundene Webhook-HMACs, 256-KiB-Raw-Body-Cap,
+  DST-fail-closed, schreibende Dashboard-Aktionen. 345/345 Tests in 84 Dateien.
+- Wiederaufnahme: `PHASE_H_TASKS.json` und `PHASE_H_FINAL_ACCEPTANCE_REPORT.md`.
+  Kein Commit/Push/PR/Merge/Deploy/Publishing ohne separate Freigabe.

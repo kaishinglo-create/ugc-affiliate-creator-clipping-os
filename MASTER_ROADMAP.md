@@ -42,8 +42,52 @@
 
 ## Phase H – Live Publishing and Affiliate Tracking
 
-- Handoff prepared, not started: `docs/autonomous-build/PHASE_H_PREPARATION.md` (goals, prerequisites, acceptance criteria, explicit non-implementation). Awaiting explicit Phase H approval.
-- Reuses the existing publishing queue and manual approval gate. No automatic publishing, no adapter stub presented as live, no deployment added.
+- Final status: **READY_FOR_COMMIT** — H.0–H.8 complete, 353/353 tests in 87
+  files, two isolated `qa:full` runs on frozen source, Playwright 9/9,
+  MECE 30/30, frontend 23/23, real media pipeline PASS, secret scan 0 matches.
+  Report: `PHASE_H_FINAL_ACCEPTANCE_REPORT.md`.
+- Official Phase-H development approval received 2026-11-27. Branch
+  `feature/phase-h-live-publishing-2026-11-27`, baseline `main`
+  `55d28c4e210fcbe9b9877fda090cf796ade8c280`; all changes remain **uncommitted**.
+  Work packages H.0–H.8 are tracked in `PHASE_H_TASKS.json`; master prompt in
+  `docs/autonomous-build/PHASE_H_MASTERPROMPT.md`. Recovery audit:
+  `PHASE_H_RECOVERY_AUDIT.md`; MECE matrix: `PHASE_H_FEATURE_MATRIX.md`.
+- H.0 complete: four full audits before implementation; no duplicate queue —
+  `Job(category=PUBLISHING)` remains the durable queue.
+- H.1 implemented: `PublishingAccount`/`PublishingSchedule` models with RLS,
+  IANA-timezone plans, idempotency, retry/backoff, DLQ, crash recovery,
+  circuit-breaker reads, daily attempt cap, kill-switch preflight and audit.
+- H.2 implemented: official YouTube/TikTok/Instagram adapters behind encrypted
+  workspace credentials and `PUBLISHING_LIVE_ADAPTERS`; Shorts/Reels formats,
+  progress checkpoints, token-refresh persistence, no fake uploads and no
+  `CONNECTED` without a real probe. Without credentials: `NOT_CONFIGURED`.
+- H.3 implemented: SHA-256 checksum → approval request → explicit human decision
+  → versioned v2 binding (clip/checksum/account/parameters) → queue → authorized
+  upload → confirmation → audit. Changes invalidate the approval; expiry and
+  revocation are re-checked before upload/retry. Unknown upload outcomes are
+  non-retryable and require manual reconciliation.
+- H.4 implemented: affiliate links with UTM/disclosure, signed server-side
+  webhooks, click/conversion dedup, real `commissionCents` only, payout
+  persistence and truth-first revenue per clip/creator/platform/campaign/UTM.
+  Missing commissions stay `null`/`—`.
+- H.5 implemented as read panels plus write actions (accounts, approvals,
+  schedules, links, retry, revoke, disable) in the existing `calendar`,
+  `agents`, `analytics` and `campaigns` views; no new tab. All `h5-*` panels also
+  render with explicit missing markers in a fresh workspace. `LOCAL_IMPLEMENTED`,
+  `LOCAL_VERIFIED` and `EXTERNAL_LIVE_VERIFIED: NONE` are shown separately.
+- H.6: typecheck, ESLint, build, 327 baseline tests plus 26 new Phase-H tests
+  (353 total in 87 files) are green. Two isolated `qa:full` runs on the
+  identical frozen stand each passed 353/353; Playwright 9/9, frontend
+  acceptance 23/23, MECE browser check 30/30, `verify:phase-g` passed, DB
+  verification 7/7 and secret scan (4 values, 520 files, 0 matches) are
+  documented in `PHASE_H_FINAL_ACCEPTANCE_REPORT.md`.
+- External live verification remains blocked (`EXTERNAL_LIVE_VERIFIED: none`):
+  no platform credentials/OAuth app approvals, no `YOUTUBE_API_KEY`, no
+  `OLLAMA_API_KEY`, no public host, no deployment credentials and no real
+  affiliate-network signature scheme. Controller/Supervisor remain `stopped`.
+- No commit, push, PR, merge, deployment, controller restart or real upload has
+  been performed. Final status: `PHASE_H_READY_FOR_COMMIT` (awaiting explicit
+  commit approval).
 
 ## Phase I – Self-Healing and Self-Improving
 

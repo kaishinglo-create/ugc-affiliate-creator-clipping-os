@@ -9,10 +9,14 @@
  * job and must re-check both before recording any successful result.
  */
 import { lookup as dnsLookup } from 'node:dns/promises';
-import { readFile, stat } from 'node:fs/promises';
+import { open, realpath } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { isIP } from 'node:net';
+import { sep } from 'node:path';
+import { fetch as undiciFetch } from 'undici';
 import { redactText } from '../lib/redaction.js';
-import { workspaceMediaPath } from './media-workspace.js';
+import { workspaceMediaPath, workspaceMediaRoot } from './media-workspace.js';
+import { createPinnedAgent, resolvePinnedTarget, type PinnedTarget } from './media-download.js';
 
 export type PublishingFetch = typeof globalThis.fetch;
 export type PublishingLookup = (hostname: string) => Promise<Array<{ address: string; family: number }>>;
@@ -29,6 +33,23 @@ export interface LivePublishingRequest {
   env: Record<string, string>;
 }
 
+export interface PublishingProgress {
+  /** Stable stage identifier; no credentials or upstream payloads. */
+  stage: string;
+  /** 0-100 when the platform exposes meaningful progress. */
+  percent?: number;
+  /** Operator-facing, already-redacted detail. */
+  detail?: string;
+}
+
+export interface PublishingRefreshedTokens {
+  accessToken?: string;
+  refreshToken?: string;
+  expiresIn?: number;
+  tokenType?: string;
+  scopes?: string[];
+}
+
 export interface LivePublishingContext {
   fetch?: PublishingFetch;
   lookup?: PublishingLookup;
@@ -36,7 +57,27 @@ export interface LivePublishingContext {
   pollIntervalMs?: number;
   maxPolls?: number;
   sleep?: (ms: number) => Promise<void>;
+  /** Called at safe checkpoints; failures never abort the upload. */
+  onProgress?: (progress: PublishingProgress) => void | Promise<void>;
+  /** Called only after a REAL token endpoint returned new tokens. */
+  onTokenRefresh?: (tokens: PublishingRefreshedTokens) => void | Promise<void>;
+  /**
+   * Called only after a confirmed provider response. Implementations persist
+   * usage; failures are observational and never invent a provider value.
+   */
+  onProviderUsage?: (usage: {
+    platform: PublishingPlatformAdapter;
+    units: number;
+    confirmed: boolean;
+  }) => void | Promise<void>;
 }
+
+/** Official format support per platform. 'reels' is Instagram-only. */
+export const PLATFORM_FORMATS: Record<PublishingPlatformAdapter, readonly string[]> = {
+  youtube: ['standard', 'shorts'],
+  tiktok: ['standard', 'shorts'],
+  instagram: ['standard', 'reels'],
+};
 
 export interface VerifiedPublishingResult {
   /** A real, verified platform identifier. Never synthesized by this app. */
@@ -175,6 +216,53 @@ async function readJson(response: Response): Promise<any> {
   }
 }
 
+const MAX_PUBLISHING_REDIRECTS = 3;
+const PUBLISHING_REDIRECTS = new Set([301, 302, 303, 307, 308]);
+
+/** Resolve one hop and pin the socket to a validated address (Phase G mechanism). */
+async function resolvePublishingHop(url: string, ctx: LivePublishingContext): Promise<PinnedTarget> {
+  const target = await resolvePinnedTarget(url, ctx.lookup
+    ? { lookup: async (hostname: string) => ctx.lookup!(hostname) }
+    : {});
+  if (new URL(target.url).protocol !== 'https:') {
+    throw adapterError('SSRF_BLOCKED', 'Only https provider endpoints are allowed.', false);
+  }
+  return target;
+}
+
+/** A single hop over a pinned socket; injected fetch stays a controlled test double. */
+async function pinnedHop(
+  target: PinnedTarget,
+  init: RequestInit,
+  timeoutMs: number,
+  fetchImpl?: PublishingFetch,
+): Promise<Response> {
+  const requestInit = { ...init, redirect: 'manual' as RequestRedirect };
+  if (fetchImpl) return timedFetch(fetchImpl, target.url, requestInit, timeoutMs);
+  const agent = createPinnedAgent(target);
+  try {
+    return await timedFetch(
+      ((url: string, options: any) => undiciFetch(url, { ...options, dispatcher: agent } as any) as unknown as Promise<Response>) as unknown as PublishingFetch,
+      target.url,
+      requestInit,
+      timeoutMs,
+    );
+  } finally {
+    await agent.close().catch(() => undefined);
+  }
+}
+
+function stripCredentialHeaders(headers: Record<string, string>): void {
+  for (const key of Object.keys(headers)) {
+    if (/^(authorization|proxy-authorization|cookie|x-api-key|x-access-token)$/i.test(key)) delete headers[key];
+  }
+}
+
+/**
+ * Authenticated provider request with per-hop DNS validation, IP pinning,
+ * bounded redirects and strict credential containment. Authorization is never
+ * forwarded to a different origin, and a token refresh happens at most once.
+ */
 async function authedRequest(
   ctx: LivePublishingContext,
   tokenHolder: { value: string },
@@ -183,20 +271,37 @@ async function authedRequest(
   refresh: () => Promise<string>,
   timeoutMs: number,
 ): Promise<Response> {
-  const fetchImpl = ctx.fetch ?? globalThis.fetch;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const headers = headerRecord(init.headers);
-    headers.Authorization = `Bearer ${tokenHolder.value}`;
-    const response = await timedFetch(fetchImpl, url, { ...init, headers }, timeoutMs);
-    if (response.status === 401 && attempt === 0) {
-      // Exactly one refresh + retry, as required for real provider 401 codes.
+  const fetchImpl = ctx.fetch;
+  let current = url;
+  const originalOrigin = new URL(url).origin;
+  const headers = headerRecord(init.headers);
+  let redirected = 0;
+  let refreshed = false;
+  for (;;) {
+    const target = await resolvePublishingHop(current, ctx);
+    const hopHeaders = { ...headers, Authorization: `Bearer ${tokenHolder.value}` };
+    const response = await pinnedHop(target, { ...init, headers: hopHeaders }, timeoutMs, fetchImpl);
+    if (PUBLISHING_REDIRECTS.has(response.status)) {
+      if (redirected >= MAX_PUBLISHING_REDIRECTS) {
+        throw adapterError('SSRF_BLOCKED', 'Too many provider redirects.', false);
+      }
+      const location = response.headers.get('location');
+      const next = await assertPublicHttpsUrl(location, ctx.lookup ?? defaultLookup);
+      if (!next) throw adapterError('SSRF_BLOCKED', 'Provider redirect target is not allowed.', false);
+      const nextOrigin = new URL(next).origin;
+      if (nextOrigin !== originalOrigin) stripCredentialHeaders(headers);
+      current = next;
+      redirected += 1;
+      continue;
+    }
+    if (response.status === 401 && !refreshed) {
+      refreshed = true;
       tokenHolder.value = await refresh();
       continue;
     }
     ensureOk(response);
     return response;
   }
-  throw adapterError('TOKEN_EXPIRED', 'Platform rejected credentials after token refresh.', true, 401);
 }
 
 async function authedJson(
@@ -210,12 +315,42 @@ async function authedJson(
   return readJson(await authedRequest(ctx, tokenHolder, url, init, refresh, timeoutMs));
 }
 
+async function reportProgress(
+  ctx: LivePublishingContext,
+  stage: string,
+  percent?: number,
+  detail?: string,
+): Promise<void> {
+  if (!ctx.onProgress) return;
+  try {
+    await ctx.onProgress({ stage, ...(percent === undefined ? {} : { percent }), ...(detail ? { detail } : {}) });
+  } catch {
+    // Progress is observational; a failed callback must never abort an upload.
+  }
+}
+
+/** Record provider usage only after the platform confirmed the operation. */
+async function reportConfirmedUsage(
+  ctx: LivePublishingContext,
+  platform: PublishingPlatformAdapter,
+  units = 1,
+): Promise<void> {
+  if (!ctx.onProviderUsage) return;
+  try {
+    await ctx.onProviderUsage({ platform, units, confirmed: true });
+  } catch {
+    // Usage accounting is observational; a failed write must not change the
+    // publishing result or invent a provider value.
+  }
+}
+
 async function refreshTokenRequest(
   ctx: LivePublishingContext,
   url: string,
   init: RequestInit,
   timeoutMs: number,
 ): Promise<string> {
+  await reportProgress(ctx, 'token_refresh');
   const fetchImpl = ctx.fetch ?? globalThis.fetch;
   let response: Response;
   try {
@@ -231,6 +366,22 @@ async function refreshTokenRequest(
   const json = await readJson(response);
   const token = nonEmptyId(json.access_token ?? json.data?.access_token);
   if (!token) throw adapterError('PLATFORM_RESPONSE_INVALID', 'Token response did not contain an access token.', false, response.status);
+  if (ctx.onTokenRefresh) {
+    try {
+      await ctx.onTokenRefresh({
+        accessToken: token,
+        ...(nonEmptyId(json.refresh_token ?? json.data?.refresh_token)
+          ? { refreshToken: String(nonEmptyId(json.refresh_token ?? json.data?.refresh_token)) }
+          : {}),
+        ...(Number.isFinite(Number(json.expires_in)) ? { expiresIn: Number(json.expires_in) } : {}),
+        ...(typeof json.token_type === 'string' ? { tokenType: json.token_type } : {}),
+        ...(typeof json.scope === 'string' ? { scopes: json.scope.split(/\s+/).filter(Boolean) } : {}),
+      });
+    } catch {
+      // Persistence is best-effort; never log or surface token material.
+    }
+  }
+  await reportProgress(ctx, 'token_ready');
   return token;
 }
 
@@ -336,8 +487,8 @@ const VIDEO_CONTENT_TYPES: Record<string, string> = {
   avi: 'video/x-msvideo',
 };
 
-/** Resolve basenames only through the workspace scratch root; no arbitrary paths. */
-async function resolveYouTubeMedia(workspaceId: string, options: Record<string, string | null>) {
+/** Resolve basenames through the workspace root with realpath + nofollow reads. */
+export async function resolveYouTubeMedia(workspaceId: string, options: Record<string, string | null>) {
   const name = options.mediaName ?? options.mediaFile ?? options.fileName;
   if (typeof name !== 'string' || !name.trim()) {
     throw adapterError('INVALID_MEDIA_INPUT', 'A workspace media basename is required.', false);
@@ -351,18 +502,38 @@ async function resolveYouTubeMedia(workspaceId: string, options: Record<string, 
   const extension = name.trim().split('.').pop()?.toLowerCase() ?? '';
   const contentType = VIDEO_CONTENT_TYPES[extension];
   if (!contentType) throw adapterError('INVALID_MEDIA_INPUT', 'Unsupported media type.', false);
-  let size: number;
   try {
-    const info = await stat(path);
-    if (!info.isFile() || info.size < 1 || info.size > MAX_MEDIA_BYTES) {
-      throw adapterError('INVALID_MEDIA_INPUT', 'Media file is missing or too large.', false);
+    const root = await realpath(workspaceMediaRoot(workspaceId));
+    const resolved = await realpath(path);
+    if (!resolved.startsWith(`${root}${sep}`)) {
+      throw adapterError('INVALID_MEDIA_INPUT', 'Media path leaves the workspace root.', false);
     }
-    size = info.size;
+    // O_NOFOLLOW + reading from the descriptor closes the check/use race: a
+    // later symlink swap cannot redirect the bytes that are actually uploaded.
+    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const info = await handle.stat();
+      if (!info.isFile() || info.size < 1 || info.size > MAX_MEDIA_BYTES) {
+        throw adapterError('INVALID_MEDIA_INPUT', 'Media file is missing or too large.', false);
+      }
+      const bytes = await handle.readFile();
+      if (bytes.length !== info.size) {
+        throw adapterError('INVALID_MEDIA_INPUT', 'Media file changed while being read.', false);
+      }
+      return { path, size: info.size, contentType, bytes };
+    } finally {
+      await handle.close();
+    }
   } catch (error) {
     if (error instanceof PublishingAdapterError) throw error;
     throw adapterError('INVALID_MEDIA_INPUT', 'Media file is not available.', false);
   }
-  return { path, size, contentType };
+}
+
+/** Normalized format from job options; unsupported values are rejected earlier. */
+function publishFormat(request: LivePublishingRequest): string {
+  const value = String(request.options.format ?? 'standard').trim().toLowerCase();
+  return PLATFORM_FORMATS[request.platform].includes(value) ? value : 'standard';
 }
 
 function privacyValue(raw: string | null | undefined): 'public' | 'unlisted' | 'private' {
@@ -413,8 +584,13 @@ async function publishYouTube(request: LivePublishingRequest, ctx: LivePublishin
   const refresh = () => refreshGoogleToken(ctx, request, timeoutMs);
   const tokenHolder = { value: await refresh() };
 
-  const title = request.options.title?.slice(0, 100) || request.idempotencyKey.slice(0, 100);
-  const description = (request.options.description ?? request.options.caption ?? '').slice(0, 5_000);
+  // YouTube decides Shorts from the uploaded media. Adding the official
+  // #shorts hashtag is metadata only; it never claims a platform confirmation.
+  const isShorts = publishFormat(request) === 'shorts';
+  const suffix = isShorts ? ' #shorts' : '';
+  const title = `${request.options.title?.slice(0, 100) || request.idempotencyKey.slice(0, 100)}${suffix}`.slice(0, 100);
+  const description = `${(request.options.description ?? request.options.caption ?? '').slice(0, 5_000)}${suffix}`.slice(0, 5_000);
+  await reportProgress(ctx, 'metadata_ready', 10);
   const metadata = await authedRequest(ctx, tokenHolder, GOOGLE_UPLOAD_URL, {
     method: 'POST',
     headers: {
@@ -429,13 +605,10 @@ async function publishYouTube(request: LivePublishingRequest, ctx: LivePublishin
   }, refresh, timeoutMs);
   const sessionUrl = googleSessionUrl(metadata.headers.get('location'));
 
-  let bytes: Buffer;
-  try {
-    bytes = await readFile(media.path);
-  } catch {
-    throw adapterError('INVALID_MEDIA_INPUT', 'Media file could not be read.', false);
-  }
+  // Bytes were read once from an O_NOFOLLOW descriptor bound to the real file.
+  const bytes = media.bytes;
   if (bytes.length !== media.size) throw adapterError('INVALID_MEDIA_INPUT', 'Media file changed during upload.', false);
+  await reportProgress(ctx, 'uploading', 30);
 
   const uploadJson = await authedJson(ctx, tokenHolder, sessionUrl, {
     method: 'PUT',
@@ -448,6 +621,7 @@ async function publishYouTube(request: LivePublishingRequest, ctx: LivePublishin
   }, refresh, timeoutMs);
   const videoId = nonEmptyId(uploadJson.id);
   if (!videoId) throw adapterError('PLATFORM_RESPONSE_INVALID', 'Upload response did not contain a video id.', false);
+  await reportProgress(ctx, 'upload_complete', 80);
 
   const statusJson = await authedJson(ctx, tokenHolder, `${GOOGLE_STATUS_URL}&id=${encodeURIComponent(videoId)}`, {
     method: 'GET',
@@ -459,6 +633,8 @@ async function publishYouTube(request: LivePublishingRequest, ctx: LivePublishin
   if (!item || (uploadStatus !== 'uploaded' && uploadStatus !== 'processed')) {
     throw adapterError('PLATFORM_TEMPORARY_ERROR', 'Uploaded video is not yet available.', true);
   }
+  await reportProgress(ctx, 'platform_confirmed', 100);
+  await reportConfirmedUsage(ctx, request.platform);
   return { externalId: videoId, url: null, publishedAt: null };
 }
 
@@ -476,12 +652,19 @@ async function refreshTikTokToken(ctx: LivePublishingContext, request: LivePubli
   }, timeoutMs);
 }
 
+function pollBounds(ctx: LivePublishingContext): { maxPolls: number; intervalMs: number } {
+  return {
+    maxPolls: Math.min(20, Math.max(1, Math.floor(ctx.maxPolls ?? DEFAULT_MAX_POLLS))),
+    intervalMs: Math.max(0, Math.floor(ctx.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS)),
+  };
+}
+
 async function pollFor<T>(
   ctx: LivePublishingContext,
   probe: () => Promise<{ done: boolean; value?: T }>,
+  stage = 'polling',
 ): Promise<T | null> {
-  const maxPolls = Math.min(20, Math.max(1, Math.floor(ctx.maxPolls ?? DEFAULT_MAX_POLLS)));
-  const intervalMs = Math.max(0, Math.floor(ctx.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS));
+  const { maxPolls, intervalMs } = pollBounds(ctx);
   const sleep = ctx.sleep ?? (async (ms: number) => {
     await new Promise<void>((resolve) => {
       const handle = setTimeout(() => { resolve(); }, ms);
@@ -489,6 +672,7 @@ async function pollFor<T>(
     });
   });
   for (let attempt = 0; attempt < maxPolls; attempt += 1) {
+    await reportProgress(ctx, stage, Math.min(95, 40 + Math.floor((attempt / maxPolls) * 50)));
     const result = await probe();
     if (result.done) return result.value ?? null;
     if (attempt < maxPolls - 1 && intervalMs > 0) await sleep(intervalMs);
@@ -515,6 +699,7 @@ async function publishTikTok(request: LivePublishingRequest, ctx: LivePublishing
   }, refresh, timeoutMs);
   const publishId = nonEmptyId(initJson.data?.publish_id);
   if (!publishId) throw adapterError('PLATFORM_RESPONSE_INVALID', 'Publish response did not contain a publish id.', false);
+  await reportProgress(ctx, 'upload_initiated', 40);
 
   const externalId = await pollFor<string>(ctx, async () => {
     const statusJson = await authedJson(ctx, tokenHolder, TIKTOK_STATUS_URL, {
@@ -534,8 +719,10 @@ async function publishTikTok(request: LivePublishingRequest, ctx: LivePublishing
       throw adapterError('PLATFORM_VALIDATION_ERROR', 'Platform rejected the video.', false);
     }
     return { done: false };
-  });
+  }, 'tiktok_status');
   if (!externalId) throw adapterError('PLATFORM_TEMPORARY_ERROR', 'Platform did not confirm publication.', true);
+  await reportProgress(ctx, 'platform_confirmed', 100);
+  await reportConfirmedUsage(ctx, request.platform);
   return { externalId, url: null, publishedAt: null };
 }
 
@@ -567,16 +754,19 @@ async function publishInstagram(request: LivePublishingRequest, ctx: LivePublish
   const refresh = () => refreshInstagramToken(ctx, request, timeoutMs);
   const tokenHolder = { value: await refresh() };
 
+  const mediaType = publishFormat(request) === 'reels' ? 'REELS' : 'VIDEO';
+  await reportProgress(ctx, 'container_create', 20);
   const containerJson = await authedJson(ctx, tokenHolder, `${INSTAGRAM_GRAPH_BASE}/${userId}/media`, {
     method: 'POST',
     ...instagramForm({
-      media_type: 'VIDEO',
+      media_type: mediaType,
       video_url: videoUrl,
       caption: (request.options.caption ?? request.options.description ?? '').slice(0, 2_200),
     }),
   }, refresh, timeoutMs);
   const containerId = nonEmptyId(containerJson.id);
   if (!containerId) throw adapterError('PLATFORM_RESPONSE_INVALID', 'Media container response did not contain an id.', false);
+  await reportProgress(ctx, 'container_created', 40);
 
   const finished = await pollFor<boolean>(ctx, async () => {
     const statusJson = await authedJson(ctx, tokenHolder, `${INSTAGRAM_GRAPH_BASE}/${encodeURIComponent(containerId)}?fields=status,status_code`, {
@@ -588,8 +778,9 @@ async function publishInstagram(request: LivePublishingRequest, ctx: LivePublish
       throw adapterError('PLATFORM_VALIDATION_ERROR', 'Platform rejected the media container.', false);
     }
     return { done: false };
-  });
+  }, 'instagram_container');
   if (!finished) throw adapterError('PLATFORM_TEMPORARY_ERROR', 'Media container did not finish.', true);
+  await reportProgress(ctx, 'publishing', 90);
 
   const publishJson = await authedJson(ctx, tokenHolder, `${INSTAGRAM_GRAPH_BASE}/${userId}/media_publish`, {
     method: 'POST',
@@ -598,6 +789,8 @@ async function publishInstagram(request: LivePublishingRequest, ctx: LivePublish
   const mediaId = nonEmptyId(publishJson.id);
   if (!mediaId) throw adapterError('PLATFORM_RESPONSE_INVALID', 'Publish response did not contain a media id.', false);
   const url = isHttpsUrl(publishJson.permalink_url ?? publishJson.permalink);
+  await reportProgress(ctx, 'platform_confirmed', 100);
+  await reportConfirmedUsage(ctx, request.platform);
   return { externalId: mediaId, url, publishedAt: null };
 }
 
@@ -610,6 +803,10 @@ export async function executeLivePublishing(
   ctx: LivePublishingContext = {},
 ): Promise<LivePublishingResult> {
   try {
+    const requestedFormat = String(request.options.format ?? 'standard').trim().toLowerCase();
+    if (!PLATFORM_FORMATS[request.platform].includes(requestedFormat)) {
+      throw adapterError('UNSUPPORTED_FORMAT', `Format ${requestedFormat} is not supported on ${request.platform}.`, false);
+    }
     let value: VerifiedPublishingResult;
     if (request.platform === 'youtube') value = await publishYouTube(request, ctx);
     else if (request.platform === 'tiktok') value = await publishTikTok(request, ctx);

@@ -1,116 +1,159 @@
 {
-  "phase": "G",
-  "status": "phase_g_main_integration_complete_external_live_pending",
-  "branch": "main",
-  "featureBranch": "feature/phase-g-completion-2026-11-27",
-  "baseSha": "a45d06a7c433cc0efc8848c48243a7d201f8648b",
-  "verifiedSourceSha": "fd9a35689fef4e9f785942e02b03034ea2717f36",
-  "prHeadSha": "e156e5d84c519f92eca3911cbe85d4a73530e67b",
-  "mainSha": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
-  "localMainSha": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
-  "remoteMainSha": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
-  "localCommits": [
-    "9f8efc9",
-    "b685a7b",
-    "a8c732d",
-    "fe9e576",
-    "d3a13ac",
-    "fd9a356",
-    "df5f967",
-    "e156e5d"
-  ],
-  "commitNote": "d3a13ac and fd9a356 were created by another local process during acceptance; df5f967 and e156e5d contain scripts, evidence and documentation only. PR #32 was merged into main as 45cacf55.",
-  "prUrl": "https://github.com/kaishinglo-create/ugc-affiliate-creator-clipping-os/pull/32",
-  "pr": {
-    "number": 32,
-    "state": "MERGED",
-    "headRefOid": "e156e5d84c519f92eca3911cbe85d4a73530e67b",
-    "baseRefName": "main",
-    "mergeable": "MERGEABLE",
-    "mergeStateStatus": "CLEAN"
+  "phase": "H",
+  "status": "phase_h_ready_for_commit",
+  "branch": "feature/phase-h-live-publishing-2026-11-27",
+  "baseSha": "55d28c4e210fcbe9b9877fda090cf796ade8c280",
+  "headSha": "55d28c4e210fcbe9b9877fda090cf796ade8c280",
+  "uncommittedChanges": true,
+  "workPackages": {
+    "H.0": "completed",
+    "H.1": "completed_locally",
+    "H.2": "completed_locally",
+    "H.3": "completed_locally",
+    "H.4": "completed_locally",
+    "H.5": "completed_locally_read_only_panels",
+    "H.6": "pending_final_browser_acceptance",
+    "H.7": "in_progress",
+    "H.8": "in_progress"
   },
-  "ci": {
-    "prRuns": [45945647539, 45946271046],
-    "postMergeRun": {
-      "runId": 45946760934,
-      "status": "completed",
-      "conclusion": "success",
-      "headSha": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
-      "url": "https://github.com/kaishinglo-create/ugc-affiliate-creator-clipping-os/actions/runs/45946760934"
-    }
-  },
-  "mergeCommit": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
-  "mergedAt": "2026-11-27T05:35:54Z",
-  "tests": {
-    "testFiles": 81,
-    "testsPassed": 327,
-    "focusedSecurityRegression": 25
-  },
-  "qaFullRuns": [
-    {
-      "runId": "qa-full-2026-11-27T04-00-18-842Z-7977",
-      "outcome": "passed",
-      "tests": "327 passed (327)",
-      "testFiles": "81 passed (81)",
-      "duration": "740.37s",
-      "watchdogTriggered": false
-    },
-    {
-      "runId": "qa-full-2026-11-27T04-13-28-352Z-11885",
-      "outcome": "passed",
-      "tests": "327 passed (327)",
-      "testFiles": "81 passed (81)",
-      "duration": "726.86s",
-      "watchdogTriggered": false
-    },
-    {
-      "runId": "qa-full-2026-11-27T05-40-19-843Z-29623",
-      "scope": "post-merge on main",
-      "outcome": "passed",
-      "tests": "327 passed (327)",
-      "testFiles": "81 passed (81)",
-      "duration": "748.15s",
-      "watchdogTriggered": false
-    }
-  ],
-  "browserAcceptance": {
-    "playwright": "9/9",
-    "meceBrowserCheck": "27/27",
-    "frontendTabs": "19/19",
-    "realMediaPipeline": "passed"
-  },
-  "realMediaReport": "docs/testing/evidence/phase-g/real-media.json",
-  "localGatesOnMain": {
-    "typecheck": "pass",
-    "eslint": "pass",
-    "build": "pass",
-    "regression": "327 passed (327)"
+  "implementation": {
+    "database": [
+      "prisma/migrations/20261127120000_phase_h_publishing_affiliate",
+      "prisma/migrations/20261127130000_phase_h_approval_lifecycle"
+    ],
+    "publishing": [
+      "src/publishing.ts",
+      "src/publishing-adapters.ts",
+      "src/engine.ts",
+      "src/quality-gate.ts"
+    ],
+    "affiliate": [
+      "src/affiliate.ts",
+      "src/affiliate-webhook.ts",
+      "src/analytics-sources.ts"
+    ],
+    "api": [
+      "src/index.ts",
+      "src/api-integration-center/service.ts"
+    ],
+    "frontend": [
+      "public/app.js"
+    ],
+    "tests": [
+      "tests/phase-h-regression.test.ts",
+      "tests/phase-h-security.test.ts"
+    ]
   },
   "controller": {
     "status": "stopped",
-    "stoppedAt": "2026-11-27T03:39:41.145Z",
     "stopFlagPresent": true,
+    "currentTask": null,
     "restarted": false
+  },
+  "tests": {
+    "baseline": 327,
+    "baselineFiles": 81,
+    "phaseHNew": {
+      "tests": 26,
+      "files": 6
+    },
+    "phaseHNewFiles": 6,
+    "expectedTotal": 353,
+    "expectedFiles": 87,
+    "qaFullRuns": [
+      {
+        "runId": "qa-full-2026-11-27T21-34-15-653Z-52057",
+        "outcome": "passed",
+        "tests": "353 passed (353)",
+        "testFiles": "87 passed (87)",
+        "duration": "658.87s",
+        "watchdogTriggered": false,
+        "role": "ugc_os_app",
+        "roleSuperuser": false,
+        "roleBypassRls": false,
+        "frozenSourceHash": "0fa61ade0af5239c551d6028fea5979abcbdad1c56e4cbf71a7e77398322d16a"
+      },
+      {
+        "runId": "qa-full-2026-11-27T21-46-12-279Z-55179",
+        "outcome": "passed",
+        "tests": "353 passed (353)",
+        "testFiles": "87 passed (87)",
+        "duration": "649.75s",
+        "watchdogTriggered": false,
+        "role": "ugc_os_app",
+        "roleSuperuser": false,
+        "roleBypassRls": false,
+        "frozenSourceHash": "0fa61ade0af5239c551d6028fea5979abcbdad1c56e4cbf71a7e77398322d16a"
+      }
+    ],
+    "note": "two isolated qa:full runs passed on identical final frozen source",
+    "verdict": "READY_FOR_COMMIT",
+    "frozenSourceHash": "0fa61ade0af5239c551d6028fea5979abcbdad1c56e4cbf71a7e77398322d16a",
+    "browserGates": {
+      "playwright": "9 passed (9)",
+      "frontendAcceptance": "23/23",
+      "meceBrowserCheck": "30/30",
+      "verifyPhaseG": "passed",
+      "browserServicesStoppedAfter": true
+    }
+  },
+  "localGates": {
+    "typecheck": "pass",
+    "eslint": "pass",
+    "build": "pass",
+    "secretScan": {
+      "checkedValues": 4,
+      "filesScanned": 519,
+      "matches": 0
+    },
+    "databaseVerification": {
+      "outcome": "passed",
+      "checks": 7
+    }
+  },
+  "browserAcceptance": {
+    "playwright": "pending",
+    "meceBrowserCheck": "pending",
+    "frontendAcceptance": "pending",
+    "phaseGPipeline": "pending"
+  },
+  "security": {
+    "audit": "PHASE_H_SECURITY_AUDIT.md",
+    "closedFindings": 17,
+    "residualRisks": [
+      "no_real_platform_credentials",
+      "dns_rebinding_ip_pinning_not_hardened",
+      "symlink_realpath_containment_open",
+      "no_four_eyes_approval",
+      "no_real_network_webhook_signature_scheme"
+    ]
   },
   "externalBlockers": [
     "YOUTUBE_API_KEY",
-    "discovery_mcp_provider",
     "OLLAMA_API_KEY",
     "platform_credentials",
-    "deployment_credentials",
-    "public_host_for_live_url_download"
+    "oauth_app_approval",
+    "public_host",
+    "deployment_credentials"
   ],
-  "nextPhase": "H",
-  "nextPhaseStatus": "prepared_not_started",
-  "nextPhaseHandoffReady": true,
+  "externalLiveVerification": "none",
+  "governance": {
+    "commitAuthorized": false,
+    "pushAuthorized": false,
+    "mergeAuthorized": false,
+    "deployAuthorized": false,
+    "publishAuthorized": false,
+    "controllerRestartAuthorized": false
+  },
   "commitDecision": "READY_FOR_COMMIT",
-  "finalStatus": "PHASE_G_MAIN_INTEGRATION_COMPLETE",
-  "externalLiveVerification": "pending",
-  "pushAuthorized": true,
-  "pushCompleted": true,
-  "prAuthorized": true,
-  "prCompleted": true,
-  "mergeAuthorized": true,
-  "mergeCompleted": true,
-  "deployAuthorized": false
+  "finalStatus": "PHASE_H_LOCAL_IMPLEMENTED",
+  "previousPhaseG": {
+    "status": "PHASE_G_MAIN_INTEGRATION_COMPLETE",
+    "mainSha": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
+    "pr": 32,
+    "tests": "327 passed (327)"
+  },
+  "nextPhase": "I",
+  "nextPhaseStatus": "prepared_not_started",
+  "nextPhasePreparation": "PHASE_I_PREPARATION.md"
 }
