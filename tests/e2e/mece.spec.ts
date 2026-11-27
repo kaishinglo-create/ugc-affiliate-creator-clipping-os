@@ -56,7 +56,10 @@ async function unlockDashboard(page: any): Promise<void> {
   await expect(page.locator('#tokenInput')).toBeVisible();
   await page.locator('#tokenInput').fill(requiredToken());
   await page.locator('#tokenSave').click();
-  await expect(page.locator('#login')).toBeHidden();
+  // init() performs several sequential authenticated API calls; after a cold
+  // control-service start the first unlock takes ~26s on this 2-CPU host.
+  // Keep the same assertion, but wait long enough for the real cold path.
+  await expect(page.locator('#login')).toBeHidden({ timeout: 30_000 });
   await expect(page.locator('#state')).toContainText(/Controller:|Bereit/);
 }
 

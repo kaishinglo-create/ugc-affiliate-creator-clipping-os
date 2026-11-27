@@ -239,7 +239,7 @@ describe('frontend controls regression', () => {
     h.storage.set('ugc_workspaceId', 'ws-1');
     h.elements.get('page')!.innerHTML = '<p>private data</p>';
     h.elements.get('auth-container')!.hidden = true;
-    h.elements.get('live-badge')!.textContent = '● LIVE DATA';
+    h.elements.get('live-badge')!.textContent = '● WORKSPACE DATA';
 
     await expect(h.hooks.api('/api/products')).rejects.toMatchObject({ status: 401, code: 'NOT_AUTHENTICATED' });
 
@@ -284,6 +284,32 @@ describe('frontend controls regression', () => {
     expect(appSource).toContain('/api/control/status');
     expect(appSource).not.toContain('data-action="agent-task-run"');
     expect(appSource).toContain('liveAdapter:false');
+    expect(indexSource).not.toContain('class="demo"');
+    expect(indexSource).not.toContain('external integrations disconnected');
+    expect(indexSource).not.toMatch(/DEMO DATA|Demo mode|offline/i);
+    expect(appSource).toContain('phaseg:"Phase G Studio"');
+    // A configured key/budget is not proof of a live provider connection.
+    expect(appSource).not.toContain('OLLAMA CONNECTED');
+    expect(appSource).toContain('OLLAMA KEY CONFIGURED');
+    expect(appSource).toContain('no live provider call is implied');
+  });
+
+  it('does not imply live rights or a live data feed from UI badges/actions', () => {
+    expect(indexSource).toContain('● WORKSPACE DATA');
+    expect(appSource).toContain("'● WORKSPACE DATA'");
+    expect(appSource).toContain('operator assertion, not as proof of verified rights');
+    expect(appSource).toContain('Auto clip ranking sends no highlights and returns an empty ranking');
+    expect(appSource).toContain('id="phaseg-srt"');
+    expect(appSource).toContain('getElementById("phaseg-srt")');
+    expect(appSource).not.toContain('srtName: (document.getElementById("phaseg-source")');
+  });
+
+  it('shows the Phase G breadcrumb instead of a stale Overview label', () => {
+    const h = createHarness();
+    h.hooks.state.user = { id: 'user-1' };
+    h.hooks.state.view = 'phaseg';
+    h.hooks.renderPage();
+    expect(h.elements.get('crumb')!.textContent).toBe('Phase G Studio');
   });
 
   it('validates cents fields before posting and uses the same saveEntry path', async () => {

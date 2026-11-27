@@ -1513,11 +1513,15 @@ app.post('/api/discovery/score', async (req, reply) => {
   const { scoreContentCandidate } = await import('./research-scoring.js');
   const report = scoreContentCandidate(body);
   if (body.persist === true) {
+    // Persisting is a workspace mutation, not a read-only score: members may
+    // score, but only owners/admins may store reports.
+    if (!requireOperatorRole(ctx, reply)) return;
     const { persistResearchReport } = await import('./research-reports.js');
     const stored = await persistResearchReport({
       workspaceId: ctx.workspaceId,
       title,
       report,
+      role: ctx.role,
       candidateId: body.candidateId === undefined ? null : body.candidateId,
       origin: body.origin === undefined ? undefined : body.origin,
     });

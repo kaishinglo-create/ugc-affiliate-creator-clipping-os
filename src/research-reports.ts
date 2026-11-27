@@ -27,7 +27,12 @@ export async function persistResearchReport(input: {
   report: ScoreReport;
   candidateId?: string | null;
   origin?: string;
+  /** Workspace role of the caller. Persisting is an OWNER/ADMIN mutation. */
+  role?: string;
 }): Promise<any> {
+  if (input.role !== 'OWNER' && input.role !== 'ADMIN') {
+    throw Object.assign(new Error('INSUFFICIENT_ROLE'), { statusCode: 403 });
+  }
   const workspaceId = String(input.workspaceId ?? '').trim();
   if (!workspaceId) throw invalid('INVALID_WORKSPACE');
   const title = String(input.title ?? '').trim().slice(0, 500);

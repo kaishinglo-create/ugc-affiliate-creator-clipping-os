@@ -18,7 +18,7 @@ const state = {
   authMessage: ""
 };
 
-const titles = {overview:"Overview",radar:"Product Radar",creators:"Creators",campaigns:"Campaigns",scripts:"Script Studio",clipping:"Clipping Studio",youtube:"YouTube Intelligence",content:"Content Factory",calendar:"Publishing Calendar",analytics:"Analytics & Revenue",agents:"Agent Control",integrations:"Integrations","api-integrations":"API Integration Center","agent-browser":"Agent Browser"};
+const titles = {overview:"Overview",radar:"Product Radar",creators:"Creators",campaigns:"Campaigns",scripts:"Script Studio",clipping:"Clipping Studio",youtube:"YouTube Intelligence",phaseg:"Phase G Studio",content:"Content Factory",calendar:"Publishing Calendar",analytics:"Analytics & Revenue",agents:"Agent Control",integrations:"Integrations","api-integrations":"API Integration Center","agent-browser":"Agent Browser"};
 const CONTROL_FALLBACK_URL = "http://127.0.0.1:3031/";
 const WORKFLOW_ACTIONS = ["echo", "delay"];
 const MEDIA_LANGUAGES = ["de", "en", "auto"];
@@ -413,6 +413,7 @@ function youtube() {
 function phaseg() {
   const out = state.data.phasegOutput ? '<pre class="panel" id="phaseg-output">'+esc(JSON.stringify(state.data.phasegOutput,null,2))+'</pre>' : '<div class="panel" id="phaseg-output">No Phase G request run yet.</div>';
   const form = '<section class="panel"><h2>Phase G Studio</h2><p class="sub">Live YouTube routes fail closed with YOUTUBE_NOT_CONFIGURED until a server-side API key is configured. All other actions use real backend endpoints.</p>'+
+  '<p class="sub">Rights: release/pipeline actions send AUTHORIZED as an operator assertion, not as proof of verified rights. Auto clip ranking sends no highlights and returns an empty ranking; use Clipping Studio highlights for real ranking.</p>'+
   '<div class="field-grid"><div class="field full"><label>Discovery query</label><input id="phaseg-query" value="creator workflow"></div>'+
   '<div class="field"><button class="btn primary" data-action="phaseg-youtube">YouTube search</button></div>'+
   '<div class="field"><button class="btn" data-action="phaseg-trending">Trending (DE)</button></div>'+
@@ -430,6 +431,7 @@ function phaseg() {
   '<div class="field"><button class="btn" data-action="phaseg-releases">Releases</button></div>'+
   '<div class="field"><button class="btn primary" data-action="phaseg-pipeline">Run full pipeline job</button></div>'+
   '<div class="field full"><label>Source / output name</label><input id="phaseg-source" value="source.mp4"><input id="phaseg-output" value="clip-9x16.mp4"></div>'+
+  '<div class="field full"><label>SRT name for SRT → VTT</label><input id="phaseg-srt" value="captions.srt"></div>'+
   '</div></section>';
   return heading("Phase G Studio","Discovery, research, media and quality controls backed by real APIs.") + form + out + loadingBlock();
 }
@@ -483,8 +485,9 @@ function aiPanel() {
   const agents = ai.agents || [];
   const budget = ai.budget || {};
   return '<section class="panel"><h2>AI gateway</h2>' +
-    '<p>' + tag(ai.configured ? "OLLAMA CONNECTED" : "NOT CONFIGURED", ai.configured ? "green" : "orange") +
+    '<p>' + tag(ai.configured ? "OLLAMA KEY CONFIGURED" : "NOT CONFIGURED", ai.configured ? "green" : "orange") +
     ' <span class="sub">provider ' + esc(ai.provider) + ' · mode ' + esc(ai.mode) + '</span></p>' +
+    '<p class="sub">Configuration/budget only — no live provider call is implied by this badge.</p>' +
     '<p>Requests today: ' + (budget.used || 0) + ' / ' + (budget.limit || 0) + ' <span class="sub">UTC day</span></p>' +
     (agents.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>Agent</th><th>Model</th></tr></thead><tbody>' +
       agents.map(a => '<tr><td>' + esc(a.agentKey) + '</td><td>' + esc(a.model) + '</td></tr>').join("") + '</tbody></table></div>' : '') +
@@ -891,7 +894,7 @@ function renderPage() {
   updateControlLink();
   const badge = $("#live-badge");
   if (badge) {
-    badge.textContent = state.error ? '● STALE DATA' : state.loading ? '● LOADING' : '● LIVE DATA';
+    badge.textContent = state.error ? '● STALE DATA' : state.loading ? '● LOADING' : '● WORKSPACE DATA';
     badge.style.color = state.error ? '#ff8a8a' : '';
   }
   const crumb = $("#crumb"); if (crumb) crumb.textContent = titles[state.view]||"Overview";
@@ -955,7 +958,7 @@ async function wireEvents() {
         else if (name === "phaseg-scores") res = await api("/api/discovery/scores");
         else if (name === "phaseg-auto-clips") res = await api("/api/media/clip-candidates/auto", {method:"POST", body: JSON.stringify({sourceName: (document.getElementById("phaseg-source")||{}).value||"source.mp4", highlights: [], targetDurationSeconds: 15})});
         else if (name === "phaseg-thumbnail") res = await api("/api/media/thumbnail", {method:"POST", body: JSON.stringify({sourceName: (document.getElementById("phaseg-source")||{}).value||"source.mp4", outputName: "thumbnail-9x16.png", profile:"9:16", atSeconds:1})});
-        else if (name === "phaseg-vtt") res = await api("/api/media/subtitles/vtt", {method:"POST", body: JSON.stringify({srtName: (document.getElementById("phaseg-source")||{}).value||"captions.srt"})});
+        else if (name === "phaseg-vtt") res = await api("/api/media/subtitles/vtt", {method:"POST", body: JSON.stringify({srtName: (document.getElementById("phaseg-srt")||{}).value||"captions.srt"})});
         else if (name === "phaseg-release") res = await api("/api/media/releases/request", {method:"POST", body: JSON.stringify({clipName: (document.getElementById("phaseg-output")||{}).value||"clip-9x16.mp4", rightsStatus:"AUTHORIZED"})});
         else if (name === "phaseg-releases") res = await api("/api/media/releases");
         else if (name === "phaseg-pipeline") res = await api("/api/phase-g/pipeline", {method:"POST", body: JSON.stringify({sourceName: (document.getElementById("phaseg-source")||{}).value||"source.mp4", outputPrefix: "studio", profile:"9:16", rightsStatus:"AUTHORIZED", highlights: [], topic: query})});

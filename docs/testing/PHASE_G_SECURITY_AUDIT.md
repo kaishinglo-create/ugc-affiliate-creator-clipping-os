@@ -9,38 +9,52 @@ or reproduced. The dedicated security subagent was unavailable
 
 No Critical or High severity finding was identified in the new Phase G code.
 
-### Medium — DNS rebinding residual risk (`src/media-download.ts`)
+### CLOSED — DNS rebinding / connection TOCTOU (`src/media-download.ts`)
 
-`assertPublicUrl` validates the literal URL, every resolved A/AAAA address and
-every redirect target before fetching. A sophisticated attacker who controls DNS
-could still answer with a public address during validation and a private address
-during the actual connection (TOCTOU). Mitigation would require an HTTP agent
-that pins the validated IP for the connection. This is a residual risk, not a
-regression: the previous code performed no DNS validation at all and never
-downloaded. Production effect is limited because URL sources require an operator,
-`rights=AUTHORIZED`, a bounded size/timeout and an allowlisted content type.
+Previously DNS was validated but discarded before `fetch`. Now every hop is
+resolved and validated, one validated address is selected, and an undici `Agent`
+pins the socket lookup to that address; the resolver is never called again at
+connect time. Redirects are re-resolved and re-pinned per hop with a fresh agent
+(closed in `finally`), so stale pooled sockets cannot leak a previous pin. IPv4
+and IPv6 classification covers private/loopback/link-local/multicast/reserved/
+documentation ranges plus IPv4-mapped, IPv4-compatible, NAT64 and 6to4 embedded
+forms; family mismatches and malformed literals fail closed. TLS certificate
+verification stays enabled (`rejectUnauthorized: true`) and SNI/hostname stays
+the URL hostname — the URL is never rewritten to the pinned IP.
 
-### Low — `POST /api/discovery/score` persists on member request (`src/index.ts`)
+Verified locally with `tests/media-download-pinning.test.ts` (rebinding lookup
+that flips from public to link-local, per-hop pin assertions, TLS/SNI check with
+a self-signed local certificate) and `tests/media-download.test.ts`.
 
-`persist: true` writes a `ResearchReport` for any authenticated member of the
-workspace (other media mutation routes require OWNER/ADMIN). The write is fully
-workspace-scoped and contains no external side effect or secret. Classified as
-Low; the operator-only convention would be stricter.
+Residual: no live public-host download was performed; production pinning is
+verified with injected DNS/transport doubles plus a real local TLS socket test.
+
+### CLOSED — member persisted `ResearchReport` (`src/index.ts`, `src/research-reports.ts`)
+
+`POST /api/discovery/score` now calls `requireOperatorRole` for `persist: true`
+while non-persistent member scoring remains available. The persistence module
+itself additionally requires `role: OWNER | ADMIN` and fails closed with 403
+`INSUFFICIENT_ROLE` when the role is missing or a MEMBER. Regression coverage in
+`tests/research-reports.test.ts` asserts member scoring 200, member persist 403,
+no stored row after the denied write, and module-level enforcement.
 
 ## Confirmed controls
 
-- **Auth/roles:** all new mutating media, release and pipeline routes call
-  `requireAuthWorkspace` and `requireOperatorRole`; read routes require
+- **Auth/roles:** all new mutating media, release, pipeline and persistent
+  research-report routes call `requireAuthWorkspace` and `requireOperatorRole`;
+  the persistence module also enforces OWNER/ADMIN. Read routes require
   `requireAuthWorkspace`. No unauthenticated path was added.
 - **RLS / workspace isolation:** `src/research-reports.ts`,
   `src/media-download.ts`, `src/media-release.ts` and `src/phase-g-pipeline.ts`
   contain **no** direct global `prisma.*` access; every query runs through
   `withWorkspaceTransaction` (4/3/4/4 call sites respectively).
-- **SSRF:** literal IPv4/IPv6, loopback, RFC1918, link-local, CGNAT, `.local`,
-  `.localhost`, `.internal`, credentials-bearing URLs, non-http(s) schemes,
-  private DNS answers and redirects to private addresses are rejected.
-  Downloads are bounded by content type, 30 s timeout and the existing 8 MiB
-  upload cap; oversize streams are cancelled.
+- **SSRF:** literal IPv4/IPv6, loopback, RFC1918, link-local, multicast,
+  CGNAT, `.local`, `.localhost`, `.internal`, credentials-bearing URLs,
+  non-http(s) schemes, private DNS answers and redirects to private addresses
+  are rejected. Each hop's validated IP is pinned at socket level; TLS
+  verification and hostname/SNI checks remain active. Downloads are bounded by
+  content type, 30 s timeout per hop and the existing 8 MiB upload cap;
+  oversize streams are cancelled.
 - **Path safety:** `workspaceMediaPath` enforces basename-only names; VTT output
   names are revalidated after derivation; thumbnail/export outputs are confined
   to the workspace media root; `probeMedia`/`detectScenes` use `assertSafePath`.

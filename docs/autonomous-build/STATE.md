@@ -1,5 +1,25 @@
 # STATE
 
+## Autonomer Controller (2026-11-27)
+
+- Auf ausdrückliche Anfrage Dauerbetrieb gestartet. Da kein systemd vorhanden
+  ist, läuft der Supervisor jetzt detached via `nohup setsid` (PID 2869,
+  Controller PID 2874, eigene Session, Log
+  `~/.local/log/ugc-controller-supervisor.log`). Der idempotente Starter
+  `~/.local/bin/ugc-controller-autostart.sh` ist in `~/.bashrc` verdrahtet und
+  startet den Supervisor bei jedem neuen Shell-Login neu, sofern kein STOP-Flag
+  und kein laufender Supervisor vorhanden sind. Kein Push/Merge/Deploy
+  freigegeben.
+- Erster Lauf (PID 1240/1246) wurde über das STOP-Flag sauber beendet und
+  geclaimten Task `5e75e5ed2fbf` requeue't; dessen Agenten-Änderungen an
+  `public/app.js`, `public/index.html`, `public/styles.css` und
+  `tests/frontend-controls.test.ts` sind bewusst uncommitted geblieben.
+- Freigabe-Modelle aus `scripts/free-models.json`; Cooldown vom 24.11. ist
+  abgelaufen. Beim Detached-Start kurz `resource_wait` wegen load1 5.07 > 4
+  (2 CPUs), automatischer Retry nach 60 s vorgesehen.
+- Ergebnis derzeit offen; der Controller schreibt Status/Journal selbst unter
+  `docs/completion/controller/`. Stopp über `--stop` bzw. STOP-Flag.
+
 ## Phase G continuation (2026-11-27)
 
 - Lokal sicher mit `origin/main` synchronisiert: `main` fast-forward auf
