@@ -180,3 +180,17 @@ existiert; Per-Plattform-Quota-Verbrauch bleibt offen. IP-Pinning,
 Redirect-Validierung, realpath-/O_NOFOLLOW-Schutz und Workspace-/Provider-gebundene
 Webhook-HMACs sind lokal implementiert und getestet, nicht aber gegen echte
 Provider live verifiziert.
+
+Stand 2026-11-28 (nach Phase-H-Main-Integration): Phase H ist lokal vollständig
+abgenommen und in `main` integriert (`5c41045`). Nach wie vor extern blockiert
+und ausschließlich die externe Live-Verifikation betreffend: Plattform-
+Credentials/OAuth-App-Reviews, `YOUTUBE_API_KEY`/Discovery-MCP, `OLLAMA_API_KEY`,
+Affiliate-Netzwerk-Zugänge, Deployment-Credentials. Keine dieser Blockaden
+betrifft lokal lösbare Funktionen. Phase I ist vorbereitet (`PHASE_I_READY_TO_START`),
+aber nicht gestartet.
+
+Phase I (2026-11-28): alle lokal lösbaren Aufgaben implementiert und geprüft.
+Weiterhin ausschließlich extern blockiert: echte Provider-/Plattform-Credentials,
+OAuth-App-Reviews, Discovery-MCP, `OLLAMA_API_KEY`, Deployment-Credentials sowie
+die echte Free-Quota-Ausführung des Sandbox-Coding-Agenten mit OpenCode CLI.
+Die Sandbox ist standardmäßig deaktiviert; kein Paid-Fallback, kein Fake-Erfolg.

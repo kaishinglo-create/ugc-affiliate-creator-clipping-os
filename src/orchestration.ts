@@ -498,7 +498,9 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
         // Every factual number below comes from persisted workspace rows.
         // Failures fall back to the honest planner plan, never to invented data.
         const context = await phaseHAgentContext(workspaceId, String(task.departmentKey)).catch(() => ({}));
-        return { ...plan, ...context };
+        const phaseIContext = await (await import('./phase-i-agent-context.js'))
+          .phaseIAgentContext(workspaceId, String(task.departmentKey)).catch(() => ({}));
+        return { ...plan, ...context, ...phaseIContext };
       },
     });
 

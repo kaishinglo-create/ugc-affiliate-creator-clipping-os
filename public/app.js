@@ -11,7 +11,8 @@ const state = {
     browser: null, niches: [], items: [], candidates: [], discoveryError: null,
     controlStatus: null, media: null,
     apiIntegrations: [], apiIntegrationHealth: null, apiIntegrationDetail: null,
-    publishingOverview: null, affiliateRevenue: null, affiliateLinks: [], analyticsSources: null
+    publishingOverview: null, affiliateRevenue: null, affiliateLinks: [], analyticsSources: null,
+    incidents: [], recoveries: [], improvements: [], sandboxes: []
   },
   loading: false,
   error: null,
@@ -318,18 +319,26 @@ async function loadView(view) {
 }
 
 async function loadAgentsData() {
-  const [agents, tasks, engine, ai, publishing] = await Promise.all([
+  const [agents, tasks, engine, ai, publishing, incidents, recoveries, improvements, sandboxes] = await Promise.all([
     api("/api/agents").then((r)=>r.agents || []),
     api("/api/agent-tasks").then((r)=>r.tasks || []),
     api("/api/engine/status").catch(()=>null),
     api("/api/ai/status").catch(()=>null),
-    api("/api/publishing/overview").catch(()=>null)
+    api("/api/publishing/overview").catch(()=>null),
+    api("/api/incidents").then((r)=>r.incidents || []).catch(()=>[]),
+    api("/api/recoveries").then((r)=>r.recoveries || []).catch(()=>[]),
+    api("/api/improvements").then((r)=>r.improvements || []).catch(()=>[]),
+    api("/api/sandboxes").then((r)=>r.sandboxes || []).catch(()=>[])
   ]);
   state.data.agents = agents;
   state.data.agentTasks = tasks;
   state.data.engine = engine;
   state.data.ai = ai;
   state.data.publishingOverview = publishing;
+  state.data.incidents = incidents;
+  state.data.recoveries = recoveries;
+  state.data.improvements = improvements;
+  state.data.sandboxes = sandboxes;
 }
 
 async function loadClippingData() {
@@ -580,6 +589,29 @@ function analytics() {
   analyticsSourcesPanel() + affiliateRevenuePanel() + loadingBlock();
 }
 
+function phaseIHealthPanel() {
+  const incidents = state.data.incidents || [];
+  const recoveries = state.data.recoveries || [];
+  const improvements = state.data.improvements || [];
+  const sandboxes = state.data.sandboxes || [];
+  const open = incidents.filter((i)=>i.status==="open").length;
+  const stats = '<section class="panel" data-testid="h5i-summary"><h2>System Health</h2><div class="stats">'+
+    stat("OPEN INCIDENTS", open, "persisted", "⚠")+
+    stat("RECOVERIES", recoveries.length, "auditiert", "↻")+
+    stat("IMPROVEMENTS", improvements.length, "evidenzbasiert", "↑")+
+    stat("SANDBOXES", sandboxes.length, "isoliert", "▤")+
+    '</div><p class="sub">Autonomous actions are approval-gated. Foreign processes and transactions are never stopped automatically.</p></section>';
+  const inc = h5Table("Incident Center", "h5i-incidents", ["Kind","Severity","Status","Detected"],
+    incidents.map((i)=>'<tr><td>'+esc(i.kind)+'</td><td>'+tag(i.severity)+'</td><td>'+tag(i.status)+'</td><td>'+esc(i.detectedAt||"—")+'</td></tr>'));
+  const rec = h5Table("Recovery Queue & History", "h5i-recoveries", ["Recovery","Incident","Status","Action"],
+    recoveries.map((r)=>'<tr><td>'+esc(r.id)+'</td><td>'+esc(r.incidentId)+'</td><td>'+tag(r.status)+'</td><td>'+esc(r.plan&&r.plan.action||"—")+'</td></tr>'));
+  const imp = h5Table("Improvement Backlog", "h5i-improvements", ["Title","Score","Risk","Status"],
+    improvements.map((t)=>'<tr><td>'+esc(t.title)+'</td><td>'+esc(t.priorityScore)+'</td><td>'+tag(t.risk)+'</td><td>'+tag(t.status)+'</td></tr>'));
+  const sb = h5Table("Coding-Agent Sandboxes", "h5i-sandboxes", ["ID","Status","Review","Approved by"],
+    sandboxes.map((s)=>'<tr><td>'+esc(s.id)+'</td><td>'+tag(s.status)+'</td><td>'+esc(s.reviewJson?(s.reviewJson.approved?"approved":"rejected"):"—")+'</td><td>'+esc(s.approvedBy||"—")+'</td></tr>'));
+  return stats + inc + rec + imp + sb;
+}
+
 function enginePanel() {
   const payload = state.data.engine;
   if (!payload || !payload.engine) {
@@ -623,6 +655,7 @@ function agents() {
   const agentOptions = agents.map(a=>'<option value="'+esc(a.id)+'">'+esc(a.name)+'</option>').join("");
   return heading("Agent Control","Persisted agents/tasks from /api/agents and /api/agent-tasks plus publishing agent status.") +
   enginePanel() +
+  phaseIHealthPanel() +
   publishingOverviewPanel() +
   aiPanel() +
   '<section class="panel"><h2>Add agent</h2><form id="agent-form" class="field-grid"><div class="field"><label>Name</label><input name="name" required></div><div class="field"><label>Role</label><input name="role" required></div><div class="field"><button class="btn primary" type="submit">Create agent</button></div></form>' + (agents.length ? agents.map(a=>'<p>'+esc(a.name)+' — '+esc(a.role)+'</p>').join("") : '<p class="sub">No agents yet.</p>') + '</section>' +

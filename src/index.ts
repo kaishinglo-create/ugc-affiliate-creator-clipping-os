@@ -3045,6 +3045,115 @@ app.get('/api/phase-g/pipeline/:id', async (req, reply) => {
   return { job: publicMediaJob(job) };
 });
 
+/* Phase I: system health, incidents, recovery, improvements and sandboxes. */
+app.get('/api/system/health', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { inspectPorts, inspectProcesses, inspectDatabase, inspectFreeze } = await import('./incident-monitor.js');
+  const ports = inspectPorts([3000, 3031, 3200]);
+  const processes = inspectProcesses(['node', 'postgres']);
+  const database = await inspectDatabase();
+  const freezePath = String(process.env.PHASE_I_FREEZE_MANIFEST ?? 'docs/testing/evidence/phase-i/source-freeze.json');
+  const freeze = inspectFreeze(freezePath);
+  return { health: { ports, processes, database, freeze }, checkedAt: new Date().toISOString() };
+});
+
+app.get('/api/system/incidents', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { listIncidents } = await import('./incident-monitor.js');
+  return { incidents: await listIncidents(ctx.workspaceId, undefined, Number((req.query as any)?.limit ?? 100)) };
+});
+
+app.post('/api/system/incidents', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const body = (req.body ?? {}) as any;
+  const { recordIncident } = await import('./incident-monitor.js');
+  try {
+    const result = await recordIncident({
+      workspaceId: ctx.workspaceId,
+      kind: String(body.kind ?? ''),
+      severity: ['info', 'warning', 'error', 'critical'].includes(String(body.severity)) ? body.severity : 'warning',
+      evidence: body.evidence && typeof body.evidence === 'object' ? body.evidence : {},
+      actor: ctx.userId,
+    });
+    return reply.code(result.deduplicated ? 200 : 201).send(result);
+  } catch (error: any) {
+    return reply.code(error?.statusCode ?? 400).send({ error: String(error?.message ?? 'INVALID_INPUT') });
+  }
+});
+
+app.get('/api/recoveries', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const rows = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) =>
+    tx.recoveryRun.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' }, take: 100 }));
+  return { recoveries: rows };
+});
+
+app.post('/api/recoveries/:id/plan', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const { planRecovery } = await import('./recovery-engine.js');
+  try {
+    return { recovery: await planRecovery({ workspaceId: ctx.workspaceId, incidentId: String((req.params as any)?.id ?? ''), actor: ctx.userId }) };
+  } catch (error: any) {
+    return reply.code(error?.statusCode ?? 400).send({ error: String(error?.message ?? 'INVALID_INPUT') });
+  }
+});
+
+app.post('/api/recoveries/:id/approve', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const { approveRecovery, executeRecovery } = await import('./recovery-engine.js');
+  try {
+    const approved = await approveRecovery({ workspaceId: ctx.workspaceId, recoveryRunId: String((req.params as any)?.id ?? ''), actor: ctx.userId });
+    const executed = (req.body as any)?.execute === true
+      ? await executeRecovery({ workspaceId: ctx.workspaceId, recoveryRunId: approved.id, actor: ctx.userId })
+      : null;
+    return { recovery: approved, executed };
+  } catch (error: any) {
+    return reply.code(error?.statusCode ?? 400).send({ error: String(error?.message ?? 'INVALID_INPUT') });
+  }
+});
+
+app.post('/api/recoveries/:id/rollback', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const { rollbackRecovery } = await import('./recovery-engine.js');
+  return { recovery: await rollbackRecovery(ctx.workspaceId, String((req.params as any)?.id ?? ''), ctx.userId) };
+});
+
+app.get('/api/improvements', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { listImprovements } = await import('./improvement-engine.js');
+  return { improvements: await listImprovements(ctx.workspaceId, (req.query as any)?.status) };
+});
+
+app.post('/api/improvements/refresh', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const { refreshImprovements } = await import('./improvement-engine.js');
+  return refreshImprovements({ workspaceId: ctx.workspaceId, actor: ctx.userId });
+});
+
+app.get('/api/system/sandbox', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { sandboxCapabilities } = await import('./coding-agent.js');
+  return { sandbox: sandboxCapabilities() };
+});
+
+app.get('/api/sandboxes', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const rows = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) =>
+    tx.sandboxRun.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' }, take: 100 }));
+  return { sandboxes: rows };
+});
+
 app.get('/api/orchestrations', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;

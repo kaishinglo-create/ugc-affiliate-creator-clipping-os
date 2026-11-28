@@ -89,9 +89,25 @@
   been performed. Final status: `PHASE_H_READY_FOR_COMMIT` (awaiting explicit
   commit approval).
 
+## Phase H – Main-Integration (2026-11-28)
+
+- PR #33 gemergt als Merge-Commit `5c4104595d0e23e1fefbd3bc352f532e855d712f`;
+  lokales und entferntes `main` identisch. Post-Merge-CI `46086634835` SUCCESS.
+- 354/354 Tests in 87 Dateien, 43+ Migrationen; vollständig vorbereitete
+  Phase-I-Dokumentation. Nachweis: `PHASE_H_MAIN_INTEGRATION_REPORT.md`.
+- Status: **PHASE_H_MAIN_INTEGRATION_COMPLETE**,
+  **PHASE_H_EXTERNAL_LIVE_VERIFICATION_PENDING**.
+
 ## Phase I – Self-Healing and Self-Improving
 
-- Planned, not started.
+- Implementierung abgeschlossen: 362/362 Tests in 88 Dateien, zwei isolierte
+  `qa:full`-Läufe grün, Browser-Gates 9/9/30/30/23/23, Secret-Scan 0 Treffer.
+  Status: **PHASE_I_READY_FOR_COMMIT**; Abschlussbericht
+  `PHASE_I_FINAL_ACCEPTANCE_REPORT.md`.
+- **PHASE_I_READY_TO_START** (Vorbereitungsstand) — vollständig vorbereitet, nicht implementiert.
+  Masterprompt `PHASE_I_MASTERPROMPT.md`, Aufgaben `PHASE_I_TASKS.json`,
+  Architekturen und Abnahmekriterien unter `docs/autonomous-build/`.
+  Reale Phase-G/H-Zwischenfälle INC-PH-01..06 sind die Startfälle.
 
 ## Phase J – Autonomous 24/7 operation
 
