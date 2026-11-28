@@ -1,0 +1,289 @@
+{
+  "phase": "H",
+  "title": "Live Publishing, Affiliate Monetization & Analytics",
+  "branch": "feature/phase-h-live-publishing-2026-11-27",
+  "baseline": {
+    "main": "55d28c4",
+    "tests": 327,
+    "vitestFiles": 81,
+    "playwright": "9/9",
+    "meceBrowser": "27/27",
+    "frontendAcceptance": "19/19",
+    "realMediaPipeline": "PASS"
+  },
+  "status": "READY_FOR_COMMIT",
+  "governance": {
+    "commitPushPrMergeDeployPublish": "FORBIDDEN_WITHOUT_SEPARATE_APPROVAL",
+    "controller": "STOPPED",
+    "stopFlag": "PRESENT",
+    "models": "free_only",
+    "testDoubles": "controlled_tests_only",
+    "externalUploadsDuringQa": "FORBIDDEN"
+  },
+  "lastUpdated": "2026-11-27T22:10:14.203Z",
+  "tasks": [
+    {
+      "id": "H.0",
+      "title": "Recovery, Bestandsaudit und Governance",
+      "status": "completed",
+      "dependencies": [],
+      "acceptanceCriteria": [
+        "Herkunft der uncommitteten Änderungen geklärt",
+        "Alle Diffs und untracked Dateien geprüft",
+        "Arbeitsstand lokal ohne Commit gesichert",
+        "Diskrepanz PHASE_H_PREPARATION.md vs. Implementierung geklärt",
+        "Vollständige MECE-Feature-Matrix erstellt",
+        "Fehlende/unvollständige/fehlerhafte Funktionen identifiziert",
+        "Publishing-, Affiliate-, Analytics-, API- und Agentenmodule geprüft",
+        "Status PHASE_H_IMPLEMENTATION_IN_PROGRESS gesetzt",
+        "Keine redundanten Implementierungen, keine Changes verworfen"
+      ],
+      "evidence": [
+        "PHASE_H_RECOVERY_AUDIT.md",
+        "PHASE_H_FEATURE_MATRIX.md",
+        "/tmp/opencode/phase-h-recovery/phase-h-working-tree.patch",
+        "/tmp/opencode/phase-h-recovery/tracked-files.tgz",
+        "git reflog + Datei-Mtimes geprüft; kein Commit/Push/Merge"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "H.1",
+      "title": "Datenbank und Migration",
+      "status": "completed",
+      "dependencies": [
+        "H.0"
+      ],
+      "acceptanceCriteria": [
+        "Migration 20261127120000 geprüft und vervollständigt",
+        "AffiliateLink / PublishingAccount / PublishingSchedule / QualityReport.checksum verifiziert",
+        "UTM-, Kampagnen-, Creator-, Plattform-, externalEventId-, commissionCents-Felder verifiziert",
+        "RLS/FORCE RLS, Indizes, Constraints, Dedup, Referenzielle Integrität geprüft",
+        "Frische DB und Phase-G-Upgrade getestet",
+        "Backup/Restore geprüft",
+        "Prisma-Client regulär generiert, keine generierten Dateien manuell editiert"
+      ],
+      "evidence": [
+        "Migration 20261127120000 + 130000 + 140000 applied locally (43 migrations)",
+        "Prisma client regenerated; generated files untouched",
+        "RLS/FORCE RLS verified",
+        "CHECK constraints verified and negative commission rejected",
+        "Phase-G to Phase-H upgrade and schema backup/restore: docs/testing/evidence/phase-h/db-verification.json"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "H.2",
+      "title": "Publishing Engine und Scheduler",
+      "status": "completed",
+      "dependencies": [
+        "H.1"
+      ],
+      "acceptanceCriteria": [
+        "Queue, Kalender, Planung, Zeitzonen/Sommerzeit, Account-Zuordnung",
+        "Idempotenz, Retry/Backoff, Rate Limits, DLQ, Stale/Crash Recovery",
+        "Leases, Heartbeats, Fencing, Parallelität, Kill-Switch, Audit, Budget",
+        "Keine Doppelveröffentlichung bei Crash/Timeout/unbekanntem Ergebnis",
+        "Statusabgleich bei unklarem Providerstatus vor erneutem Upload"
+      ],
+      "evidence": [
+        "Daily attempt cap + per-platform confirmed-usage cap",
+        "Kill-switch preflight before external action",
+        "UPLOAD_STATUS_UNKNOWN; no blind retry",
+        "Settlement hardened",
+        "DST gap/ambiguity fail-closed",
+        "tests/phase-h-regression.test.ts"
+      ],
+      "blockers": [
+        "Per-platform quota decrement from provider quota fields remains external until provider response is available"
+      ]
+    },
+    {
+      "id": "H.3",
+      "title": "Security und menschliche Freigaben",
+      "status": "completed",
+      "dependencies": [
+        "H.2"
+      ],
+      "acceptanceCriteria": [
+        "Kette Quality→Checksum→Account→Parameter→Approval→Queue→Upload→Bestätigung→Audit serverseitig erzwungen",
+        "Rollen, Bypass, Manipulation, Account-Wechsel, geänderte Metadaten, widerrufene Freigaben geprüft",
+        "Redaction, Token-Verschlüsselung/Refresh, SSRF/DNS-Rebinding, Path/Symlink, Race/Replay, Kill-Switch geprüft",
+        "Jede relevante Änderung erfordert erneute Freigabe",
+        "Keine echten Uploads ohne separate Zustimmung"
+      ],
+      "evidence": [
+        "verifyClipChecksum, approval expiry/revoke, account recheck",
+        "IP pinning + redirect revalidation + credential stripping",
+        "realpath + O_NOFOLLOW",
+        "HMAC webhook bound to workspace+provider, raw-body cap",
+        "PHASE_H_SECURITY_AUDIT.md"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "H.4",
+      "title": "Offizielle Plattform-Adapter",
+      "status": "completed",
+      "dependencies": [
+        "H.3"
+      ],
+      "acceptanceCriteria": [
+        "YouTube Data API Adapter (Resumable Upload, OAuth, Refresh, Metadaten, Sichtbarkeit, Planung, Status, Quota, Analytics)",
+        "TikTok Content Posting API Adapter (OAuth, Refresh, Creator, Parameter, Init, Progress, Status, Limits)",
+        "Instagram/Meta Graph API Adapter (OAuth, Refresh, Accounts, Reels, Container, Status, Publish, Insights)",
+        "Credential Store des API Integration Center genutzt",
+        "Ehrliche Status: NOT_CONFIGURED/CREDENTIALS_ONLY/ADAPTER_NOT_IMPLEMENTED/LIVE_VERIFICATION_PENDING/CONNECTED nur nach echter Prüfung"
+      ],
+      "evidence": [
+        "Official adapters + provider-analytics.ts real request builders/parsers/fetch",
+        "tests/phase-h-provider-analytics.test.ts",
+        "provider-capabilities.ts reports IMPLEMENTED + NOT_CONFIGURED"
+      ],
+      "blockers": [
+        "External live verification blocked by missing credentials"
+      ]
+    },
+    {
+      "id": "H.5",
+      "title": "Affiliate-Monetarisierung und Revenue",
+      "status": "completed",
+      "dependencies": [
+        "H.1"
+      ],
+      "acceptanceCriteria": [
+        "Links, Produkt/Creator/Kampagne, UTM, Click/Conversion, Attribution, Provisionen, Payouts",
+        "Revenue pro Clip/Creator/Plattform/Kampagne, Disclosure, Dedup, Webhook-Verifikation, Replay-Schutz",
+        "Nur gespeicherte/autorisierte Werte; NO_ROWS/NOT_CONFIGURED für fehlende Daten"
+      ],
+      "evidence": [
+        "Signed webhooks, payoutReference/paidAt, revenue dimensions",
+        "Consent/retention/purge in src/data-governance.ts",
+        "tests/phase-h-governance.test.ts"
+      ],
+      "blockers": [
+        "Affiliate network-specific signatures require provider credentials (external only)"
+      ]
+    },
+    {
+      "id": "H.6",
+      "title": "Frontend und Multi-Agent-Integration",
+      "status": "completed",
+      "dependencies": [
+        "H.2",
+        "H.3",
+        "H.4",
+        "H.5"
+      ],
+      "acceptanceCriteria": [
+        "Alle 15 Tabs geprüft, Publishing/Affiliate/Revenue/Approval-UI vollständig",
+        "Alle Buttons nutzen echte Backend-Funktionen, keine Platzhalter",
+        "Departments CEO/COO/Publishing/Affiliate/Research/API/Analytics/Security integriert",
+        "Keine redundante Agenten-Runtime"
+      ],
+      "evidence": [
+        "Dashboard write actions + phaseHAgentContext wired into real orchestration deterministic callback",
+        "tests/phase-h-agent-wiring.test.ts proves succeeded orchestration tasks carry workspace_rows context",
+        "tests/phase-h-governance.test.ts"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "H.7",
+      "title": "Tests, Security und finale Abnahme",
+      "status": "completed",
+      "dependencies": [
+        "H.1",
+        "H.2",
+        "H.3",
+        "H.4",
+        "H.5",
+        "H.6"
+      ],
+      "acceptanceCriteria": [
+        "Typecheck/ESLint/Build PASS",
+        "327 Baseline-Tests erhalten + neue Phase-H-Tests grün",
+        "Zwei isolierte qa:full-Läufe auf identischem Stand, Watchdog nicht ausgelöst",
+        "Playwright, verify:mece-browser, verify:frontend, verify:phase-g PASS",
+        "Migrations-, Backup/Restore-, RLS-, Bypass-, Retry/Idempotenz-, Crash-, Fencing-, Zeitzonen-, Redaction-Tests",
+        "Secret-Scan und Security-Audit, vollständige Browserprüfung",
+        "Controller/Supervisor gestoppt, keine externen Uploads"
+      ],
+      "evidence": [
+        "Typecheck/ESLint/Build PASS",
+        "Full suite 353/353 in 87 files",
+        "DB verification PASS",
+        "Source freeze 6d772b0f...",
+        "QA run 1 qa-full-2026-11-27T20-31-34-755Z-36455 PASSED 353/353 87/87 watchdog=false duration=721.16s",
+        "qa-full-2026-11-27T21-34-15-653Z-52057 PASSED 353/353 87/87 watchdog=false",
+        "qa-full-2026-11-27T21-57-21-122Z-58101 PASSED 353/353 87/87 watchdog=false",
+        "Playwright 9/9",
+        "MECE 30/30",
+        "Frontend 23/23",
+        "verify:media + verify:phase-g PASS",
+        "Secret scan 0 matches"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "H.8",
+      "title": "Dokumentation, Fortschritt und Übergabe",
+      "status": "completed",
+      "dependencies": [
+        "H.7"
+      ],
+      "acceptanceCriteria": [
+        "MASTER_ROADMAP.md/.json, PROGRESS.json, STATE.md, NEXT_SESSION.md, EXTERNAL_BLOCKERS.txt, PHASE_H_TASKS.json aktualisiert",
+        "PHASE_H_MASTERPROMPT.md, RECOVERY_AUDIT, FEATURE_MATRIX, SECURITY_AUDIT, FINAL_ACCEPTANCE_REPORT, PHASE_I_PREPARATION erstellt",
+        "Konsequente Unterscheidung LOCAL_IMPLEMENTED/LOCAL_VERIFIED/GITHUB_INTEGRATED/EXTERNAL_LIVE_VERIFIED/EXTERNAL_BLOCKED",
+        "Pro Arbeitspaket Funktionen, Dateien, Tests, Ergebnisse, Findings, offene Aufgaben, Blocker, Fortschritt",
+        "Phase I vorbereitet, nicht implementiert"
+      ],
+      "evidence": [
+        "Master prompt, tasks, recovery audit, feature matrix, security audit, Phase I prep",
+        "Roadmap/NEXT_SESSION/EXTERNAL_BLOCKERS updated",
+        "PHASE_H_FINAL_ACCEPTANCE_REPORT.md",
+        "PHASE_I_PREPARATION.md korrigiert"
+      ],
+      "blockers": []
+    }
+  ],
+  "tests": 353,
+  "frozenSourceHash": "0fa61ade0af5239c551d6028fea5979abcbdad1c56e4cbf71a7e77398322d16a",
+  "browserGates": {
+    "playwright": "9 passed (9)",
+    "frontendAcceptance": "23/23",
+    "meceBrowserCheck": "30/30",
+    "verifyPhaseG": "passed",
+    "browserServicesStoppedAfter": true
+  },
+  "qaFullRuns": [
+    {
+      "runId": "qa-full-2026-11-27T21-34-15-653Z-52057",
+      "outcome": "passed",
+      "tests": "353 passed (353)",
+      "testFiles": "87 passed (87)",
+      "duration": "658.87s",
+      "watchdogTriggered": false,
+      "role": "ugc_os_app",
+      "roleSuperuser": false,
+      "roleBypassRls": false,
+      "frozenSourceHash": "0fa61ade0af5239c551d6028fea5979abcbdad1c56e4cbf71a7e77398322d16a"
+    },
+    {
+      "runId": "qa-full-2026-11-27T21-46-12-279Z-55179",
+      "outcome": "passed",
+      "tests": "353 passed (353)",
+      "testFiles": "87 passed (87)",
+      "duration": "649.75s",
+      "watchdogTriggered": false,
+      "role": "ugc_os_app",
+      "roleSuperuser": false,
+      "roleBypassRls": false,
+      "frozenSourceHash": "0fa61ade0af5239c551d6028fea5979abcbdad1c56e4cbf71a7e77398322d16a"
+    }
+  ],
+  "finalStatus": "READY_FOR_COMMIT",
+  "freeze": "c08d35a459a61756b6680cfb9da99bfcfa11cfe31ddeb165c8451931e98da576",
+  "testFiles": 87
+}

@@ -194,6 +194,148 @@ async function resolveCredential(workspaceId: string, def: ProviderDefinition): 
   });
 }
 
+/**
+ * Phase H bridge: publishing consumes the encrypted credential store without
+ * redefining OAuth or credential lifecycle. The returned env map contains
+ * secret values only in memory; it is never returned over HTTP or persisted.
+ */
+export type PublishingCredentialResolution = {
+  source: 'workspace' | 'environment' | 'none';
+  blocked: boolean;
+  env: Record<string, string>;
+  rowId: string | null;
+};
+
+const PUBLISHING_PROVIDER_KEYS: Record<string, string> = {
+  youtube: 'youtube_google',
+  tiktok: 'tiktok',
+  instagram: 'instagram_meta',
+};
+
+const PUBLISHING_PAYLOAD_TO_ENV: Record<string, Record<string, string>> = {
+  youtube: {
+    clientId: 'YOUTUBE_CLIENT_ID',
+    clientSecret: 'YOUTUBE_CLIENT_SECRET',
+    refreshToken: 'YOUTUBE_REFRESH_TOKEN',
+  },
+  tiktok: {
+    clientKey: 'TIKTOK_CLIENT_KEY',
+    clientSecret: 'TIKTOK_CLIENT_SECRET',
+    refreshToken: 'TIKTOK_REFRESH_TOKEN',
+  },
+  instagram: {
+    appId: 'INSTAGRAM_APP_ID',
+    appSecret: 'INSTAGRAM_APP_SECRET',
+    accessToken: 'INSTAGRAM_ACCESS_TOKEN',
+    userId: 'INSTAGRAM_USER_ID',
+  },
+};
+
+const PUBLISHING_REQUIRED_ENV: Record<string, readonly string[]> = {
+  youtube: ['YOUTUBE_CLIENT_ID', 'YOUTUBE_CLIENT_SECRET', 'YOUTUBE_REFRESH_TOKEN'],
+  tiktok: ['TIKTOK_CLIENT_KEY', 'TIKTOK_CLIENT_SECRET', 'TIKTOK_REFRESH_TOKEN'],
+  instagram: ['INSTAGRAM_ACCESS_TOKEN', 'INSTAGRAM_USER_ID', 'INSTAGRAM_APP_ID', 'INSTAGRAM_APP_SECRET'],
+};
+
+export interface PublishingTokenRefresh {
+  accessToken?: string;
+  refreshToken?: string;
+  expiresIn?: number;
+  tokenType?: string;
+  scopes?: string[];
+}
+
+/** Persist a REAL token-endpoint refresh, never a fabricated or probed status. */
+export async function persistPublishingTokenRefresh(
+  workspaceId: string,
+  platform: string,
+  tokens: PublishingTokenRefresh,
+): Promise<void> {
+  const providerKey = PUBLISHING_PROVIDER_KEYS[platform];
+  if (!providerKey) return;
+  await withWorkspaceTransaction(workspaceId, async (tx) => {
+    const row: any = await tx.apiCredential.findUnique({
+      where: { workspaceId_providerKey: { workspaceId, providerKey } },
+    });
+    if (!row) return;
+    let payload: Record<string, unknown>;
+    try {
+      payload = decryptCredential(row, workspaceId, providerKey) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+    let changed = false;
+    if (platform === 'youtube' || platform === 'tiktok') {
+      if (tokens.refreshToken) { payload.refreshToken = tokens.refreshToken; changed = true; }
+    } else if (platform === 'instagram') {
+      if (tokens.accessToken) { payload.accessToken = tokens.accessToken; changed = true; }
+    }
+    if (!changed) return;
+    const encrypted = encryptCredential(payload, workspaceId, providerKey);
+    const expiresAt = Number.isFinite(tokens.expiresIn) && Number(tokens.expiresIn) > 0
+      ? new Date(Date.now() + Number(tokens.expiresIn) * 1000)
+      : null;
+    await tx.apiCredential.update({
+      where: { id: row.id },
+      data: { ...encrypted, ...(expiresAt ? { expiresAt } : {}) },
+    });
+    const connection: any = await tx.apiConnection.findUnique({
+      where: { workspaceId_providerKey: { workspaceId, providerKey } },
+    });
+    if (connection) {
+      await tx.apiConnection.update({
+        where: { id: connection.id },
+        data: {
+          // A token refresh is configuration work, not a live verification.
+          status: connection.status === 'CONNECTED' ? 'CONNECTED' : 'CONFIGURED',
+          ...(expiresAt ? { tokenExpiresAt: expiresAt } : {}),
+          ...(tokens.scopes?.length ? { grantedScopes: tokens.scopes.map(String) } : {}),
+        },
+      });
+    }
+  });
+}
+
+export async function resolvePublishingCredentials(
+  workspaceId: string,
+  platform: string,
+): Promise<PublishingCredentialResolution> {
+  const providerKey = PUBLISHING_PROVIDER_KEYS[platform];
+  const required = PUBLISHING_REQUIRED_ENV[platform] ?? [];
+  if (!providerKey || !required.length) return { source: 'none', blocked: false, env: {}, rowId: null };
+
+  const resolved = await withWorkspaceTransaction(workspaceId, async (tx) => {
+    const row: any = await tx.apiCredential.findUnique({
+      where: { workspaceId_providerKey: { workspaceId, providerKey } },
+    });
+    if (!row) return { row: null as any | null, payload: null as Record<string, unknown> | null, blocked: false };
+    try {
+      return { row, payload: decryptCredential(row, workspaceId, providerKey) as Record<string, unknown>, blocked: false };
+    } catch {
+      // A tampered workspace credential must never silently fall back to env.
+      return { row, payload: null as Record<string, unknown> | null, blocked: true };
+    }
+  });
+
+  if (resolved.blocked) return { source: 'none', blocked: true, env: {}, rowId: resolved.row?.id ?? null };
+  if (resolved.row) {
+    const mapping = PUBLISHING_PAYLOAD_TO_ENV[platform];
+    const env: Record<string, string> = {};
+    for (const [payloadKey, envKey] of Object.entries(mapping)) {
+      const value = resolved.payload?.[payloadKey];
+      if (typeof value === 'string' && value.trim()) env[envKey] = value.trim();
+    }
+    return { source: 'workspace', blocked: false, env, rowId: resolved.row.id };
+  }
+
+  const env: Record<string, string> = {};
+  for (const key of required) {
+    const value = String(process.env[key] ?? '').trim();
+    if (value) env[key] = value;
+  }
+  return { source: Object.keys(env).length ? 'environment' : 'none', blocked: false, env, rowId: null };
+}
+
 async function writeEvent(workspaceId: string, providerKey: string, type: string, actor: string | null, outcome: string, details: Record<string, unknown> = {}, tx?: any): Promise<void> {
   const safe = redactData(details) as Record<string, unknown>;
   const persist = async (store: any) => {

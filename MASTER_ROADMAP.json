@@ -1,85 +1,105 @@
 {
-  "phase": "G",
-  "status": "phase_g_main_integration_complete_external_live_pending",
-  "branch": "main",
-  "featureBranch": "feature/phase-g-completion-2026-11-27",
-  "baseSha": "a45d06a7c433cc0efc8848c48243a7d201f8648b",
-  "verifiedSourceSha": "fd9a35689fef4e9f785942e02b03034ea2717f36",
-  "prHeadSha": "e156e5d84c519f92eca3911cbe85d4a73530e67b",
-  "mainSha": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
-  "localMainSha": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
-  "remoteMainSha": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
-  "mergeCommit": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
-  "mergedAt": "2026-11-27T05:35:54Z",
-  "pr": {
-    "number": 32,
-    "url": "https://github.com/kaishinglo-create/ugc-affiliate-creator-clipping-os/pull/32",
-    "state": "MERGED",
-    "headRefOid": "e156e5d84c519f92eca3911cbe85d4a73530e67b",
-    "mergeable": "MERGEABLE",
-    "mergeStateStatus": "CLEAN"
+  "phase": "H",
+  "status": "phase_h_ready_for_commit",
+  "title": "Live Publishing, Affiliate Monetization & Analytics",
+  "branch": "feature/phase-h-live-publishing-2026-11-27",
+  "baseSha": "55d28c4e210fcbe9b9877fda090cf796ade8c280",
+  "headSha": "55d28c4e210fcbe9b9877fda090cf796ade8c280",
+  "workingTree": "uncommitted",
+  "governance": {
+    "commitPushPrMergeDeployPublish": "FORBIDDEN_WITHOUT_SEPARATE_APPROVAL",
+    "controller": "stopped",
+    "stopFlag": "present",
+    "models": "free_only",
+    "externalUploads": "forbidden_without_separate_approval"
   },
-  "prState": "merged",
-  "ci": {
-    "prRuns": [
-      { "runId": 45945647539, "conclusion": "success", "headSha": "df5f96784c64eb5d48aa3d1b04558a03933f48af" },
-      { "runId": 45946271046, "conclusion": "success", "headSha": "e156e5d84c519f92eca3911cbe85d4a73530e67b" }
+  "tests": {
+    "baseline": 327,
+    "baselineFiles": 81,
+    "phaseHNew": 26,
+    "phaseHNewFiles": 6,
+    "expectedTotal": 353,
+    "expectedFiles": 87,
+    "qaFullRuns": [
+      {
+        "runId": "qa-full-2026-11-27T21-34-15-653Z-52057",
+        "outcome": "passed",
+        "tests": "353 passed (353)",
+        "testFiles": "87 passed (87)",
+        "duration": "658.87s",
+        "watchdogTriggered": false,
+        "role": "ugc_os_app",
+        "roleSuperuser": false,
+        "roleBypassRls": false,
+        "frozenSourceHash": "0fa61ade0af5239c551d6028fea5979abcbdad1c56e4cbf71a7e77398322d16a"
+      },
+      {
+        "runId": "qa-full-2026-11-27T21-46-12-279Z-55179",
+        "outcome": "passed",
+        "tests": "353 passed (353)",
+        "testFiles": "87 passed (87)",
+        "duration": "649.75s",
+        "watchdogTriggered": false,
+        "role": "ugc_os_app",
+        "roleSuperuser": false,
+        "roleBypassRls": false,
+        "frozenSourceHash": "0fa61ade0af5239c551d6028fea5979abcbdad1c56e4cbf71a7e77398322d16a"
+      }
     ],
-    "postMergeRun": {
-      "runId": 45946760934,
-      "status": "completed",
-      "conclusion": "success",
-      "headSha": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
-      "url": "https://github.com/kaishinglo-create/ugc-affiliate-creator-clipping-os/actions/runs/45946760934"
+    "note": "two isolated qa:full runs passed on identical final frozen source",
+    "frozenSourceHash": "0fa61ade0af5239c551d6028fea5979abcbdad1c56e4cbf71a7e77398322d16a",
+    "browserGates": {
+      "playwright": "9 passed (9)",
+      "frontendAcceptance": "23/23",
+      "meceBrowserCheck": "30/30",
+      "verifyPhaseG": "passed",
+      "browserServicesStoppedAfter": true
     }
   },
-  "pushAuthorized": true,
-  "pushCompleted": true,
-  "mergeAuthorized": true,
-  "mergeCompleted": true,
-  "deployAuthorized": false,
-  "tests": 327,
-  "testFiles": 81,
-  "qaFullRuns": [
-    {
-      "runId": "qa-full-2026-11-27T04-00-18-842Z-7977",
-      "outcome": "passed",
-      "tests": 327,
-      "testFiles": 81
-    },
-    {
-      "runId": "qa-full-2026-11-27T04-13-28-352Z-11885",
-      "outcome": "passed",
-      "tests": 327,
-      "testFiles": 81
-    },
-    {
-      "runId": "qa-full-2026-11-27T05-40-19-843Z-29623",
-      "scope": "post-merge on main",
-      "outcome": "passed",
-      "tests": 327,
-      "testFiles": 81
-    }
-  ],
-  "browserAcceptance": {
-    "playwright": "9/9",
-    "meceBrowserCheck": "27/27",
-    "frontendTabs": "19/19"
-  },
-  "realMediaPipeline": "passed",
-  "localGatesOnMain": {
+  "localGates": {
     "typecheck": "pass",
-    "eslint": "pass",
+    "eslint": "pass_no_warnings",
     "build": "pass",
-    "regression": "327 passed (327)"
+    "secretScan": {
+      "checkedValues": 4,
+      "filesScanned": 519,
+      "matches": 0
+    },
+    "databaseVerification": {
+      "outcome": "passed",
+      "checks": 7
+    }
   },
-  "finalReport": "PHASE_G_FINAL_ACCEPTANCE_REPORT.md",
-  "githubReport": "GITHUB_INTEGRATION_REPORT.md",
-  "mainIntegrationReport": "PHASE_G_MAIN_INTEGRATION_REPORT.md",
-  "finalStatus": "PHASE_G_MAIN_INTEGRATION_COMPLETE",
-  "externalLiveVerification": "pending",
-  "nextPhase": "H",
+  "browserAcceptance": {
+    "playwright": "pending",
+    "meceBrowserCheck": "pending",
+    "frontendAcceptance": "pending",
+    "phaseGPipeline": "pending"
+  },
+  "externalLiveVerification": "none",
+  "externalBlockers": [
+    "platform_credentials",
+    "oauth_app_approval",
+    "YOUTUBE_API_KEY",
+    "OLLAMA_API_KEY",
+    "public_host",
+    "deployment_credentials",
+    "real_affiliate_network_signature_scheme"
+  ],
+  "featureMatrix": "PHASE_H_FEATURE_MATRIX.md",
+  "securityAudit": "PHASE_H_SECURITY_AUDIT.md",
+  "finalReport": "PHASE_H_FINAL_ACCEPTANCE_REPORT.md",
+  "previousPhaseG": {
+    "status": "PHASE_G_MAIN_INTEGRATION_COMPLETE",
+    "mainSha": "45cacf5502783cfbd8f634f2d8dc7c52c8a84375",
+    "pr": 32,
+    "prState": "MERGED",
+    "ci": 45946760934,
+    "tests": "327 passed (327)",
+    "qaFullRuns": 3,
+    "report": "PHASE_G_FINAL_ACCEPTANCE_REPORT.md"
+  },
+  "nextPhase": "I",
   "nextPhaseStatus": "prepared_not_started",
-  "nextPhaseHandoffReady": true,
-  "nextPhasePreparation": "docs/autonomous-build/PHASE_H_PREPARATION.md"
+  "nextPhasePreparation": "PHASE_I_PREPARATION.md"
 }

@@ -12,6 +12,7 @@
     "start": "node dist/src/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
+    "test:e2e": "node scripts/e2e.mjs",
     "lint": "eslint .",
     "check": "npm run typecheck && npm run build && npm test",
     "postinstall": "prisma generate",

@@ -94,7 +94,35 @@ try {
     ok(text.includes('Auto clip ranking sends no highlights and returns an empty ranking'), 'ranking notice missing');
     ok(await page.locator('#phaseg-srt').count() === 1, 'SRT input missing');
   });
-  await check('19 no browser page errors during full tab tour', async () => {
+
+  await check('19 Phase H calendar shows publishing plans, queue, approvals and adapters', async () => {
+    await page.locator('button.nav[data-view="calendar"]').click();
+    for (const id of ['h5-publishing-queue', 'h5-publishing-schedules', 'h5-publishing-approvals', 'h5-publishing-adapters', 'h5-verification']) {
+      ok(await page.locator(`[data-testid="${id}"]`).count() === 1, `${id} missing`);
+    }
+    const verification = await page.locator('[data-testid="h5-verification"]').innerText();
+    ok(verification.includes('LOCAL_IMPLEMENTED'), 'LOCAL_IMPLEMENTED missing');
+    ok(verification.includes('EXTERNAL_LIVE_VERIFIED: NONE'), 'external verification not separated');
+  });
+  await check('20 Phase H agents view reuses the publishing status panels', async () => {
+    await page.locator('button.nav[data-view="agents"]').click();
+    ok(await page.locator('[data-testid="h5-publishing-queue"]').count() === 1, 'queue panel missing in agents');
+  });
+  await check('21 Phase H analytics shows truth-first affiliate revenue and sources', async () => {
+    await page.locator('button.nav[data-view="analytics"]').click();
+    for (const id of ['h5-affiliate-revenue', 'h5-affiliate-links', 'h5-analytics-sources']) {
+      ok(await page.locator(`[data-testid="${id}"]`).count() === 1, `${id} missing`);
+    }
+    const text = await page.locator('[data-testid="h5-affiliate-summary"]').innerText();
+    ok(text.includes('Only real supplied commissions'), 'commission honesty notice missing');
+  });
+  await check('22 Phase H campaigns cross-links revenue without adding a tab', async () => {
+    await page.locator('button.nav[data-view="campaigns"]').click();
+    ok(await page.locator('[data-testid="h5-campaign-affiliate-links"]').count() === 1, 'campaign links panel missing');
+    ok(await page.locator('[data-testid="h5-campaign-revenue-link"]').count() === 1, 'revenue cross-link missing');
+    ok(await page.locator('button.nav[data-view]').count() === 15, 'unexpected new tab');
+  });
+  await check('23 no browser page errors during full tab tour', async () => {
     ok(consoleErrors.length === 0, `${consoleErrors.length} error(s): ${consoleErrors[0] || ''}`);
   });
 } finally {

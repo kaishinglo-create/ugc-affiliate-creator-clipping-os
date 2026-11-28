@@ -4,6 +4,7 @@ import { withWorkspaceTransaction } from '../lib/db.js';
 import { writeAuditEvent } from '../lib/audit.js';
 import { isKillSwitchActive } from '../lib/security.js';
 import { runAgentTask } from './ai/agent-runtime.js';
+import { phaseHAgentContext } from './phase-h-agent-context.js';
 import {
   assertOrchestrationLease,
   claimOrchestrationLease,
@@ -215,6 +216,12 @@ export function departmentProduces(departmentKey: string, action: string, goal: 
     case 'ceo':
       if (action === 'synthesize') return { summary: `CEO synthesis for: ${goal}`, dependenciesResolved: null, status: 'awaiting_validation' };
       return { summary: `CEO orchestration for: ${goal}`, stage: 'coordination' };
+    case 'coo':
+      return { summary: `COO operations routing for: ${goal}`, routing: 'delegated', approvalStatus: 'manual_review_required' };
+    case 'affiliate':
+      return { summary: `Affiliate plan for: ${goal}`, attribution: 'stored_rows_only', payouts: 'manual_status_transitions' };
+    case 'api_integration':
+      return { summary: `API integration plan for: ${goal}`, connectionStatus: 'probe_required', secretsInResponses: false };
     default:
       throw new Error(`UNKNOWN_DEPARTMENT:${departmentKey}`);
   }
@@ -486,7 +493,13 @@ async function processOrchestrationJob(workspaceId: string, runId: string, jobId
       action,
       goal: taskRunGoal,
       timeoutMs: Number(task.timeoutMs ?? 30000),
-      deterministic: () => departmentProduces(String(task.departmentKey), action, taskRunGoal),
+      deterministic: async () => {
+        const plan = departmentProduces(String(task.departmentKey), action, taskRunGoal);
+        // Every factual number below comes from persisted workspace rows.
+        // Failures fall back to the honest planner plan, never to invented data.
+        const context = await phaseHAgentContext(workspaceId, String(task.departmentKey)).catch(() => ({}));
+        return { ...plan, ...context };
+      },
     });
 
     trace('agent_task.end', { span: agentSpan, runId, taskId: String(task.id), durationMs: Date.now() - agentStarted, ok: true });

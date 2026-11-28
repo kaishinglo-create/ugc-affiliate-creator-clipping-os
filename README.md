@@ -55,6 +55,7 @@ Secrets niemals committen.
 - `npm run build` - Kompilieren
 - `npm run typecheck` - Typprüfung
 - `npm test` - Tests
+- `npm run test:e2e` - Playwright-Suite (nutzt `.env`/Umgebung, startet und stoppt nur fehlende lokalen Dienste :3000/:3031)
 - `npm run lint` - Lint (noch nicht konfiguriert)
 
 ## Dokumentation

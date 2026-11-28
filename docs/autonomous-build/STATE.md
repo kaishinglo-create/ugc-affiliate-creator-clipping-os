@@ -1,5 +1,67 @@
 # STATE
 
+## Phase H (2026-11-27) — lokal abgenommen, `READY_FOR_COMMIT`
+
+- Branch `feature/phase-h-live-publishing-2026-11-27` von `main` `55d28c4`;
+  HEAD unverändert, alle Änderungen uncommitted. Kein Commit/Push/PR/Merge/
+  Deployment/Publishing und kein Controller-Neustart ohne separate Freigabe.
+- H.0–H.6 lokal umgesetzt: Publishing-Queue/Pläne/Kill-Switch/Crash-Recovery/
+  Cap, offizielle Adapter mit verschlüsselten Credentials und ehrlichem
+  `NOT_CONFIGURED`, v2-Freigabekette mit SHA-256, Affiliate-Links/UTM/Webhooks/
+  Payouts/Revenue, Consent/Retention/Purge, Provider-Analytics-Request-Layer
+  und Agenten-Kontext für 8 Rollen.
+- Statisch grün: Typecheck, ESLint (0/0), Build, `node --check`, 44 Migrationen,
+  DB-Verifikation 7/7, Secret-Scan 4 Werte/519 Dateien/0 Treffer.
+- Tests: 327 Baseline unverändert + 26 neue Phase-H-Tests = 353 in 87 Dateien.
+  Browser-Gates grün: Playwright 9/9, Frontend 23/23, MECE 30/30,
+  `verify:phase-g` passed. Finaler Quellstand `0fa61ade…` (33 Dateien);
+  zwei isolierte `qa:full`-Läufe darauf grün (je 353/353, 87/87, Exit 0,
+  Watchdog aus, `ugc_os_app` ohne Superuser/BYPASSRLS). Finalurteil
+  `READY_FOR_COMMIT`; Details: `PHASE_H_FINAL_ACCEPTANCE_REPORT.md`.
+- `EXTERNAL_LIVE_VERIFIED: none` (keine Plattform-Credentials/OAuth-Freigaben,
+  kein `YOUTUBE_API_KEY`/`OLLAMA_API_KEY`, kein öffentlicher Host, keine
+  Deployment-Credentials). Controller/Supervisor `stopped`, STOP-Flag vorhanden.
+- Phase I ist vorbereitet (`PHASE_I_PREPARATION.md`), nicht gestartet.
+
+
+## Phase H — lokale Implementierung (2026-11-27, laufende Finalabnahme)
+
+- Feature-Branch `feature/phase-h-live-publishing-2026-11-27`, Basis
+  `55d28c4e210fcbe9b9877fda090cf796ade8c280` (`main`). HEAD unverändert; alle
+  Phase-H-Änderungen sind **uncommitted**. Kein Commit, Push, Merge, Deploy,
+  Publishing oder Controller-Neustart ohne separate ausdrückliche Freigabe.
+- Controller/Supervisor weiterhin `stopped`; `docs/completion/controller/STOP`
+  vorhanden.
+- H.0: vier vollständige Bestandsaudits und MECE-Matrix
+  (`PHASE_H_FEATURE_MATRIX.md`) vor der Implementierung. Keine doppelte Queue;
+  `Job(category=PUBLISHING)` bleibt die Grundlage.
+- H.1/H.2/H.3 lokal implementiert: persistente Publishing-Konten und
+  zeitzonenbezogene Pläne, Idempotenz/Retry/DLQ/Crash-Recovery, Kill-Switch vor
+  dem Extern-Call, verschlüsselte Workspace-Credentials mit Fail-Closed-Decrypt,
+  offizielle YouTube-/TikTok-/Instagram-Adapter inkl. Shorts/Reels, Progress,
+  Token-Refresh, echte SHA-256-Checksumme und menschliche v2-Freigabekette.
+  Ohne Credentials/Credential-Decrypt/Opt-in: `NOT_CONFIGURED` bzw.
+  `CREDENTIAL_DECRYPT_FAILED`, nie ein Fake-Upload oder `CONNECTED`.
+- H.4/H.5 lokal implementiert: Affiliate-Links mit UTM/Disclosure,
+  serverseitiges Dedup, echte Provisionen, Payout-Status, Revenue-Dimensionen
+  und lesende Panels in `calendar`, `agents`, `analytics`, `campaigns` ohne
+  neuen Tab. Verification-States werden getrennt angezeigt;
+  `EXTERNAL_LIVE_VERIFIED: none`.
+- Validierung zwischenzeitlich: Typecheck, ESLint (0 Fehler/0 Warnungen),
+  Build, `node --check public/app.js` und die beiden erweiterten Browser-Skripte
+  PASS. Bestehende Tests 327/327 plus neue
+  `tests/phase-h-regression.test.ts` 9/9. Die Migration
+  `20261127120000_phase_h_publishing_affiliate` wurde lokal und in isolierten
+  QA-Clustern angewendet.
+- Zwei isolierte `qa:full`-Läufe, Playwright, MECE-Browsercheck,
+  Frontendabnahme, RLS- und Secret-Scan-Prüfung werden im Finalreport
+  `PHASE_H_FINAL_ACCEPTANCE_REPORT.md` dokumentiert.
+- Externe Blockaden bleiben: keine Plattform-Credentials/OAuth-Freigaben,
+  `YOUTUBE_API_KEY` leer, `OLLAMA_API_KEY` leer, kein öffentlicher Host, keine
+  Deployment-Credentials. Keine kostenpflichtigen Modelle/Dienste.
+- Status: **PHASE_H_LOCAL_IMPLEMENTED**, `EXTERNAL_LIVE_VERIFIED: none`,
+  Commit-Freigabe noch nicht erteilt. Phase I ist vorbereitet, nicht gestartet.
+
 ## Phase G — Finalabnahme und Main-Integration (2026-11-27, Finalstand)
 
 - Feature-Branch `feature/phase-g-completion-2026-11-27`, Basis `a45d06a`. Die

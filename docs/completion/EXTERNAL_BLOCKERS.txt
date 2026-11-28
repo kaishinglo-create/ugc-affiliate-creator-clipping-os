@@ -142,3 +142,41 @@ Phase G — Main-Integration (Final, 2026-11-27):
 - Kein Deployment, kein Publishing, kein Controller-Neustart; STOP-Flag weiter
   vorhanden. Keine kostenpflichtigen Modelle, keine Fake-Erfolge, keine
   Testabschwächungen. Phase H nicht gestartet; Freigabe erforderlich.
+
+Phase H — lokale Implementierung (2026-11-27):
+- Branch `feature/phase-h-live-publishing-2026-11-27`, Basis `55d28c4`. Alle
+  Änderungen uncommitted. Kein Commit/Push/Merge/Deploy/Publishing und kein
+  Controller-Neustart ohne separate Freigabe.
+- Externe Live-Verifikation weiterhin `EXTERNAL_LIVE_VERIFIED: none`: keine
+  echten YouTube-/TikTok-/Instagram-Credentials, keine OAuth-App-Freigaben,
+  kein `YOUTUBE_API_KEY`, kein `OLLAMA_API_KEY`, kein öffentlicher Host und
+  keine Deployment-Credentials. `CREDENTIALS_ONLY` ist kein Live-Erfolg;
+  ohne Credentials bleibt jeder Adapter `NOT_CONFIGURED`.
+- Live-Publishing benötigt zusätzlich `PUBLISHING_LIVE_ADAPTERS=1|true`. Ohne
+  diese Opt-in plus echte Workspace-Credentials gibt es keinen Netzwerkcall und
+  keine erfundene Plattform-ID/URL.
+- Keine externen Analytics-/Insights-Daten: die dokumentierten Request- und
+  Parse-Layer für YouTube Analytics, TikTok Creator Info und Instagram Insights
+  sind lokal implementiert (`src/provider-analytics.ts`), aber ohne Tokens
+  `NOT_CONFIGURED`; es werden keine Kennzahlen erfunden. Provisionen werden nur
+  aus real gelieferten `commissionCents` gezählt; fehlende Werte bleiben
+  sichtbar `null`/`—`.
+- Keine echten Affiliate-Netzwerk-Signaturschemata: der serverseitige
+  HMAC-SHA256-Webhook ist implementiert und lokal geprüft, aber nicht mit einem
+  echten Provider validiert. Consent/Retention/Purge sind technische Bausteine
+  (`/api/privacy/*`), keine Rechtskonformitätserklärung. Kein monetäres
+  Budget-Cap; der harte Tages-Cap für Publishing-Versuche ist implementiert.
+  Schreibende Publishing-/Affiliate-Aktionen sind im Dashboard vorhanden.
+- RLS/Workspace-Isolation ist lokal mit Nicht-Superuser geprüft; die Migration
+  wurde auf der lokalen Entwicklungs-DB und in isolierten `qa:full`-Clustern
+  angewendet. Kein produktiver Deploy. Lokale Finalabnahme abgeschlossen:
+  `READY_FOR_COMMIT`, zwei isolierte `qa:full`-Läufe je 353/353 grün,
+  Quellstand `0fa61ade…` (33 Dateien).
+
+Korrektur zur Finalabnahme (2026-11-27): schreibende Publishing-/Affiliate-
+Aktionen sind jetzt im Dashboard hinterlegt (Accounts, Approvals, Schedules,
+Links, Retry, Revoke, Disable). Ein harter Tages-Cap für Publishing-Versuche
+existiert; Per-Plattform-Quota-Verbrauch bleibt offen. IP-Pinning,
+Redirect-Validierung, realpath-/O_NOFOLLOW-Schutz und Workspace-/Provider-gebundene
+Webhook-HMACs sind lokal implementiert und getestet, nicht aber gegen echte
+Provider live verifiziert.

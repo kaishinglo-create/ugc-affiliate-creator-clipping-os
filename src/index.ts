@@ -6,15 +6,24 @@ import rateLimit from '@fastify/rate-limit';
 import { z } from 'zod';
 import { loadConfig, resolveTrustProxy } from './config.js';
 import { join, extname } from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { Readable } from 'node:stream';
 import { prisma, withWorkspaceTransaction } from '../lib/db.js';
 import { writeAuditEvent } from '../lib/audit.js';
 import { redactError, redactText } from '../lib/redaction.js';
 import { resolvePublicFile } from '../lib/static-files.js';
 import { hashPassword, verifyPassword, createSession, verifySession, sessionCookieHeader, readSessionCookie, revokeSession } from '../lib/auth.js';
-import { isAffiliatePayoutAction, resolvePayoutTransition, summarizeAttribution, summarizePayouts } from './affiliate.js';
+import {
+  appendUtm,
+  isAffiliatePayoutAction,
+  normalizeUtm,
+  resolvePayoutTransition,
+  summarizeAffiliateRevenue,
+  summarizeAttribution,
+  summarizePayouts,
+} from './affiliate.js';
 import { getBrowserGateway, validateBrowserUrl } from './browser-gateway.js';
 import { newSpan, trace } from './qa-trace.js';
 import {
@@ -33,6 +42,10 @@ import {
   oauthCookieName,
   readOAuthCookie,
 } from './api-integration-center/service.js';
+
+function randomToken(): string {
+  return randomUUID().replace(/-/g, '').slice(0, 16);
+}
 
 const trustProxy = resolveTrustProxy(process.env.TRUST_PROXY);
 const app = Fastify({ logger: true, trustProxy: trustProxy as any });
@@ -384,17 +397,54 @@ app.get('/api/analytics/sources', async (req, reply) => {
   return { analytics };
 });
 
+const AFFILIATE_CLICK_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+function affiliateClickData(workspaceId: string, body: any, key: string | null) {
+  const utm = normalizeUtm(body.utm ?? body);
+  const optionalId = (value: unknown) => {
+    if (value === undefined || value === null || String(value).trim() === '') return null;
+    const id = String(value).trim();
+    return AFFILIATE_CLICK_RE.test(id) ? id : '__INVALID__';
+  };
+  const fields: Record<string, string | null> = {
+    contentId: optionalId(body.contentId),
+    offerId: optionalId(body.offerId),
+    linkId: optionalId(body.linkId),
+    postId: optionalId(body.postId),
+    campaignId: optionalId(body.campaignId),
+    creatorId: optionalId(body.creatorId),
+    productId: optionalId(body.productId),
+    platform: optionalId(body.platform),
+    externalEventId: body.externalEventId == null ? null : String(body.externalEventId).trim().slice(0, 200) || null,
+    utmSource: utm.utm_source ?? null,
+    utmMedium: utm.utm_medium ?? null,
+    utmCampaign: utm.utm_campaign ?? null,
+    utmContent: utm.utm_content ?? null,
+    utmTerm: utm.utm_term ?? null,
+    referrer: body.referrer == null ? null : String(body.referrer).trim().slice(0, 500) || null,
+  };
+  if (Object.values(fields).includes('__INVALID__')) return null;
+  // Never persist a raw IP address; only a day-scoped, one-way hash for dedup.
+  const forwarded = String(body.ipHashInput ?? '');
+  const dedupHash = forwarded
+    ? createHash('sha256').update(`${workspaceId}:${new Date().toISOString().slice(0, 10)}:${forwarded}`).digest('hex').slice(0, 32)
+    : null;
+  return { workspaceId, ...fields, idempotencyKey: key ?? (dedupHash ? `click:${dedupHash}` : null) };
+}
+
 app.post('/api/analytics/clicks', async (req, reply) => {
   const ctx = await requireAuthWorkspace(req, reply);
   if (!ctx) return;
   const body = (req.body ?? {}) as any;
-  const key = body.idempotencyKey ? String(body.idempotencyKey) : undefined;
-  if (key) {
-    const existing = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.affiliateClick.findUnique({ where: { workspaceId_idempotencyKey: { workspaceId: ctx.workspaceId, idempotencyKey: key } } }));
+  const key = body.idempotencyKey ? String(body.idempotencyKey).trim().slice(0, 200) : null;
+  const data = affiliateClickData(ctx.workspaceId, body, key);
+  if (!data) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  if (data.idempotencyKey) {
+    const existing = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.affiliateClick.findUnique({ where: { workspaceId_idempotencyKey: { workspaceId: ctx.workspaceId, idempotencyKey: String(data.idempotencyKey) } } }));
     if (existing) { reply.code(200).send({ click: existing, duplicate: true }); return; }
   }
-  const click = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.affiliateClick.create({ data: { workspaceId: ctx.workspaceId, contentId: body.contentId ?? null, offerId: body.offerId ?? null, idempotencyKey: key ?? null } }));
-  reply.code(201).send({ click });
+  const click = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.affiliateClick.create({ data }));
+  reply.code(201).send({ click, duplicate: false });
   return;
 });
 
@@ -436,6 +486,16 @@ app.post('/api/affiliate/conversions', async (req, reply) => {
     ? null
     : String(body.idempotencyKey).trim();
   if (idempotencyKey && idempotencyKey.length > 200) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const externalEventId = body.externalEventId == null || String(body.externalEventId).trim() === ''
+    ? null
+    : String(body.externalEventId).trim().slice(0, 200);
+  const commissionCents = body.commissionCents === undefined || body.commissionCents === null || body.commissionCents === ''
+    ? null
+    : Number(body.commissionCents);
+  if (commissionCents !== null && (!Number.isInteger(commissionCents) || commissionCents < 0 || commissionCents > 2_147_483_647)) {
+    return reply.code(400).send({ error: 'INVALID_COMMISSION' });
+  }
+  const currency = body.currency == null ? null : String(body.currency).trim().toUpperCase().slice(0, 8) || null;
 
   if (idempotencyKey) {
     const existing: any = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) =>
@@ -457,7 +517,10 @@ app.post('/api/affiliate/conversions', async (req, reply) => {
         : null;
       if (clickId && !click) return { error: 'INVALID_CLICK_ID' };
       const conversion = await tx.affiliateConversion.create({
-        data: { workspaceId: ctx.workspaceId, clickId: click?.id ?? null, amountCents, status: 'pending', idempotencyKey },
+        data: {
+          workspaceId: ctx.workspaceId, clickId: click?.id ?? null, amountCents,
+          status: 'pending', idempotencyKey, externalEventId, commissionCents, currency,
+        },
       });
       await writeAuditEvent({
         tx,
@@ -474,9 +537,11 @@ app.post('/api/affiliate/conversions', async (req, reply) => {
     reply.code(201).send({ conversion: result.conversion, attribution: affiliateAttribution(result.click, result.conversion), duplicate: false });
     return;
   } catch (error: any) {
-    if (error?.code === 'P2002' && idempotencyKey) {
+    if (error?.code === 'P2002' && (idempotencyKey || externalEventId)) {
       const existing: any = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) =>
-        tx.affiliateConversion.findUnique({ where: { workspaceId_idempotencyKey: { workspaceId: ctx.workspaceId, idempotencyKey } } })
+        idempotencyKey
+          ? tx.affiliateConversion.findUnique({ where: { workspaceId_idempotencyKey: { workspaceId: ctx.workspaceId, idempotencyKey } } })
+          : tx.affiliateConversion.findFirst({ where: { workspaceId: ctx.workspaceId, externalEventId } })
       );
       if (existing) {
         const click = existing.clickId
@@ -556,7 +621,11 @@ app.post('/api/affiliate/conversions/:id/payout', async (req, reply) => {
     if (!transition.ok) return { kind: 'conflict', error: transition.error };
     const updated = await tx.affiliateConversion.updateMany({
       where: { id, workspaceId: ctx.workspaceId, status: existing.status },
-      data: { status: transition.status },
+      data: {
+        status: transition.status,
+        ...(reference ? { payoutReference: reference } : {}),
+        ...(transition.status === 'paid' ? { paidAt: new Date() } : {}),
+      },
     });
     if (updated.count !== 1) return { kind: 'conflict', error: 'INVALID_PAYOUT_TRANSITION' };
     const conversion = await tx.affiliateConversion.findUnique({ where: { id } });
@@ -584,6 +653,252 @@ app.post('/api/affiliate/conversions/:id/payout', async (req, reply) => {
   return { conversion: result.conversion };
 });
 
+
+/* Phase H.5: signed provider webhooks. The secret is server-side only. */
+app.post('/api/affiliate/webhooks/:provider', {
+  config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+  preParsing: async (req: any, _reply: any, payload: any) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    const maxBytes = 256 * 1024;
+    for await (const chunk of payload) {
+      total += chunk.byteLength ?? chunk.length;
+      if (total > maxBytes) {
+        throw Object.assign(new Error('WEBHOOK_TOO_LARGE'), { statusCode: 413 });
+      }
+      chunks.push(Buffer.from(chunk));
+    }
+    const raw = Buffer.concat(chunks);
+    req.rawBody = raw.toString('utf8');
+    return Readable.from([raw]);
+  },
+}, async (req, reply) => {
+  const workspaceId = String((req.headers as any)['x-workspace-id'] ?? (req.query as any)?.workspaceId ?? '').trim();
+  const provider = String((req.params as any)?.provider ?? '').trim().toLowerCase();
+  if (!workspaceId || !/^[A-Za-z0-9_-]{1,128}$/.test(provider)) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const secretName = `AFFILIATE_WEBHOOK_SECRET_${provider.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+  const secret = String(process.env[secretName] ?? '').trim();
+  if (!secret) return reply.code(503).send({ error: 'WEBHOOK_NOT_CONFIGURED' });
+  const { verifyAffiliateWebhookSignature, applyAffiliateWebhookConversion } = await import('./affiliate-webhook.js');
+  const rawBody = String((req as any).rawBody ?? '');
+  const signature = String((req.headers as any)['x-affiliate-signature'] ?? '');
+  const timestamp = String((req.headers as any)['x-affiliate-timestamp'] ?? '');
+  if (!verifyAffiliateWebhookSignature({ rawBody, signature, secret, timestamp, workspaceId, provider })) {
+    await writeAuditEvent({
+      workspaceId, userId: null, runId: null, type: 'affiliate_webhook_rejected',
+      actor: 'webhook', data: { provider, reason: 'INVALID_SIGNATURE' },
+    }).catch(() => undefined);
+    return reply.code(401).send({ error: 'INVALID_SIGNATURE' });
+  }
+  const body = (req.body ?? {}) as any;
+  const amountCents = Number(body.amountCents);
+  const commissionCents = body.commissionCents === undefined || body.commissionCents === null
+    ? null : Number(body.commissionCents);
+  const result = await applyAffiliateWebhookConversion({
+    workspaceId,
+    provider,
+    externalEventId: String(body.externalEventId ?? ''),
+    clickId: body.clickId ?? null,
+    amountCents,
+    commissionCents,
+    currency: body.currency ?? null,
+    actor: 'webhook',
+  });
+  return reply.code(result.duplicate ? 200 : 201).send(result);
+});
+
+app.post('/api/publishing/provider-analytics', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const body = (req.body ?? {}) as any;
+  const platform = String(body.platform ?? '').trim().toLowerCase();
+  if (!['youtube', 'tiktok', 'instagram'].includes(platform)) return reply.code(400).send({ error: 'INVALID_PLATFORM' });
+  try {
+    const { resolvePublishingCredentials } = await import('./api-integration-center/service.js');
+    const creds = await resolvePublishingCredentials(ctx.workspaceId, platform as any);
+    const tokenName = platform === 'youtube' ? 'YOUTUBE_ACCESS_TOKEN'
+      : platform === 'tiktok' ? 'TIKTOK_ACCESS_TOKEN' : 'INSTAGRAM_ACCESS_TOKEN';
+    const token = String(creds.env?.[tokenName] ?? '').trim();
+    if (!token) return reply.code(503).send({ error: 'NOT_CONFIGURED', requiredEnv: [tokenName] });
+    const mod = await import('./provider-analytics.js');
+    const request = platform === 'youtube'
+      ? mod.buildYouTubeAnalyticsRequest({ accessToken: token, startDate: String(body.startDate ?? ''), endDate: String(body.endDate ?? ''), metrics: body.metrics, dimensions: body.dimensions, filters: body.filters })
+      : platform === 'tiktok'
+        ? mod.buildTikTokCreatorInfoRequest(token)
+        : mod.buildInstagramInsightsRequest({ accessToken: token, igUserId: body.igUserId, metric: body.metric, period: body.period });
+    // No injected fetch in production: the socket is pinned to a validated IP.
+    return await mod.fetchProviderAnalytics({ platform: platform as any, request });
+  } catch (error: any) {
+    const code = String(error?.message ?? 'PROVIDER_ANALYTICS_FAILED');
+    return reply.code(code === 'INVALID_INPUT' ? 400 : 502).send({ error: code });
+  }
+});
+
+app.get('/api/publishing/provider-capabilities', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { listProviderCapabilities } = await import('./provider-capabilities.js');
+  return { capabilities: listProviderCapabilities() };
+});
+
+/* Phase H: local data governance (technical helpers, no legal claim). */
+app.post('/api/privacy/consent', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const body = (req.body ?? {}) as any;
+  try {
+    const { recordConsent } = await import('./data-governance.js');
+    return { consent: await recordConsent({
+      workspaceId: ctx.workspaceId, actor: ctx.userId,
+      subjectId: body.subjectId, purpose: body.purpose, granted: body.granted === true,
+    }) };
+  } catch (error: any) {
+    return reply.code(error?.statusCode ?? 400).send({ error: error?.message ?? 'INVALID_INPUT' });
+  }
+});
+
+app.get('/api/privacy/retention', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { retentionReport } = await import('./data-governance.js');
+  return { retention: await retentionReport(ctx.workspaceId) };
+});
+
+app.post('/api/privacy/purge', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const body = (req.body ?? {}) as any;
+  try {
+    const { purgeStaleAffiliateData } = await import('./data-governance.js');
+    return { purge: await purgeStaleAffiliateData({
+      workspaceId: ctx.workspaceId, actor: ctx.userId,
+      olderThanDays: Number(body.olderThanDays), confirm: body.confirm === true,
+    }) };
+  } catch (error: any) {
+    return reply.code(error?.statusCode ?? 400).send({ error: error?.message ?? 'INVALID_INPUT' });
+  }
+});
+
+/* Phase H.4: affiliate links, UTM tracking, disclosure and truth-only revenue. */
+app.post('/api/affiliate/links', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const body = (req.body ?? {}) as any;
+  const offerId = String(body.offerId ?? '').trim();
+  const destinationUrl = String(body.destinationUrl ?? '').trim();
+  const token = body.token == null || String(body.token).trim() === ''
+    ? randomToken()
+    : String(body.token).trim();
+  if (!AFFILIATE_CLICK_RE.test(offerId) || !AFFILIATE_CLICK_RE.test(token)) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  if (token.length > 128) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  try {
+    const url = new URL(destinationUrl);
+    if (url.protocol !== 'https:' || url.username || url.password) return reply.code(400).send({ error: 'INVALID_DESTINATION' });
+  } catch {
+    return reply.code(400).send({ error: 'INVALID_DESTINATION' });
+  }
+  const commissionBps = body.commissionBps == null || body.commissionBps === ''
+    ? null
+    : Number(body.commissionBps);
+  if (commissionBps !== null && (!Number.isInteger(commissionBps) || commissionBps < 0 || commissionBps > 10_000)) {
+    return reply.code(400).send({ error: 'INVALID_COMMISSION_BPS' });
+  }
+  const optionalId = (value: unknown) => value == null || String(value).trim() === '' ? null : String(value).trim();
+  const link: any = await withWorkspaceTransaction(ctx.workspaceId, async (tx: any) => {
+    const existing = await tx.affiliateLink.findUnique({
+      where: { workspaceId_token: { workspaceId: ctx.workspaceId, token } },
+    });
+    if (existing) return { conflict: true };
+    const row = await tx.affiliateLink.create({
+      data: {
+        workspaceId: ctx.workspaceId,
+        token,
+        campaignId: optionalId(body.campaignId),
+        creatorId: optionalId(body.creatorId),
+        productId: optionalId(body.productId),
+        offerId,
+        destinationUrl,
+        commissionBps,
+        disclosureText: body.disclosureText == null ? null : String(body.disclosureText).trim().slice(0, 500) || null,
+        status: 'active',
+      },
+    });
+    await writeAuditEvent({
+      tx, workspaceId: ctx.workspaceId, userId: ctx.userId, runId: null,
+      type: 'affiliate_link_created', actor: ctx.userId,
+      data: { linkId: row.id, token, offerId, campaignId: row.campaignId, creatorId: row.creatorId },
+    });
+    return { row };
+  });
+  if (link.conflict) return reply.code(409).send({ error: 'LINK_EXISTS' });
+  reply.code(201).send({ link: link.row });
+  return;
+});
+
+app.get('/api/affiliate/links', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const links = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) =>
+    tx.affiliateLink.findMany({ where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' }, take: 100 })
+  );
+  return { links };
+});
+
+/** Public click redirect. Token and workspaceId are identifiers, never secrets. */
+app.get('/api/affiliate/links/:token/click', async (req, reply) => {
+  const q = (req.query ?? {}) as Record<string, unknown>;
+  const workspaceId = String(q.workspaceId ?? '').trim();
+  if (!AFFILIATE_CLICK_RE.test(workspaceId)) return reply.code(400).send({ error: 'INVALID_WORKSPACE' });
+  const token = String((req.params as any).token ?? '').trim();
+  if (!AFFILIATE_CLICK_RE.test(token)) return reply.code(400).send({ error: 'INVALID_LINK' });
+  const result: any = await withWorkspaceTransaction(workspaceId, async (tx: any) => {
+    const link: any = await tx.affiliateLink.findFirst({ where: { workspaceId, token, status: 'active' } });
+    if (!link) return { notFound: true };
+    const utm = normalizeUtm(q);
+    const externalEventId = q.externalEventId == null ? null : String(q.externalEventId).trim().slice(0, 200) || null;
+    const ipHashInput = String(q.visitor ?? '').trim().slice(0, 200);
+    const data = affiliateClickData(workspaceId, {
+      contentId: q.contentId, offerId: link.offerId, linkId: link.id,
+      postId: q.postId, campaignId: q.campaignId ?? link.campaignId,
+      creatorId: q.creatorId ?? link.creatorId, productId: link.productId,
+      platform: q.platform, referrer: q.referrer, utm, externalEventId, ipHashInput,
+    }, externalEventId ? `event:${externalEventId}` : null);
+    if (!data) return { invalid: true };
+    const existing = data.idempotencyKey
+      ? await tx.affiliateClick.findUnique({
+        where: { workspaceId_idempotencyKey: { workspaceId, idempotencyKey: String(data.idempotencyKey) } },
+      })
+      : null;
+    const click = existing ?? await tx.affiliateClick.create({ data });
+    return { click, destination: appendUtm(link.destinationUrl, utm), disclosureText: link.disclosureText };
+  });
+  if (result.notFound) return reply.code(404).send({ error: 'LINK_NOT_FOUND' });
+  if (result.invalid || !result.destination) return reply.code(400).send({ error: 'INVALID_LINK' });
+  reply.header('X-Affiliate-Disclosure', result.disclosureText ? 'required' : 'none');
+  return reply.redirect(result.destination, 302);
+});
+
+app.get('/api/affiliate/revenue', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const q = (req.query ?? {}) as any;
+  const windowMs = q.windowMs === undefined ? null : Number(q.windowMs);
+  if (windowMs !== null && (!Number.isFinite(windowMs) || windowMs <= 0 || windowMs > 366 * 24 * 60 * 60 * 1000)) {
+    return reply.code(400).send({ error: 'INVALID_WINDOW_MS' });
+  }
+  const from = windowMs === null ? null : new Date(Date.now() - windowMs);
+  const where = (column: string) => from ? { [column]: { gte: from } } : {};
+  const [clicks, conversions, links, posts] = await withWorkspaceTransaction(ctx.workspaceId, (tx: any) => Promise.all([
+    tx.affiliateClick.findMany({ where: { workspaceId: ctx.workspaceId, ...where('clickedAt') } }),
+    tx.affiliateConversion.findMany({ where: { workspaceId: ctx.workspaceId, ...where('convertedAt') } }),
+    tx.affiliateLink.findMany({ where: { workspaceId: ctx.workspaceId } }),
+    tx.contentPost.findMany({ where: { workspaceId: ctx.workspaceId }, select: { id: true, platform: true } }),
+  ])) as any[];
+  return {
+    revenue: summarizeAffiliateRevenue({ clicks, conversions, links, posts }),
+    dataAvailable: clicks.length + conversions.length > 0,
+  };
+});
 
 // Business Hub
 app.get('/api/creators', async (req, reply) => {
@@ -797,6 +1112,31 @@ app.post('/api/approvals/:id/decide', async (req, reply) => {
   // A decision must actually release (or stop) the work that was waiting on it.
   const resumed = await resumeAfterApprovalDecision(ctx, a as any, approved);
   return { approval: a, resumed };
+});
+
+// A human may revoke a previously approved publishing gate. Revocation is
+// final and is checked again by the publishing gate before every upload.
+app.post('/api/approvals/:id/revoke', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const id = String((req.params as any)?.id ?? '');
+  const revoked = await withWorkspaceTransaction(ctx.workspaceId, async (tx: any) => {
+    const row: any = await tx.approval.findFirst({ where: { id, workspaceId: ctx.workspaceId } });
+    if (!row) return null;
+    if (row.revokedAt) return { alreadyRevoked: true, approval: row };
+    const updated: any = await tx.approval.update({
+      where: { id },
+      data: { revokedAt: new Date(), status: 'rejected' },
+    });
+    await writeAuditEvent({
+      tx, workspaceId: ctx.workspaceId, userId: ctx.userId, runId: null,
+      type: 'publishing_approval_revoked', actor: ctx.userId,
+      data: { approvalId: id, entityType: row.entityType, entityId: row.entityId },
+    });
+    return { alreadyRevoked: false, approval: updated };
+  });
+  if (!revoked) return reply.code(404).send({ error: 'APPROVAL_NOT_FOUND' });
+  return revoked;
 });
 
 async function resumeAfterApprovalDecision(ctx: any, approval: any, approved: boolean): Promise<{ entityType: string; runId: string | null } | null> {
@@ -1272,6 +1612,10 @@ app.post('/api/publishing/jobs', async (req, reply) => {
     options: body.options,
     maxAttempts: body.maxAttempts,
     runAt: body.runAt ? new Date(body.runAt) : null,
+    accountKey: body.accountKey,
+    checksum: body.checksum,
+    qualityReportId: body.qualityReportId,
+    scheduleId: body.scheduleId,
   });
   return reply.code(result.statusCode).send(result.body);
 });
@@ -1304,6 +1648,199 @@ app.post('/api/publishing/jobs/:id/process', async (req, reply) => {
     { workerId: String(((req.body ?? {}) as any).workerId ?? ctx.userId) },
   );
   return reply.code(result.statusCode).send(result.body);
+});
+
+/* Phase H.1/H.3: accounts, timezone-aware plans, approval chain and DLQ retry. */
+app.post('/api/publishing/approvals', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const body = (req.body ?? {}) as any;
+  const { publishingApprovalTarget } = await import('./publishing.js');
+  const target = publishingApprovalTarget({
+    workspaceId: ctx.workspaceId,
+    actor: ctx.userId,
+    platform: body.platform,
+    entityType: body.entityType,
+    entityId: body.entityId,
+    idempotencyKey: body.idempotencyKey,
+    accountKey: body.accountKey,
+    checksum: body.checksum,
+    qualityReportId: body.qualityReportId,
+    options: body.options,
+    scheduleId: body.scheduleId,
+  });
+  if (!target) return reply.code(400).send({ error: 'INVALID_INPUT' });
+  const qualityReportId = body.qualityReportId == null || String(body.qualityReportId).trim() === ''
+    ? null
+    : String(body.qualityReportId).trim();
+  const result: any = await withWorkspaceTransaction(ctx.workspaceId, async (tx: any) => {
+    if (await (await import('../lib/security.js')).isKillSwitchActive(ctx.workspaceId, tx)) {
+      return { error: 'KILL_SWITCH_ACTIVE' };
+    }
+    if (qualityReportId) {
+      const report: any = await tx.qualityReport.findFirst({
+        where: { id: qualityReportId, workspaceId: ctx.workspaceId, passed: true },
+        select: { id: true, passed: true, checksum: true },
+      });
+      if (!report?.passed) return { error: 'QUALITY_REPORT_REQUIRED' };
+      if (report.checksum && body.checksum && String(report.checksum) !== String(body.checksum)) {
+        return { error: 'CHECKSUM_MISMATCH' };
+      }
+    }
+    const now = new Date();
+    const existing = await tx.approval.findFirst({
+      where: {
+        workspaceId: ctx.workspaceId,
+        entityType: 'publishing',
+        entityId: target.entityId,
+        status: 'approved',
+        revokedAt: null,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      },
+    });
+    if (existing) return { approval: existing, duplicate: true };
+    const ttlHours = Number(process.env.PUBLISHING_APPROVAL_TTL_HOURS ?? 24);
+    const boundedHours = Number.isFinite(ttlHours) ? Math.max(1, Math.min(720, Math.trunc(ttlHours))) : 24;
+    const approval: any = await tx.approval.create({
+      data: {
+        workspaceId: ctx.workspaceId,
+        entityType: 'publishing',
+        entityId: target.entityId,
+        status: 'pending',
+        reason: qualityReportId ? `quality:${qualityReportId}` : 'operator-requested',
+        decidedAt: null,
+        decidedBy: null,
+        expiresAt: new Date(now.getTime() + boundedHours * 3_600_000),
+      },
+    });
+    await writeAuditEvent({
+      tx, workspaceId: ctx.workspaceId, userId: ctx.userId, runId: null,
+      type: 'publishing_approval_requested', actor: ctx.userId,
+      data: { approvalId: approval.id, entityId: target.entityId, bindingHash: target.bindingHash, qualityReportId },
+    });
+    return { approval, duplicate: false };
+  });
+  if (result.error) return reply.code(result.error === 'QUALITY_REPORT_REQUIRED' ? 409 : 400).send({ error: result.error });
+  reply.code(result.duplicate ? 200 : 201).send({ approval: result.approval, bindingHash: target.bindingHash, duplicate: result.duplicate });
+  return;
+});
+
+app.get('/api/publishing/accounts', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { listPublishingAccounts } = await import('./publishing.js');
+  return { accounts: await listPublishingAccounts(ctx.workspaceId) };
+});
+
+app.post('/api/publishing/accounts', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const { upsertPublishingAccount } = await import('./publishing.js');
+  const body = (req.body ?? {}) as any;
+  const result = await upsertPublishingAccount({
+    workspaceId: ctx.workspaceId, actor: ctx.userId, platform: body.platform,
+    accountKey: body.accountKey, displayName: body.displayName, note: body.note, status: body.status,
+  });
+  return reply.code(result.statusCode).send(result.body);
+});
+
+app.patch('/api/publishing/accounts/:id/status', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const { setPublishingAccountStatus } = await import('./publishing.js');
+  const account = await setPublishingAccountStatus(
+    ctx.workspaceId, String((req.params as any).id), (req.body as any)?.status, ctx.userId,
+  );
+  if (!account) return reply.code(404).send({ error: 'ACCOUNT_NOT_FOUND' });
+  return { account };
+});
+
+app.post('/api/publishing/schedules', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const { createPublishingSchedule } = await import('./publishing.js');
+  const body = (req.body ?? {}) as any;
+  const result = await createPublishingSchedule({
+    workspaceId: ctx.workspaceId, actor: ctx.userId, platform: body.platform,
+    entityType: body.entityType, entityId: body.entityId, idempotencyKey: body.idempotencyKey,
+    approvalId: body.approvalId, accountKey: body.accountKey, checksum: body.checksum,
+    qualityReportId: body.qualityReportId, options: body.options,
+    localTime: body.localTime, timezone: body.timezone,
+  });
+  return reply.code(result.statusCode).send(result.body);
+});
+
+app.get('/api/publishing/schedules', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const { listPublishingSchedules } = await import('./publishing.js');
+  return { schedules: await listPublishingSchedules(ctx.workspaceId, Number((req.query as any)?.limit ?? 100)) };
+});
+
+app.patch('/api/publishing/schedules/:id/status', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const { setPublishingScheduleStatus } = await import('./publishing.js');
+  const schedule = await setPublishingScheduleStatus(
+    ctx.workspaceId, String((req.params as any).id), (req.body as any)?.status, ctx.userId,
+  );
+  if (!schedule) return reply.code(409).send({ error: 'SCHEDULE_NOT_UPDATABLE' });
+  return { schedule };
+});
+
+app.post('/api/publishing/jobs/:id/retry', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx || !requireOperatorRole(ctx, reply)) return;
+  const { retryPublishingDeadLetter } = await import('./publishing.js');
+  const result = await retryPublishingDeadLetter(ctx.workspaceId, String((req.params as any).id), ctx.userId);
+  if (!result) return reply.code(404).send({ error: 'NOT_FOUND' });
+  return reply.code(result.statusCode).send(result.body);
+});
+
+/** Single read model for the existing calendar/agents/analytics views. */
+app.get('/api/publishing/overview', async (req, reply) => {
+  const ctx = await requireAuthWorkspace(req, reply);
+  if (!ctx) return;
+  const mod = await import('./publishing.js');
+  const { isKillSwitchActive } = await import('../lib/security.js');
+  const [adapters, accounts, schedules, jobs, approvals, reports, killSwitch] = await Promise.all([
+    mod.listPublishingAdapters(ctx.workspaceId),
+    mod.listPublishingAccounts(ctx.workspaceId),
+    mod.listPublishingSchedules(ctx.workspaceId, 100),
+    mod.listPublishingJobs(ctx.workspaceId, { limit: 100 }),
+    withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.approval.findMany({
+      where: { workspaceId: ctx.workspaceId, entityType: 'publishing' },
+      orderBy: { createdAt: 'desc' }, take: 100,
+    })),
+    withWorkspaceTransaction(ctx.workspaceId, (tx: any) => tx.qualityReport.findMany({
+      where: { workspaceId: ctx.workspaceId }, orderBy: { createdAt: 'desc' }, take: 50,
+    })),
+    withWorkspaceTransaction(ctx.workspaceId, (tx: any) => isKillSwitchActive(ctx.workspaceId, tx)),
+  ]);
+  const counts = jobs.reduce((acc: Record<string, number>, job: any) => {
+    acc[job.status] = (acc[job.status] ?? 0) + 1;
+    return acc;
+  }, {});
+  const blockers: string[] = [];
+  if (killSwitch) blockers.push('KILL_SWITCH_ACTIVE');
+  for (const adapter of adapters as any[]) {
+    if (adapter.credentialError) blockers.push(`${adapter.platform}:CREDENTIAL_DECRYPT_FAILED`);
+    else if (!adapter.credentials?.present) blockers.push(`${adapter.platform}:NOT_CONFIGURED`);
+    else if (!adapter.liveEnabled) blockers.push(`${adapter.platform}:LIVE_OPT_IN_REQUIRED`);
+  }
+  return {
+    verification: { localImplemented: true, localVerified: false, externalLiveVerified: false },
+    adapters, accounts, schedules, jobs,
+    approvals: (approvals as any[]).map((row) => ({
+      id: row.id, status: row.status, entityId: row.entityId,
+      decidedAt: row.decidedAt ?? null, reason: row.reason ?? null,
+    })),
+    qualityReports: (reports as any[]).map((row) => ({
+      id: row.id, passed: Boolean(row.passed), checksum: row.checksum ?? null,
+      createdAt: row.createdAt,
+    })),
+    queue: { counts, blockers },
+  };
 });
 
 // Read-only self-healing proposals. Applying a proposal is deliberately not

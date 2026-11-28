@@ -6,6 +6,7 @@
  * no test doubles, no paid service, no publishing. Artifacts and a machine
  * readable report are written to /tmp/opencode/phase-g-verify.
  */
+import 'dotenv/config';
 import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';

@@ -9,6 +9,7 @@
  * environment only, is never printed, and is redacted from failures.
  */
 import { chromium } from '../browser-runtime-host/node_modules/playwright/index.mjs';
+import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -103,10 +104,47 @@ try {
     ok(response.status === 200, `UGC HTTP ${response.status}`);
     ok((await response.text()).includes(`href="${BASE}/"`), 'no control link');
   });
+
+  const ugcContext = await browser.newContext();
+  const ugcPage = await ugcContext.newPage();
+  const suffix = randomUUID().slice(0, 10);
+  try {
+    await ugcPage.goto(UGC + '/');
+    await ugcPage.locator('#show-signup').click();
+    await ugcPage.locator('#signup-form input[name="email"]').fill(`phaseh-mece-${suffix}@example.test`);
+    await ugcPage.locator('#signup-form input[name="password"]').fill(`PhaseH-${suffix}-pw`);
+    await ugcPage.locator('#signup-form input[name="name"]').fill('Phase H MECE');
+    await ugcPage.locator('#signup-form input[name="workspaceName"]').fill('Phase H MECE');
+    await ugcPage.locator('#signup-form input[name="workspaceSlug"]').fill(`phaseh-mece-${suffix}`);
+    await ugcPage.locator('#signup-form button[type="submit"]').click();
+    await ugcPage.locator('#page .heading h1').first().waitFor({ timeout: 20_000 });
+
+    await check('28 UGC calendar exposes Phase H publishing read models', async () => {
+      await ugcPage.locator('button.nav[data-view="calendar"]').click();
+      for (const id of ['h5-publishing-queue', 'h5-publishing-schedules', 'h5-publishing-approvals', 'h5-publishing-adapters', 'h5-verification']) {
+        ok(await ugcPage.locator(`[data-testid="${id}"]`).count() === 1, `${id} missing`);
+      }
+      const verification = await ugcPage.locator('[data-testid="h5-verification"]').innerText();
+      ok(verification.includes('EXTERNAL_LIVE_VERIFIED: NONE'), 'external verification not separated');
+    });
+    await check('29 UGC analytics exposes truth-first revenue and missing markers', async () => {
+      await ugcPage.locator('button.nav[data-view="analytics"]').click();
+      ok(await ugcPage.locator('[data-testid="h5-affiliate-revenue"]').count() === 1, 'revenue panel missing');
+      ok(await ugcPage.locator('[data-testid="h5-analytics-sources"]').count() === 1, 'sources panel missing');
+      const text = await ugcPage.locator('[data-testid="h5-affiliate-summary"]').innerText();
+      ok(text.includes('Missing values stay'), 'missing-value notice absent');
+    });
+    await check('30 Phase H dashboard added no extra navigation tab', async () => {
+      ok(await ugcPage.locator('button.nav[data-view]').count() === 15, 'unexpected nav count');
+    });
+  } finally {
+    await ugcContext.close();
+  }
 } finally {
   await browser.close();
 }
-const result = { at: new Date().toISOString(), checks: 27, passed, failed: failures.length, failures };
+const CHECK_COUNT = 30;
+const result = { at: new Date().toISOString(), checks: CHECK_COUNT, passed, failed: failures.length, failures };
 await writeFile(join(OUT, 'result.json'), JSON.stringify(result, null, 2) + '\n');
-console.log(`RESULT ${passed}/27 (failed ${failures.length})`);
+console.log(`RESULT ${passed}/${CHECK_COUNT} (failed ${failures.length})`);
 process.exit(failures.length === 0 ? 0 : 1);

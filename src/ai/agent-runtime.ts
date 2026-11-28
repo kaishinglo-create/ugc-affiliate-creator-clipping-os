@@ -13,7 +13,7 @@ export interface AgentTaskInput {
   goal: string;
   timeoutMs?: number;
   /** Deterministic plan used only when AI is not available (auto/off mode). Always labelled. */
-  deterministic: () => any;
+  deterministic: () => any | Promise<any>;
   provider?: AIProvider;
 }
 
@@ -54,14 +54,16 @@ export function markDeterministicOutput(output: any, fallbackReason: AgentFallba
  */
 export async function runAgentTask(input: AgentTaskInput): Promise<any> {
   const mode = agentMode();
-  if (mode === 'off') return markDeterministicOutput(input.deterministic(), 'mode_off');
+  // The deterministic planner may read real workspace rows asynchronously.
+  const deterministicOutput = await Promise.resolve(input.deterministic());
+  if (mode === 'off') return markDeterministicOutput(deterministicOutput, 'mode_off');
 
   const provider = input.provider ?? defaultProvider();
   if (!isAIConfigured(provider)) {
     if (mode === 'required') {
       throw new AIConfigurationError('AI_NOT_CONFIGURED', { department: input.departmentKey, mode });
     }
-    return markDeterministicOutput(input.deterministic(), 'ai_unconfigured');
+    return markDeterministicOutput(deterministicOutput, 'ai_unconfigured');
   }
 
   const spec = getAgentSpec(input.departmentKey);
@@ -96,7 +98,7 @@ export async function runAgentTask(input: AgentTaskInput): Promise<any> {
     // output stays labelled); required mode and upstream failures still fail.
     if (mode === 'auto' && (error instanceof AIUsageLimitError || error instanceof AIConfigurationError)) {
       return markDeterministicOutput(
-        input.deterministic(),
+        deterministicOutput,
         error instanceof AIUsageLimitError ? 'budget_exhausted' : 'ai_unconfigured',
       );
     }

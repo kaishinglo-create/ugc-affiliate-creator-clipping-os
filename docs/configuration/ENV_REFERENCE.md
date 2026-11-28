@@ -136,6 +136,9 @@ Kurzfassung: SET 30 · MISSING 65 · EMPTY 2
 | Variable | Beschreibung | Pflicht | Default | Typ | Funktion | Datei:Zeile | Herkunft | Kostenlos | Status | Auswirkung bei Fehlen |
 |---|---|---|---|---|---|---|---|---|---|---|
 | `PUBLISHING_LIVE_ADAPTERS` | Expliziter Opt-in für Live-Adapter | optional | 0 | 0\|1\|true | Publishing-Live-Gate | src/publishing.ts:101-105 | lokal | ja | SET | Kein Provider-HTTP-Call |
+| `PUBLISHING_APPROVAL_TTL_HOURS` | Gültigkeit einer Publishing-Freigabe (1–720 h) | optional | 24 | Zahl | Approval-Ablauf | src/index.ts:1622 | lokal | ja | MISSING | 24 h Default |
+| `PUBLISHING_MAX_DAILY_ATTEMPTS_PER_WORKSPACE` | Harter Tages-Cap für Publishing-Versuche | optional | 50 | Zahl | Budget-Gate | src/publishing.ts:1331 | lokal | ja | MISSING | 50 Versuche/Tag |
+| `AFFILIATE_WEBHOOK_SECRET_<PROVIDER>` | HMAC-Secret für signierte Provider-Webhooks | optional webhook | — | Secret/String | Webhook-Signatur | src/index.ts:671 | extern | ja | MISSING | 503 WEBHOOK_NOT_CONFIGURED |
 | `YOUTUBE_CLIENT_ID` | YouTube-OAuth-Client-ID | optional publishing | — | String | YouTube-Upload | src/publishing.ts:81 | extern | nicht garantiert | MISSING | NOT_CONFIGURED (503) |
 | `YOUTUBE_CLIENT_SECRET` | YouTube-OAuth-Client-Secret | optional publishing | — | Secret/String | YouTube-Token-Refresh | src/publishing.ts:81 | extern | nicht garantiert | MISSING | NOT_CONFIGURED (503) |
 | `YOUTUBE_REFRESH_TOKEN` | YouTube-Refresh-Token | optional publishing | — | Secret/String | YouTube-Token-Refresh | src/publishing.ts:81 | extern | nicht garantiert | MISSING | NOT_CONFIGURED (503) |

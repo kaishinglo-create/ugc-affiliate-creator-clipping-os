@@ -10,7 +10,8 @@ const state = {
     analytics: null, integrations: [], systemStatus: null, summary: null,
     browser: null, niches: [], items: [], candidates: [], discoveryError: null,
     controlStatus: null, media: null,
-    apiIntegrations: [], apiIntegrationHealth: null, apiIntegrationDetail: null
+    apiIntegrations: [], apiIntegrationHealth: null, apiIntegrationDetail: null,
+    publishingOverview: null, affiliateRevenue: null, affiliateLinks: [], analyticsSources: null
   },
   loading: false,
   error: null,
@@ -267,7 +268,15 @@ async function loadView(view) {
       }
       case "radar": state.data.products = (await api("/api/products")).products || []; updateRadarBadge(); break;
       case "creators": state.data.creators = (await api("/api/creators")).creators || []; break;
-      case "campaigns": state.data.campaigns = (await api("/api/campaigns")).campaigns || []; break;
+      case "campaigns": {
+        const [campaigns, links] = await Promise.all([
+          api("/api/campaigns").then((r)=>r.campaigns||[]),
+          api("/api/affiliate/links").then((r)=>r.links||[]).catch(()=>[])
+        ]);
+        state.data.campaigns = campaigns;
+        state.data.affiliateLinks = links;
+        break;
+      }
       case "analytics": await loadAnalyticsData(); break;
       case "integrations": state.data.integrations = (await api("/api/integrations")).integrations || []; break;
       case "api-integrations": {
@@ -285,7 +294,15 @@ async function loadView(view) {
       case "scripts": state.data.ideas = (await api("/api/ideas")).ideas || []; break;
       case "clipping": await loadClippingData(); break;
       case "youtube": await loadDiscoveryData(); break;
-      case "calendar": state.data.tasks = (await api("/api/tasks")).tasks || []; break;
+      case "calendar": {
+        const [tasks, publishing] = await Promise.all([
+          api("/api/tasks").then((r)=>r.tasks||[]),
+          api("/api/publishing/overview").catch(()=>null)
+        ]);
+        state.data.tasks = tasks;
+        state.data.publishingOverview = publishing;
+        break;
+      }
       case "agent-browser": state.data.browser = await loadBrowserData(); break;
     }
   } catch (e) {
@@ -301,16 +318,18 @@ async function loadView(view) {
 }
 
 async function loadAgentsData() {
-  const [agents, tasks, engine, ai] = await Promise.all([
+  const [agents, tasks, engine, ai, publishing] = await Promise.all([
     api("/api/agents").then((r)=>r.agents || []),
     api("/api/agent-tasks").then((r)=>r.tasks || []),
     api("/api/engine/status").catch(()=>null),
-    api("/api/ai/status").catch(()=>null)
+    api("/api/ai/status").catch(()=>null),
+    api("/api/publishing/overview").catch(()=>null)
   ]);
   state.data.agents = agents;
   state.data.agentTasks = tasks;
   state.data.engine = engine;
   state.data.ai = ai;
+  state.data.publishingOverview = publishing;
 }
 
 async function loadClippingData() {
@@ -334,12 +353,18 @@ async function loadDiscoveryData() {
 }
 
 async function loadAnalyticsData() {
-  const [summary, posts] = await Promise.all([
+  const [summary, posts, sources, revenue, links] = await Promise.all([
     api("/api/analytics/summary").catch(()=>null),
-    api("/api/content-posts").catch(()=>({posts:[]}))
+    api("/api/content-posts").catch(()=>({posts:[]})),
+    api("/api/analytics/sources").catch(()=>null),
+    api("/api/affiliate/revenue").catch(()=>null),
+    api("/api/affiliate/links").then((r)=>r.links||[]).catch(()=>[])
   ]);
   state.data.analytics = summary;
   state.data.contentPosts = (posts && posts.posts) || [];
+  state.data.analyticsSources = sources;
+  state.data.affiliateRevenue = revenue;
+  state.data.affiliateLinks = links;
 }
 
 function loadingBlock() { return state.loading ? '<p class="sub">Loading…</p>' : ''; }
@@ -373,7 +398,9 @@ function creators() {
 function campaigns() {
   const rows = state.data.campaigns || [];
   const body = rows.length ? '<section class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Campaign</th><th>Goal</th><th>Status</th><th>Budget</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+esc(r.name)+'</td><td>'+esc(r.goal||"—")+'</td><td>'+tag(r.status||"draft")+'</td><td>'+formatCents(r.budgetCents)+'</td></tr>').join("")+'</tbody></table></div></section>' : '<div class="panel">No campaigns yet.</div>';
-  return heading("Campaigns","Persisted campaigns from /api/campaigns.", button("＋ Add campaign","add-campaign",true)) + body + loadingBlock();
+  const campaignLinks = h5Table("Affiliate links for campaigns", "h5-campaign-affiliate-links", ["Token","Offer","Campaign","Disclosure"],
+    (state.data.affiliateLinks||[]).map((l)=>'<tr><td><code>'+esc(l.token)+'</code></td><td>'+esc(l.offerId)+'</td><td>'+esc(l.campaignId||"—")+'</td><td>'+esc(l.disclosureText||"—")+'</td></tr>'));
+  return heading("Campaigns","Persisted campaigns from /api/campaigns plus affiliate links.", button("＋ Add campaign","add-campaign",true)) + body + campaignLinks + '<p class="sub"><button class="btn" data-view="analytics" data-testid="h5-campaign-revenue-link">Open Analytics &amp; Revenue</button></p>' + loadingBlock();
 }
 
 function scripts() {
@@ -436,10 +463,104 @@ function phaseg() {
   return heading("Phase G Studio","Discovery, research, media and quality controls backed by real APIs.") + form + out + loadingBlock();
 }
 
+/* Phase H.5 read models. All values come from the API; null stays visible. */
+function h5Value(value, suffix) {
+  return value === null || value === undefined ? "—" : esc(String(value) + (suffix || ""));
+}
+
+function h5Verification(v) {
+  if (!v) return '<span data-testid="h5-verification">'+tag("VERIFICATION_UNAVAILABLE","orange")+'</span>';
+  const local = v.localVerified ? tag("LOCAL_VERIFIED","green") : tag("LOCAL_VERIFICATION_PENDING","orange");
+  const external = v.externalLiveVerified ? tag("EXTERNAL_LIVE_VERIFIED","green") : tag("EXTERNAL_LIVE_VERIFIED: NONE","");
+  return '<span data-testid="h5-verification">'+tag("LOCAL_IMPLEMENTED")+" "+local+" "+external+'</span>';
+}
+
+function h5Table(title, testId, headers, rows) {
+  if (!rows || !rows.length) return '<section class="panel" data-testid="'+testId+'"><h2>'+esc(title)+'</h2><p class="sub">No rows.</p></section>';
+  return '<section class="panel" data-testid="'+testId+'"><h2>'+esc(title)+'</h2><div class="table-wrap"><table class="table"><thead><tr>'+
+    headers.map((h)=>'<th>'+esc(h)+'</th>').join("")+'</tr></thead><tbody>'+rows.join("")+'</tbody></table></div></section>';
+}
+
+function publishingOverviewPanel() {
+  // Read models must stay visible in a fresh or failing workspace: an absent
+  // overview is reported as zero rows / pending verification, not as a hidden
+  // panel. No value is invented — h5Value renders null/undefined as "—".
+  const p = state.data.publishingOverview || {};
+  const q = p.queue || {};
+  const counts = q.counts || {};
+  const blockers = q.blockers || [];
+  const summary = '<section class="panel" data-testid="h5-publishing-queue"><h2>Publishing queue & blockers</h2>'+
+    '<div class="stats">'+
+      stat("QUEUED", h5Value(counts.QUEUED), "Durable jobs", "◷")+
+      stat("RUNNING", h5Value(counts.RUNNING), "Leased", "▶")+
+      stat("DEAD LETTER", h5Value(counts.DEAD_LETTER), "Needs retry", "⚠")+
+    '</div>'+
+    '<p class="sub">Blockers: '+(blockers.length ? esc(blockers.join(", ")) : "none")+'</p>'+
+    h5Verification(p.verification || { localVerified:false, externalLiveVerified:false })+
+    '<div class="field-grid"><div class="field"><button class="btn" data-action="h5-account-form">＋ Account</button></div>'+
+    '<div class="field"><button class="btn" data-action="h5-approval-form">＋ Approval</button></div>'+
+    '<div class="field"><button class="btn" data-action="h5-schedule-form">＋ Schedule</button></div></div></section>';
+  const schedules = h5Table("Planned publishing (timezone aware)", "h5-publishing-schedules",
+    ["Platform","Account","Local time","Timezone","Run at (UTC)","Status","Last error"],
+    (p.schedules||[]).map((s)=>'<tr><td>'+esc(s.platform)+'</td><td>'+esc(s.accountKey||"—")+'</td><td>'+esc(s.localTime)+'</td><td>'+esc(s.timezone)+'</td><td>'+esc(s.runAt)+'</td><td>'+tag(s.status)+'</td><td>'+esc(s.lastError||"—")+'</td></tr>'));
+  const jobs = h5Table("Publishing jobs", "h5-publishing-jobs",
+    ["Job","Platform","Status","Attempts","Progress","Action"],
+    (p.jobs||[]).map((j)=>'<tr><td>'+esc(j.id)+'</td><td>'+esc(j.payload?.platform||"—")+'</td><td>'+tag(j.status)+'</td><td>'+esc(j.attempts)+'/'+esc(j.maxAttempts)+'</td><td>'+esc(j.progress?.stage||"—")+'</td><td>'+(j.status==="DEAD_LETTER"?'<button class="btn primary" data-action="h5-job-retry" data-job-id="'+esc(j.id)+'">Retry</button>':"—")+'</td></tr>'));
+  const approvals = h5Table("Human approvals", "h5-publishing-approvals",
+    ["Approval","Status","Binding","Decided at","Action"],
+    (p.approvals||[]).map((a)=>'<tr><td>'+esc(a.id)+'</td><td>'+tag(a.status)+'</td><td><code>'+esc(String(a.entityId||"").slice(0,80))+'</code></td><td>'+esc(a.decidedAt||"—")+'</td><td>'+(a.status==="approved"?'<button class="btn primary" data-action="h5-approval-revoke" data-id="'+esc(a.id)+'">Revoke</button>':"—")+'</td></tr>'));
+  const accounts = h5Table("Target accounts", "h5-publishing-accounts",
+    ["Platform","Account","Display name","Status","Action"],
+    (p.accounts||[]).map((a)=>'<tr><td>'+esc(a.platform)+'</td><td>'+esc(a.accountKey)+'</td><td>'+esc(a.displayName||"—")+'</td><td>'+tag(a.status)+'</td><td>'+(a.status==="ACTIVE"?'<button class="btn primary" data-action="h5-account-disable" data-id="'+esc(a.id)+'">Disable</button>':"—")+'</td></tr>'));
+  const adapters = h5Table("Official adapters", "h5-publishing-adapters",
+    ["Platform","Status","Credential source","Missing variables"],
+    (p.adapters||[]).map((a)=>'<tr><td>'+esc(a.platform)+'</td><td>'+tag(a.status)+'</td><td>'+esc(a.credentials?.source||"—")+'</td><td>'+esc((a.credentials?.missingEnv||[]).join(", ")||"—")+'</td></tr>'));
+  return summary + schedules + jobs + approvals + accounts + adapters;
+}
+
+function affiliateRevenuePanel() {
+  // The revenue panel is a fixed part of the analytics view. With no rows it
+  // shows explicit missing markers ("—") instead of disappearing; this is an
+  // empty state, not an invented zero or a fabricated earning.
+  const r = state.data.affiliateRevenue || {};
+  const links = state.data.affiliateLinks || [];
+  const dimensions = (title, testId, rows) => h5Table(title, testId, ["Key","Clicks","Conversions","Revenue (cents)","Commission (cents)"],
+    (rows||[]).map((d)=>'<tr><td>'+esc(d.key)+'</td><td>'+esc(d.clicks)+'</td><td>'+esc(d.conversions)+'</td><td>'+esc(d.revenueCents)+'</td><td>'+h5Value(d.commissionCents)+'</td></tr>'));
+  const stats = '<section class="panel" data-testid="h5-affiliate-revenue">'+
+    '<div data-testid="h5-affiliate-summary"><h2>Truth-first affiliate revenue</h2>'+
+    '<div class="stats">'+
+      stat("Total commission", h5Value(r.totalCommissionCents), "Only real supplied commissions", "€")+
+      stat("Disclosed clicks", h5Value(r.disclosedClicks), "Links with disclosure text", "✓")+
+      stat("Undisclosed clicks", h5Value(r.undisclosedClicks), "No disclosure on link", "⚠")+
+      stat("Duplicate events", h5Value(r.duplicateExternalEvents), "Deduplicated", "◇")+
+    '</div>'+
+    '<p class="sub">Revenue is approved + paid conversions only. Missing values stay "—" instead of becoming zero.</p>'+
+    '<button class="btn" data-action="h5-link-form">＋ Affiliate link</button></div></section>';
+  const linkRows = h5Table("Affiliate links & disclosure", "h5-affiliate-links", ["Token","Offer","Campaign","Creator","Commission bps","Disclosure"],
+    links.map((l)=>'<tr><td><code>'+esc(l.token)+'</code></td><td>'+esc(l.offerId)+'</td><td>'+esc(l.campaignId||"—")+'</td><td>'+esc(l.creatorId||"—")+'</td><td>'+h5Value(l.commissionBps)+'</td><td>'+esc(l.disclosureText||"—")+'</td></tr>'));
+  return stats +
+    dimensions("Revenue per clip", "h5-revenue-by-clip", r.byClip||[]) +
+    dimensions("Revenue per creator", "h5-revenue-by-creator", r.byCreator||[]) +
+    dimensions("Revenue per platform", "h5-revenue-by-platform", r.byPlatform||[]) +
+    dimensions("Revenue per campaign", "h5-revenue-by-campaign", r.byCampaign||[]) +
+    dimensions("Revenue per UTM source", "h5-revenue-by-utm", r.byUtmSource||[]) + linkRows;
+}
+
+function analyticsSourcesPanel() {
+  const s = state.data.analyticsSources || {};
+  const sources = Array.isArray(s.sources) ? s.sources : [];
+  const missing = Array.isArray(s.missing) ? s.missing : ["sources:UNAVAILABLE"];
+  const cards = sources.length
+    ? sources.map((x)=>'<article class="card">'+tag(x.available?"OK":x.reason, x.available?"green":"orange")+'<h3>'+esc(x.source)+'</h3><p class="sub">'+esc(x.rowCount)+' rows</p></article>').join("")
+    : '<article class="card">'+tag("NOT_CONFIGURED","orange")+'<h3>analytics sources</h3><p class="sub">0 rows</p></article>';
+  return '<section class="panel" data-testid="h5-analytics-sources"><h2>Data sources & missing markers</h2><div class="cards">'+
+    cards+'</div><p class="sub">Missing: '+esc(missing.join(", ")||"none")+'</p></section>';
+}
+
 function calendar() {
   const rows = state.data.tasks || [];
   const body = rows.length ? '<section class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Task</th><th>Status</th><th>Priority</th><th>Due</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+esc(r.title)+'</td><td>'+esc(r.status)+'</td><td>'+esc(r.priority)+'</td><td>'+esc(r.dueDate?new Date(r.dueDate).toLocaleDateString():"—")+'</td></tr>').join("")+'</tbody></table></div></section>' : '<div class="panel">No tasks yet.</div>';
-  return heading("Publishing Calendar / Tasks","Persisted tasks from /api/tasks.", button("＋ Add task","add-task",true)) + body + loadingBlock();
+  return heading("Publishing Calendar / Tasks","Persisted tasks and Phase H publishing plans, approvals, queue and blockers.", button("＋ Add task","add-task",true)) + body + publishingOverviewPanel() + loadingBlock();
 }
 
 function analytics() {
@@ -455,7 +576,8 @@ function analytics() {
   '<section class="panel"><h2>Record a metric snapshot</h2><form id="analytics-snapshot-form" class="field-grid"><div class="field"><label>Metric</label><input name="metric" required></div><div class="field"><label>Value</label><input name="value" type="number" step="any" required></div><div class="field full"><label>Source</label><input name="source" value="manual"></div><div class="field"><button class="btn primary" type="submit">Save snapshot</button></div></form></section>' +
   '<section class="panel"><h2>Record an affiliate click</h2><form id="analytics-click-form" class="field-grid"><div class="field"><label>Content post ID</label><input name="contentId"></div><div class="field"><label>Offer ID</label><input name="offerId"></div><div class="field full"><label>Idempotency key (optional)</label><input name="idempotencyKey"></div><div class="field"><button class="btn" type="submit">Save click</button></div></form></section>' +
   '<section class="panel"><h2>Content post snapshot</h2>' + (postOptions ? '<form id="content-snapshot-form" class="field-grid"><div class="field full"><label>Post</label><select name="postId" required>'+postOptions+'</select></div><div class="field"><label>Views</label><input name="views" type="number" min="0" step="1" value="0"></div><div class="field"><label>Likes</label><input name="likes" type="number" min="0" step="1" value="0"></div><div class="field"><label>Comments</label><input name="comments" type="number" min="0" step="1" value="0"></div><div class="field"><label>Shares</label><input name="shares" type="number" min="0" step="1" value="0"></div><div class="field"><label>Watch time (sec)</label><input name="watchTimeSec" type="number" min="0" step="any"></div><div class="field"><button class="btn" type="submit">Save post snapshot</button></div></form>' : '<p class="sub">Add a content post in Content Factory first; snapshots need a real post ID.</p>') + '</section>' +
-  (Object.keys(m).length ? '<section class="panel"><h2>Metrics</h2><pre>'+esc(JSON.stringify(m,null,2))+'</pre></section>' : '') + loadingBlock();
+  (Object.keys(m).length ? '<section class="panel"><h2>Metrics</h2><pre>'+esc(JSON.stringify(m,null,2))+'</pre></section>' : '') +
+  analyticsSourcesPanel() + affiliateRevenuePanel() + loadingBlock();
 }
 
 function enginePanel() {
@@ -499,8 +621,9 @@ function agents() {
   const agents = state.data.agents || [];
   const tasks = state.data.agentTasks || [];
   const agentOptions = agents.map(a=>'<option value="'+esc(a.id)+'">'+esc(a.name)+'</option>').join("");
-  return heading("Agent Control","Persisted agents/tasks from /api/agents and /api/agent-tasks.") +
+  return heading("Agent Control","Persisted agents/tasks from /api/agents and /api/agent-tasks plus publishing agent status.") +
   enginePanel() +
+  publishingOverviewPanel() +
   aiPanel() +
   '<section class="panel"><h2>Add agent</h2><form id="agent-form" class="field-grid"><div class="field"><label>Name</label><input name="name" required></div><div class="field"><label>Role</label><input name="role" required></div><div class="field"><button class="btn primary" type="submit">Create agent</button></div></form>' + (agents.length ? agents.map(a=>'<p>'+esc(a.name)+' — '+esc(a.role)+'</p>').join("") : '<p class="sub">No agents yet.</p>') + '</section>' +
   '<section class="panel"><h2>Add agent task</h2><form id="agent-task-form" class="field-grid"><div class="field"><label>Name</label><input name="name" required></div><div class="field"><label>Agent</label><select name="agentId"><option value="">(none)</option>'+agentOptions+'</select></div><div class="field full"><label>Input (optional)</label><input name="input"></div><div class="field"><button class="btn" type="submit">Create task</button></div></form>' + (tasks.length ? tasks.map(t=>'<p>'+esc(t.name)+' — '+esc(t.status)+'</p>').join("") : '<p class="sub">No tasks yet.</p>') + '<p class="sub">No run button is offered: POST /api/agent-tasks/:id/run currently returns 501 AGENT_RUNTIME_NOT_CONNECTED.</p>' + '</section>' + loadingBlock();
@@ -1010,6 +1133,13 @@ async function wireEvents() {
         }
       }
       if (name === "logout") { await doLogout(); return; }
+      if (name === "h5-account-form") { h5Form("Add publishing account", "account", [{n:"platform",l:"Platform (youtube|tiktok|instagram)"},{n:"accountKey",l:"Account key"},{n:"displayName",l:"Display name",o:true}]); return; }
+      if (name === "h5-approval-form") { h5Form("Request publishing approval", "approval", [{n:"platform",l:"Platform"},{n:"entityType",l:"Entity type"},{n:"entityId",l:"Entity id"},{n:"idempotencyKey",l:"Idempotency key"},{n:"accountKey",l:"Account key",o:true},{n:"qualityReportId",l:"Quality report id",o:true},{n:"checksum",l:"Checksum",o:true}]); return; }
+      if (name === "h5-schedule-form") { h5Form("Create publishing schedule", "schedule", [{n:"platform",l:"Platform"},{n:"entityType",l:"Entity type"},{n:"entityId",l:"Entity id"},{n:"idempotencyKey",l:"Idempotency key"},{n:"approvalId",l:"Approval id"},{n:"localTime",l:"Local time (HH:MM)"},{n:"timezone",l:"IANA timezone"},{n:"accountKey",l:"Account key",o:true}]); return; }
+      if (name === "h5-link-form") { h5Form("Create affiliate link", "link", [{n:"token",l:"Token"},{n:"offerId",l:"Offer id"},{n:"destinationUrl",l:"Destination URL"},{n:"campaignId",l:"Campaign id",o:true},{n:"creatorId",l:"Creator id",o:true},{n:"commissionBps",l:"Commission bps",o:true},{n:"disclosureText",l:"Disclosure",o:true}]); return; }
+      if (name === "h5-job-retry") { await api('/api/publishing/jobs/'+encodeURIComponent(a.dataset.jobId)+'/retry',{method:'POST',body:JSON.stringify({})}); toast('Retry requested'); await loadView(state.view); return; }
+      if (name === "h5-approval-revoke") { await api('/api/approvals/'+encodeURIComponent(a.dataset.id)+'/revoke',{method:'POST',body:JSON.stringify({})}); toast('Approval revoked'); await loadView(state.view); return; }
+      if (name === "h5-account-disable") { await api('/api/publishing/accounts/'+encodeURIComponent(a.dataset.id)+'/status',{method:'PATCH',body:JSON.stringify({status:'DISABLED'})}); toast('Account disabled'); await loadView(state.view); return; }
       if (name === "engine-tick") {
         const res = await api('/api/engine/tick', {method:'POST', body: JSON.stringify({})});
         const s = (res && res.summary) || {};
@@ -1155,6 +1285,25 @@ async function wireEvents() {
     if (!form || !form.id) return;
     try {
       if (form.id === "entry-form") { e.preventDefault(); await saveEntry(form); return; }
+      if (form.id === "h5-action-form") {
+        e.preventDefault();
+        const d = Object.fromEntries(new FormData(form));
+        const kind = form.dataset.kind;
+        const clean = Object.fromEntries(Object.entries(d).filter(([,v])=>String(v||"").trim()!=="").map(([k,v])=>[k,String(v).trim()]));
+        let url; let payload = clean;
+        if (kind === "account") url = "/api/publishing/accounts";
+        else if (kind === "approval") url = "/api/publishing/approvals";
+        else if (kind === "schedule") { url = "/api/publishing/schedules"; payload = { ...clean, options: {} }; }
+        else if (kind === "link") {
+          url = "/api/affiliate/links";
+          if (clean.commissionBps !== undefined) payload = { ...clean, commissionBps: Number(clean.commissionBps) };
+        } else throw new Error("UNKNOWN_H5_FORM:" + kind);
+        await api(url, { method:"POST", body: JSON.stringify(payload) });
+        toast("Saved");
+        if ($("#modal")) $("#modal").close();
+        await loadView(state.view);
+        return;
+      }
       if (form.id === "workflow-form") {
         e.preventDefault();
         const d = Object.fromEntries(new FormData(form));
@@ -1334,6 +1483,12 @@ async function saveEntry(form) {
 
 function openForm(title, fields, kind) {
   $("#modal-body").innerHTML = '<div class="eyebrow">WORKSPACE</div><h2>'+title+'</h2><form id="entry-form" data-kind="'+kind+'" class="field-grid">'+fields.map(f=>'<div class="field full"><label>'+f.l+(f.optional?' (optional)':'')+'</label><input name="'+f.n+'"'+(f.type?' type="'+f.type+'"':'')+(f.optional?'':' required')+'></div>').join("")+'<div class="field full"><button class="btn primary" type="button" data-action="save-form">Save</button></div></form>';
+  $("#modal").showModal();
+}
+
+// Phase H forms post to real backend endpoints; no placeholder actions.
+function h5Form(title, kind, fields) {
+  $("#modal-body").innerHTML = '<div class="eyebrow">PHASE H</div><h2>'+title+'</h2><form id="h5-action-form" data-kind="'+kind+'" class="field-grid">'+fields.map(f=>'<div class="field full"><label>'+f.l+(f.o?' (optional)':'')+'</label><input name="'+f.n+'"'+(f.o?'':' required')+'></div>').join("")+'<div class="field full"><button class="btn primary" type="submit">Save</button></div></form>';
   $("#modal").showModal();
 }
 
