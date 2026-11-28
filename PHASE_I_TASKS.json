@@ -1,0 +1,253 @@
+{
+  "phase": "I",
+  "title": "Self-Healing, Self-Improving, Sichere Autonomie",
+  "status": "PHASE_I_READY_FOR_COMMIT",
+  "branch": "not_created",
+  "baseline": {
+    "main": "5c41045",
+    "tests": 354,
+    "testFiles": 87,
+    "postMergeCi": 46086634835
+  },
+  "approval": {
+    "implementation": "REQUIRED_NOT_GRANTED",
+    "controllerStart": "FORBIDDEN",
+    "stopFlag": "PRESENT",
+    "merge": "FORBIDDEN_WITHOUT_SEPARATE_APPROVAL"
+  },
+  "dependencyMatrix": {
+    "I.0": [],
+    "I.1": [
+      "I.0"
+    ],
+    "I.2": [
+      "I.1"
+    ],
+    "I.3": [
+      "I.2",
+      "I.6"
+    ],
+    "I.4": [
+      "I.1",
+      "I.6"
+    ],
+    "I.5": [
+      "I.4",
+      "I.6"
+    ],
+    "I.6": [
+      "I.0"
+    ],
+    "I.7": [
+      "I.3",
+      "I.5",
+      "I.6"
+    ],
+    "I.8": [
+      "I.7"
+    ]
+  },
+  "realIncidentCases": [
+    {
+      "id": "INC-PH-01",
+      "case": "competing_coding_processes",
+      "observed": "parallele Agenten änderten public/app.js und scripts/verify-phase-h-db.mjs; Freeze-Drift",
+      "requiredCapability": "process_registry_and_worktree_ownership"
+    },
+    {
+      "id": "INC-PH-02",
+      "case": "port_conflict",
+      "observed": "EADDRINUSE :3000/:3031 durch doppelte Dev-/MECE-Starts",
+      "requiredCapability": "port_owner_classification_without_foreign_kill"
+    },
+    {
+      "id": "INC-PH-03",
+      "case": "idle_in_transaction",
+      "observed": "pg_stat_activity idle in transaction ~11 Min; Browser-Timeouts",
+      "requiredCapability": "transaction_watchdog_and_scoped_cancel"
+    },
+    {
+      "id": "INC-PH-04",
+      "case": "qa_watchdog_timeout",
+      "observed": "stale QA-Cluster undWorker-Konkurrenz; Exit 143",
+      "requiredCapability": "stale_cluster_cleanup_and_single_worker_enforcement"
+    },
+    {
+      "id": "INC-PH-05",
+      "case": "source_drift_during_qa",
+      "observed": "Hash-Manifest änderte sich zwischen Freeze und Lauf",
+      "requiredCapability": "freeze_hash_gate"
+    },
+    {
+      "id": "INC-PH-06",
+      "case": "qa_preflight_blocked",
+      "observed": "UGC/Control liefen während isoliertem QA; Runner stoppte fremde Prozesse nicht",
+      "requiredCapability": "preflight_service_state_gate"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "I.0",
+      "title": "Recovery & Governance",
+      "status": "completed",
+      "dependencies": [],
+      "acceptanceCriteria": [
+        "Freeze",
+        "Rollen",
+        "STOP-Flag",
+        "Audit-Baseline",
+        "kein fremder Prozess gestoppt"
+      ],
+      "evidence": [
+        "docs/autonomous-build/PHASE_I_INVENTORY.md",
+        "/tmp/opencode/phase-i-recovery/docs.patch",
+        "git reflog: branch created from main 5c41045"
+      ],
+      "blockers": []
+    },
+    {
+      "id": "I.1",
+      "title": "Incident-Modell",
+      "status": "completed",
+      "dependencies": [
+        "I.0"
+      ],
+      "acceptanceCriteria": [
+        "INC-PH-01..06 als echte Fälle modelliert",
+        "keine erfundenen Incidents"
+      ],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "I.2",
+      "title": "Self-Healing Erkennung",
+      "status": "completed",
+      "dependencies": [
+        "I.1"
+      ],
+      "acceptanceCriteria": [
+        "foreign/own Klassifikation",
+        "transient/persistent",
+        "approval_required Flag"
+      ],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "I.3",
+      "title": "Self-Healing Recovery",
+      "status": "completed",
+      "dependencies": [
+        "I.2",
+        "I.6"
+      ],
+      "acceptanceCriteria": [
+        "eigene Kinder stoppen",
+        "eigene Transaktionen canceln",
+        "stale Cluster cleanup",
+        "Rollback"
+      ],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "I.4",
+      "title": "Self-Improving Vorschläge",
+      "status": "completed",
+      "dependencies": [
+        "I.1",
+        "I.6"
+      ],
+      "acceptanceCriteria": [
+        "Evidenz aus Audit/Incidents",
+        "keine bezahlten Modelle",
+        "kein Fake-Wissen"
+      ],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "I.5",
+      "title": "Sandbox & Review-Agent",
+      "status": "completed",
+      "dependencies": [
+        "I.4",
+        "I.6"
+      ],
+      "acceptanceCriteria": [
+        "Worktree-Isolation",
+        "automatische Tests",
+        "Review-Agent",
+        "kein Direkt-Commit"
+      ],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "I.6",
+      "title": "Budget, Rollback, Audit",
+      "status": "completed",
+      "dependencies": [
+        "I.0"
+      ],
+      "acceptanceCriteria": [
+        "harte Budgets",
+        "Audit pro Aktion",
+        "Rollback vor Autonomie"
+      ],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "I.7",
+      "title": "Tests & Abnahme",
+      "status": "completed",
+      "dependencies": [
+        "I.3",
+        "I.5",
+        "I.6"
+      ],
+      "acceptanceCriteria": [
+        "INC-Fälle reproduziert",
+        "2× qa:full",
+        "Browser-Gates",
+        "keine Testabschwächung"
+      ],
+      "evidence": [],
+      "blockers": []
+    },
+    {
+      "id": "I.8",
+      "title": "Dokumentation & Übergabe",
+      "status": "completed",
+      "dependencies": [
+        "I.7"
+      ],
+      "acceptanceCriteria": [
+        "Roadmap/Tasks/STATE aktualisiert",
+        "Phase-J vorbereitet"
+      ],
+      "evidence": [],
+      "blockers": []
+    }
+  ],
+  "evidence": [
+    "369/369 tests / 89 files",
+    "2x qa:full green",
+    "Playwright 9/9, MECE 30/30, Frontend 23/23",
+    "secret scan 4x521 = 0 matches",
+    "Phase-H→I DB upgrade PASS",
+    "fault injection INC-PH-01..06 PASS",
+    "sandbox fail-closed + policy PASS"
+  ],
+  "tests": 369,
+  "testFiles": 89,
+  "freezes": [
+    "582bbaa47f33e6b58b196b5e1f4249328a7abe36e195152a4ec9a323202eeacd"
+  ],
+  "qaFullRuns": [
+    "qa-full-2026-11-28T02-55-51-244Z-100122",
+    "qa-full-2026-11-28T03-34-18-959Z-106580"
+  ]
+}

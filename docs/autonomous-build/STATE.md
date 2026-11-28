@@ -1,5 +1,45 @@
 # STATE
 
+## Phase I — lokale Implementierung abgeschlossen (2026-11-28)
+
+- Branch `feature/phase-i-self-healing-self-improving`, Baseline `main` `5c41045`.
+  Uncommittete Doku-Änderungen aus Phase H vorab gesichert unter
+  `/tmp/opencode/phase-i-recovery/`; kein fremder Arbeitsstand verworfen.
+- Bestehende Module `src/self-healing.ts` und `src/self-improving.ts` wurden
+  erweitert, nicht dupliziert (`PHASE_I_INVENTORY.md`).
+- Neu: `Incident` (bestehendes Phase-12-Modell additiv erweitert), `RecoveryRun`,
+  `ImprovementTask`, `SandboxRun`; Migration `20261128010000`; 45 Migrationen.
+- Module: `incident-monitor`, `recovery-engine` (alle sechs INC-PH-Fälle,
+  Freigabe/Budget/Kill-Switch/Rollback), `improvement-engine`, `coding-agent`
+  (Sandbox opt-in), `phase-i-agent-context` in bestehender Hierarchie.
+- Freeze `33203e43…`; Typecheck/ESLint/Build PASS; 362/362 Tests in 88 Dateien;
+  zwei isolierte `qa:full`-Läufe (707,51 s / 674,50 s) grün, Watchdog aus;
+  Playwright 9/9, MECE 30/30, Frontend 23/23, Medienpipeline PASS,
+  DB-Verifikation PASS, Secret-Scan 0 Treffer.
+- Controller/Supervisor gestoppt, STOP-Flag gesetzt; kein Commit/Push/PR/Merge,
+  Deployment oder Publishing. Status: **PHASE_I_READY_FOR_COMMIT**.
+- Phase J vorbereitet (`PHASE_J_PREPARATION.md`), nicht gestartet.
+
+## Phase H — Main-Integration abgeschlossen (2026-11-28)
+
+- PR #33 freigegeben und regulär gemergt: Merge-Commit
+  `5c4104595d0e23e1fefbd3bc352f532e855d712f`, `mergedAt 2026-11-28T00:12:19Z`.
+  Lokales `main` per Fast-Forward synchronisiert; lokal = remote = `5c41045`,
+  Arbeitsbaum sauber.
+- Post-Merge-CI `46086634835` SUCCESS (2m24s, `check pass`). PR-CI auf finalem
+  Head `b1ef978`: `46085862369` SUCCESS.
+- Regression auf `main`: Typecheck/ESLint/Build PASS; 354/354 Tests in 87
+  Dateien; isolierter `qa:full`-Lauf läuft bzw. ist im
+  `PHASE_H_MAIN_INTEGRATION_REPORT.md` dokumentiert.
+- 44 Migrationen lokal angewendet, Phase-H-Migrationen `2026112712/13/14`
+  vorhanden, generierter Client unberührt.
+- Status: **PHASE_H_MAIN_INTEGRATION_COMPLETE**,
+  **PHASE_H_EXTERNAL_LIVE_VERIFICATION_PENDING**.
+- Phase I vollständig vorbereitet: `PHASE_I_MASTERPROMPT.md`,
+  `PHASE_I_TASKS.json`, Architekturen, Security/Governance, Abnahmekriterien.
+  Status **PHASE_I_READY_TO_START**, nicht implementiert. Controller/Supervisor
+  gestoppt, STOP-Flag gesetzt, kein Deployment/Publishing.
+
 ## Phase H (2026-11-27) — lokal abgenommen, `READY_FOR_COMMIT`
 
 - Branch `feature/phase-h-live-publishing-2026-11-27` von `main` `55d28c4`;

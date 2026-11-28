@@ -1,0 +1,52 @@
+{
+  "startedAt": "2026-11-28T02:40:09.828Z",
+  "checks": [
+    {
+      "name": "phase_h_incident_schema",
+      "ok": true,
+      "detail": "createdAt,details,id,resolvedAt,severity,signature,status,title,updatedAt,workspaceId"
+    },
+    {
+      "name": "phase_i_columns_absent_before_upgrade",
+      "ok": true,
+      "detail": "additive migration pending"
+    },
+    {
+      "name": "phase_i_columns_added",
+      "ok": true,
+      "detail": "createdAt,details,detectedAt,diagnosis,evidence,fingerprint,id,kind,resolvedAt,severity,signature,status,title,updatedAt,workspaceId"
+    },
+    {
+      "name": "phase_i_tables",
+      "ok": true,
+      "detail": "ImprovementTask,RecoveryRun,SandboxRun"
+    },
+    {
+      "name": "force_rls",
+      "ok": true,
+      "detail": "forced=3"
+    },
+    {
+      "name": "dedup_index",
+      "ok": true,
+      "detail": "index=1"
+    },
+    {
+      "name": "workspace_isolation",
+      "ok": true,
+      "detail": "BEGIN,SET,ws-a,i-a,COMMIT"
+    },
+    {
+      "name": "persistence_after_restart",
+      "ok": true,
+      "detail": "rows=2"
+    },
+    {
+      "name": "backup_restore_new_tables",
+      "ok": true,
+      "detail": "ImprovementTask,Incident,RecoveryRun,SandboxRun"
+    }
+  ],
+  "outcome": "passed",
+  "finishedAt": "2026-11-28T02:40:16.629Z"
+}

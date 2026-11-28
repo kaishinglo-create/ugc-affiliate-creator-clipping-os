@@ -43,3 +43,16 @@ und erfordern eigene Freigaben. Sie sind nicht Teil von Phase I.
 - Kein Commit/Push/PR/Merge/Deploy/Publishing ohne separate Freigabe.
 - Fortsetzung exakt an der letzten offenen Aufgabe in `PHASE_H_TASKS.json`,
   sofern Phase H abgeschlossen ist.
+
+## Vollständige Vorbereitung (2026-11-28)
+
+- Masterprompt: `PHASE_I_MASTERPROMPT.md` (I.0–I.8, inkl. realer Ausgangsfälle).
+- Aufgabenliste + Abhängigkeitsmatrix: `PHASE_I_TASKS.json`.
+- Self-Healing: `docs/autonomous-build/PHASE_I_SELF_HEALING_ARCHITECTURE.md`.
+- Self-Improving: `docs/autonomous-build/PHASE_I_SELF_IMPROVING_ARCHITECTURE.md`.
+- Security/Governance: `docs/autonomous-build/PHASE_I_SECURITY_GOVERNANCE.md`.
+- Test-/Abnahmekriterien: `docs/autonomous-build/PHASE_I_ACCEPTANCE.md`.
+- Reale Ausgangsfälle INC-PH-01..06 (konkurrierende Prozesse, Portkonflikte,
+  hängende Transaktionen, QA-Watchdog, Source-Drift, Preflight-Blockade) sind
+  als verbindliche Self-Healing-Startfälle übernommen.
+- Status: **PHASE_I_READY_TO_START** — Implementierung nicht gestartet.

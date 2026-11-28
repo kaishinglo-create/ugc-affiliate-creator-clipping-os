@@ -242,3 +242,22 @@ bash scripts/controller-watchdog.sh                 # respektiert Cooldowns
   DST-fail-closed, schreibende Dashboard-Aktionen. 345/345 Tests in 84 Dateien.
 - Wiederaufnahme: `PHASE_H_TASKS.json` und `PHASE_H_FINAL_ACCEPTANCE_REPORT.md`.
   Kein Commit/Push/PR/Merge/Deploy/Publishing ohne separate Freigabe.
+
+## Stand 2026-11-28 — Phase H abgeschlossen
+
+- PR #33 in `main` gemergt (`5c41045`), lokales/entferntes `main` identisch,
+  Post-Merge-CI `46086634835` SUCCESS, 354/354 Tests in 87 Dateien.
+- Phase I vollständig vorbereitet (`PHASE_I_MASTERPROMPT.md`,
+  `PHASE_I_TASKS.json`, Architektur-/Governance-/Abnahmedokus) und
+  **nicht gestartet**. Nächster autorisierter Schritt: Phase-I-Freigabe.
+- Controller/Supervisor gestoppt, STOP-Flag gesetzt. Kein Deployment,
+  kein Publishing. Externe Live-Verifikation bleibt separat blockiert.
+
+## Stand 2026-11-28 — Phase I abgeschlossen
+
+- Phase I lokal implementiert und abgenommen: 362/362 Tests in 88 Dateien,
+  zwei isolierte qa:full-Läufe grün, Browser-Gates grün.
+- Branch `feature/phase-i-self-healing-self-improving`, Stand **uncommitted**;
+  nächster autorisierter Schritt: Commit-Freigabe für Phase I.
+- `PHASE_I_FINAL_ACCEPTANCE_REPORT.md`, `PHASE_I_FEATURE_MATRIX.md`,
+  `PHASE_I_SECURITY_AUDIT.md` und `PHASE_J_PREPARATION.md` sind vorhanden.

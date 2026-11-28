@@ -1,7 +1,7 @@
 {
-  "phase": "H",
-  "status": "phase_h_ready_for_commit",
-  "branch": "feature/phase-h-live-publishing-2026-11-27",
+  "phase": "I",
+  "status": "phase_i_ready_for_commit",
+  "branch": "feature/phase-i-self-healing-self-improving",
   "baseSha": "55d28c4e210fcbe9b9877fda090cf796ade8c280",
   "headSha": "55d28c4e210fcbe9b9877fda090cf796ade8c280",
   "uncommittedChanges": true,
@@ -51,51 +51,8 @@
     "restarted": false
   },
   "tests": {
-    "baseline": 327,
-    "baselineFiles": 81,
-    "phaseHNew": {
-      "tests": 26,
-      "files": 6
-    },
-    "phaseHNewFiles": 6,
-    "expectedTotal": 353,
-    "expectedFiles": 87,
-    "qaFullRuns": [
-      {
-        "runId": "qa-full-2026-11-27T21-34-15-653Z-52057",
-        "outcome": "passed",
-        "tests": "353 passed (353)",
-        "testFiles": "87 passed (87)",
-        "duration": "658.87s",
-        "watchdogTriggered": false,
-        "role": "ugc_os_app",
-        "roleSuperuser": false,
-        "roleBypassRls": false,
-        "frozenSourceHash": "0fa61ade0af5239c551d6028fea5979abcbdad1c56e4cbf71a7e77398322d16a"
-      },
-      {
-        "runId": "qa-full-2026-11-27T21-46-12-279Z-55179",
-        "outcome": "passed",
-        "tests": "353 passed (353)",
-        "testFiles": "87 passed (87)",
-        "duration": "649.75s",
-        "watchdogTriggered": false,
-        "role": "ugc_os_app",
-        "roleSuperuser": false,
-        "roleBypassRls": false,
-        "frozenSourceHash": "0fa61ade0af5239c551d6028fea5979abcbdad1c56e4cbf71a7e77398322d16a"
-      }
-    ],
-    "note": "two isolated qa:full runs passed on identical final frozen source",
-    "verdict": "READY_FOR_COMMIT",
-    "frozenSourceHash": "0fa61ade0af5239c551d6028fea5979abcbdad1c56e4cbf71a7e77398322d16a",
-    "browserGates": {
-      "playwright": "9 passed (9)",
-      "frontendAcceptance": "23/23",
-      "meceBrowserCheck": "30/30",
-      "verifyPhaseG": "passed",
-      "browserServicesStoppedAfter": true
-    }
+    "testFiles": 88,
+    "tests": 362
   },
   "localGates": {
     "typecheck": "pass",
@@ -153,7 +110,42 @@
     "pr": 32,
     "tests": "327 passed (327)"
   },
-  "nextPhase": "I",
+  "nextPhase": {
+    "status": "prepared_not_started",
+    "phase": "J",
+    "handoff": "PHASE_J_PREPARATION.md"
+  },
   "nextPhaseStatus": "prepared_not_started",
-  "nextPhasePreparation": "PHASE_I_PREPARATION.md"
+  "nextPhasePreparation": "PHASE_I_PREPARATION.md",
+  "mainSha": "5c4104595d0e23e1fefbd3bc352f532e855d712f",
+  "localMainSha": "5c4104595d0e23e1fefbd3bc352f532e855d712f",
+  "remoteMainSha": "5c4104595d0e23e1fefbd3bc352f532e855d712f",
+  "mergeCommit": "5c4104595d0e23e1fefbd3bc352f532e855d712f",
+  "pr": {
+    "number": 33,
+    "state": "MERGED",
+    "headRefOid": "b1ef97886fb26b61565e7813fe2339489d3ad657",
+    "mergeable": "MERGEABLE",
+    "mergeStateStatus": "CLEAN"
+  },
+  "postMergeCiRun": 46086634835,
+  "migrations": 45,
+  "qualityGates": {
+    "typecheck": "pass",
+    "eslint": "pass_no_warnings",
+    "build": "pass",
+    "qaFullRuns": [
+      "qa-full-2026-11-28T01-31-56-944Z-87083",
+      "qa-full-2026-11-28T01-44-48-061Z-89801"
+    ],
+    "playwright": "9/9",
+    "mece": "30/30",
+    "frontend": "23/23",
+    "secretScan": {
+      "checkedValues": 4,
+      "files": 515,
+      "matches": 0
+    }
+  },
+  "finalReport": "PHASE_I_FINAL_ACCEPTANCE_REPORT.md"
 }

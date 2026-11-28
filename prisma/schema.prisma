@@ -48,6 +48,10 @@ model Workspace {
   affiliateLinks       AffiliateLink[]
   publishingAccounts   PublishingAccount[]
   publishingSchedules  PublishingSchedule[]
+  incidents            Incident[]
+  recoveryRuns         RecoveryRun[]
+  improvementTasks     ImprovementTask[]
+  sandboxRuns          SandboxRun[]
   creators             Creator[]
   brands               Brand[]
   campaigns            Campaign[]
@@ -58,7 +62,6 @@ model Workspace {
   approvals            Approval[]
   killSwitches         KillSwitch[]
   securityEvents       SecurityEvent[]
-  incidents            Incident[]
   agents               AgentDefinition[]
   agentTasks           AgentTask[]
   jobs                 Job[]
@@ -691,12 +694,20 @@ model Incident {
   status      String    @default("open")
   signature   String?
   details     String?
+  /** Phase I.1: stable dedup key and structured evidence. */
+  fingerprint String?
+  kind        String?
+  evidence    Json?
+  diagnosis   Json?
+  detectedAt  DateTime  @default(now())
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   resolvedAt  DateTime?
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, status])
+  @@index([workspaceId, status, detectedAt])
+  @@index([workspaceId, kind])
 }
 
 model AgentDefinition {
@@ -1083,4 +1094,59 @@ model QualityReport {
   workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, jobId])
+}
+
+
+model RecoveryRun {
+  id          String   @id @default(cuid())
+  workspaceId String
+  incidentId  String
+  status      String   @default("planned")
+  plan        Json
+  approvalId  String?
+  result      Json?
+  rollback    Json?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, incidentId])
+  @@index([workspaceId, status])
+}
+
+model ImprovementTask {
+  id            String   @id @default(cuid())
+  workspaceId   String
+  incidentId    String?
+  title         String
+  evidence      Json
+  priorityScore Int      @default(0)
+  risk          String   @default("low")
+  effort        String   @default("small")
+  status        String   @default("proposed")
+  beforeJson    Json?
+  afterJson     Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status, priorityScore])
+}
+
+model SandboxRun {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  worktreePath String
+  status       String   @default("created")
+  patchJson    Json?
+  reviewJson   Json?
+  testsJson    Json?
+  approvedBy   String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status])
 }
